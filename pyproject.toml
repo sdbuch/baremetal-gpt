@@ -1,0 +1,23 @@
+[project]
+name = "nanocrate"
+version = "0.1.0"
+description = "Hackable transformer repo, in JAX"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+cpu = [
+    "jax>=0.6.2",
+]
+tpu = [
+    "jax[tpu]>=0.6.2",
+]
+
+[tool.uv]
+conflicts = [
+    [
+      { extra = "cpu" },
+      { extra = "tpu" },
+    ],
+]
