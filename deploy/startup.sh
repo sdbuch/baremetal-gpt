@@ -1,2 +1,3 @@
 curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.local/bin/env
+sudo cp /root/.local/bin/uv /usr/local/bin/uv
+sudo cp /root/.local/bin/uvx /usr/local/bin/uvx
