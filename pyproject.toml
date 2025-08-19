@@ -21,3 +21,9 @@ conflicts = [
       { extra = "tpu" },
     ],
 ]
+
+[dependency-groups]
+dev = [
+    "ipython>=8.37.0",
+    "pytest>=8.4.1",
+]
