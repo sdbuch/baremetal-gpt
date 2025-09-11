@@ -84,6 +84,7 @@ def main():
         log_metrics, prev_metrics = prev_metrics, cur_metrics
         if log_metrics:
             log_metrics |= {"step": step}
+            log_metrics |= {"pid": jax.process_index()}
             print(
                 *[f"{metric}: {val}" for metric, val in log_metrics.items()], sep="\t"
             )
