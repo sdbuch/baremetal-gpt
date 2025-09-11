@@ -7,8 +7,7 @@ from config import Config
 from model import Transformer, _transformer
 
 
-# @partial(jax.jit, static_argnums=(6,))
-@jax.jit
+@partial(jax.jit, donate_argnums=(4,))
 def sample_one_token(
     config: Config,
     key,
@@ -25,10 +24,11 @@ def sample_one_token(
     return next_token, cache_out, cache_size
 
 
-@partial(jax.jit, donate_argnums=(3,))
+@jax.jit
 def generate(
     config: Config,
     key,
+    params: Transformer,
     prompt: jax.Array,
     cache: jax.Array,
     cache_size: int,
@@ -41,14 +41,14 @@ def generate(
     # Prefill
     key, sk = jax.random.split(key)
     next_token, cache, cache_size = sample_one_token(
-        config, sk, prompt, cache, cache_size, temperature
+        config, sk, params, prompt, cache, cache_size, temperature
     )
     output = jnp.concatenate((output, next_token))
     # Generation loop
     for step in range(max_tokens_to_generate):
         key, sk = jax.random.split(key)
         next_token, cache, cache_size = sample_one_token(
-            config, sk, next_token, cache, cache_size, temperature
+            config, sk, params, next_token, cache, cache_size, temperature
         )
         output = jnp.concatenate((output, next_token))
 
