@@ -2,7 +2,7 @@
 
 TPU_NAME="$1"
 SSH_FLAGS='-A -o ForwardAgent=yes'
-COMMANDS="cd nanocrate && git pull && git checkout trc-infra-setup && uv run --extra tpu main.py"
+COMMANDS="cd nanocrate && git pull && git checkout train-loop-first-cut && uv run --extra tpu train.py"
 
 gcloud compute tpus tpu-vm ssh "$TPU_NAME" \
   --ssh-flag="$SSH_FLAGS" \

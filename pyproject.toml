@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Hackable transformer repo, in JAX"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "tyro>=0.9.31",
+]
 
 [project.optional-dependencies]
 cpu = [
