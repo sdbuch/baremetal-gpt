@@ -35,7 +35,6 @@ def generate(
     max_tokens_to_generate: int,
     temperature: float = 0.7,
 ) -> tuple[jax.Array, jax.Array, int]:
-    # Prefill and generation loop
     output = prompt
 
     # Prefill

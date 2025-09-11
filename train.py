@@ -97,7 +97,7 @@ def main():
     temperature = 0.7
 
     output, cache, cache_size = generate(
-        config, key_sampling, prompt, cache, cache_size, tokens_to_generate, temperature
+        config, key_sampling, train_state.params, prompt, cache, cache_size, tokens_to_generate, temperature
     )
 
     print(f'Prompt: {prompt}')
