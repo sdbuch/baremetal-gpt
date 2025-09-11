@@ -1,0 +1,55 @@
+from functools import partial
+
+import jax
+import jax.numpy as jnp
+
+from config import Config
+from model import Transformer, _transformer
+
+
+# @partial(jax.jit, static_argnums=(6,))
+@jax.jit
+def sample_one_token(
+    config: Config,
+    key,
+    params: Transformer,
+    x: jax.Array,
+    cache_in: jax.Array,
+    cache_size: int,
+    temperature: float,
+):
+    y, cache_out = _transformer(config, params, x, cache_in, cache_size)
+    logits = y.astype(config.compute_dtype)
+    cache_size = cache_size + x.shape[-1]
+    next_token = jnp.array((jax.random.categorical(key, logits[-1] / temperature),))
+    return next_token, cache_out, cache_size
+
+
+@partial(jax.jit, donate_argnums=(3,))
+def generate(
+    config: Config,
+    key,
+    prompt: jax.Array,
+    cache: jax.Array,
+    cache_size: int,
+    max_tokens_to_generate: int,
+    temperature: float = 0.7,
+) -> tuple[jax.Array, jax.Array, int]:
+    # Prefill and generation loop
+    output = prompt
+
+    # Prefill
+    key, sk = jax.random.split(key)
+    next_token, cache, cache_size = sample_one_token(
+        config, sk, prompt, cache, cache_size, temperature
+    )
+    output = jnp.concatenate((output, next_token))
+    # Generation loop
+    for step in range(max_tokens_to_generate):
+        key, sk = jax.random.split(key)
+        next_token, cache, cache_size = sample_one_token(
+            config, sk, next_token, cache, cache_size, temperature
+        )
+        output = jnp.concatenate((output, next_token))
+
+    return output, cache, cache_size

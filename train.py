@@ -9,6 +9,7 @@ from config import Config
 from data.number_staircase import dataloader, make_data
 from data.utils import get_dataset_on_device, split_data
 from model import Transformer, _transformer, init_kv_cache, init_model_params
+from sample import generate
 
 
 # Setup for training loop
@@ -91,36 +92,17 @@ def main():
     # Setup
     prompt = jnp.array((1, 2, 3, 4))
     cache = init_kv_cache(config_sampling)[0]
-
-    @partial(jax.jit, static_argnums=(5,))
-    def sample_one_token(config, key, x, cache_in, cache_size, temperature=1.0):
-        y, cache_out = _transformer(config, train_state.params, x, cache_in, cache_size)
-        logits = y.astype(config.compute_dtype)
-        cache_size = cache_size + x.shape[-1]
-        next_token = jnp.array((jax.random.categorical(key, logits[-1] / temperature),))
-        return next_token, cache_out, cache_size
-
-    # Prefill and generation loop
     cache_size = 0
     tokens_to_generate = 64
     temperature = 0.7
-    output = prompt
 
-    # Prefill
-    key_sampling, sk = jax.random.split(key_sampling)
-    next_token, cache, cache_size = sample_one_token(
-        config_sampling, sk, prompt, cache, 0, temperature
+    output, cache, cache_size = generate(
+        config, key_sampling, prompt, cache, cache_size, tokens_to_generate, temperature
     )
-    output = jnp.concatenate((output, next_token))
-    # Generation loop
-    for step in range(tokens_to_generate):
-        key_sampling, sk = jax.random.split(key_sampling)
-        next_token, cache, cache_size = sample_one_token(
-            config_sampling, sk, next_token, cache, cache_size, temperature
-        )
-        output = jnp.concatenate((output, next_token))
 
-    print(output)
+    print(f'Prompt: {prompt}')
+    print(f'Cache size: {cache_size}')
+    print(f'Generated text: {output}')
 
 
 if __name__ == "__main__":
