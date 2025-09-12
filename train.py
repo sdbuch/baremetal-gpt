@@ -108,7 +108,7 @@ def main(config: Config):
     cache_size = 0
 
     output, cache, cache_size = generate(
-        config, key_sampling, train_state.params, prompt, cache, cache_size
+        config_sampling, key_sampling, train_state.params, prompt, cache, cache_size
     )
 
     print(f"Prompt: {prompt}")
