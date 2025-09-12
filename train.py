@@ -1,7 +1,7 @@
+import copy
 from functools import partial
 from pathlib import Path
 from typing import NamedTuple
-import copy
 
 import hydra
 import jax
