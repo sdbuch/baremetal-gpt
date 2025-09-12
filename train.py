@@ -1,7 +1,7 @@
 import copy
 from functools import partial
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import hydra
 import jax
@@ -11,6 +11,7 @@ from config import Config, config_post_init, register_configs
 from data.number_staircase import dataloader, make_data
 from data.utils import get_dataset_on_device, split_data
 from model import Transformer, _transformer, init_kv_cache, init_model_params
+from optimizers import adam_update, init_adam_state, sgd_update
 from sample import generate
 
 register_configs()
@@ -19,12 +20,14 @@ register_configs()
 # Setup for training loop
 class TrainState(NamedTuple):
     params: Transformer
-    opt: None
+    opt: Any
 
 
 @jax.jit
 def init_train_state(key, config: Config) -> TrainState:
-    return TrainState(params=init_model_params(key, config), opt=None)
+    model_params = init_model_params(key, config)
+    adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
+    return TrainState(params=model_params, opt=adam_state)
 
 
 @hydra.main(
@@ -80,11 +83,21 @@ def main(config: Config):
             return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
         loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
+        new_params_and_opt = jax.tree.map(
+            # partial(adam_update, config),
+            partial(sgd_update, config),
+            train_state.params,
+            grad,
+            train_state.opt,
+        )
+        # Transpose the output tree to get param tree and state tree
+        new_params, new_opt = map(
+            lambda i: jax.tree.map(lambda x, y: y[i], grad, new_params_and_opt),
+            range(2),
+        )
         new_state = TrainState(
-            params=jax.tree.map(
-                lambda x, y: x - config.lr * y, train_state.params, grad
-            ),
-            opt=None,
+            params=new_params,
+            opt=new_opt,
         )
 
         metrics = {"loss": loss}

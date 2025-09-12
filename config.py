@@ -22,11 +22,16 @@ class Config:
     mesh_shape: list[int] = field(default_factory=lambda: [4])
     seed: int = 1337
 
-    # Data and training params
+    # Data params
     seq_len: int = 256
     global_batch_size: int = 128
     num_steps: int = 10**3
+
+    # Optimizer params
     lr: float = 1e-3
+    beta1: float = 0.9
+    beta2: float = 0.999
+    eps_adam: float = 1e-8
 
     # Model architecture params
     num_vocab: int = 2**8
