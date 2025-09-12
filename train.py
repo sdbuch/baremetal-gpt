@@ -23,7 +23,7 @@ def init_train_state(key, config: Config) -> TrainState:
     return TrainState(params=init_model_params(key, config), opt=None)
 
 
-def main():
+def main(config: Config = Config()):
     # Config
     config_args = {
         "num_vocab": 10,
@@ -31,12 +31,11 @@ def main():
         "num_steps": 10**3,
         "lr": 1e-2,
     }
-    config_sampling_args = config_args | {
+    config_sampling_args = {
         "global_batch_size": 1,  # one prompt
         "update_cache": True,  # inference mode
         "sharding_data": jax.P(),  # No parallelism atm
     }
-    config = Config(**config_args)
     config_sampling = Config(**config_sampling_args)
 
     # Randomness
@@ -94,16 +93,14 @@ def main():
     prompt = jnp.array((1, 2, 3, 4))
     cache = init_kv_cache(config_sampling)[0]
     cache_size = 0
-    tokens_to_generate = 64
-    temperature = 0.7
 
     output, cache, cache_size = generate(
-        config, key_sampling, train_state.params, prompt, cache, cache_size, tokens_to_generate, temperature
+        config, key_sampling, train_state.params, prompt, cache, cache_size
     )
 
-    print(f'Prompt: {prompt}')
-    print(f'Cache size: {cache_size}')
-    print(f'Generated text: {output}')
+    print(f"Prompt: {prompt}")
+    print(f"Cache size: {cache_size}")
+    print(f"Generated text: {output}")
 
 
 if __name__ == "__main__":

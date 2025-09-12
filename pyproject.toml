@@ -26,7 +26,8 @@ conflicts = [
 
 [dependency-groups]
 dev = [
+    "debugpy>=1.8.16",
     "ipython>=8.37.0",
     "pytest>=8.4.1",
-    "rich>=14.1.0"
+    "rich>=14.1.0",
 ]

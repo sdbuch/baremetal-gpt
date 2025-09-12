@@ -43,6 +43,8 @@ class Config:
 
     # Inference params
     update_cache: bool = False  # default training
+    max_tokens_to_generate: int = 64
+    temperature: float = 0.7
 
     # Model sharding params
     # TODO: Currently no support for pipeline parallel
