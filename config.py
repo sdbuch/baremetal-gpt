@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 import jax
@@ -14,13 +14,12 @@ class DType(Enum):
     INT16 = jnp.int16
 
 
-# Hydra will convert tuples to lists, but this way we don't need default_factory
 @jax.tree_util.register_static
 @dataclass(kw_only=True)
 class Config:
     # Experiment orchestration params
-    mesh_axis_names: tuple[str, ...] = ("dp",)
-    mesh_shape: tuple[int, ...] = (4,)
+    mesh_axis_names: list[str] = field(default_factory=lambda: ["dp"])
+    mesh_shape: list[int] = field(default_factory=lambda: [4])
     seed: int = 1337
 
     # Data and training params
@@ -59,14 +58,14 @@ class Config:
 
     # Model sharding params (args to jax.P)-- list of mesh_axis_names els or None
     # NOTE: technically jax.P can merge axes, e.g. (('x', 'y')), but we reject this
-    sharding_data: tuple[str | None, ...] = ("dp",)
-    sharding_wqkv: tuple[str | None, ...] = () # D x 3 x N x H
-    sharding_wo: tuple[str | None, ...] = () # D x N x H
-    sharding_wup: tuple[str | None, ...] = () # D x 4D
-    sharding_wdown: tuple[str | None, ...] = () # 4D x D
-    sharding_mlp_hidden: tuple[str | None, ...] = () # S x 4D
-    sharding_res_stream: tuple[str | None, ...] = () # S x D
-    sharding_att_qkv: tuple[str | None, ...] = () # 3 x S x N x H
+    sharding_data: list[str | None] = field(default_factory=lambda: ["dp"])
+    sharding_wqkv: list[str | None] = field(default_factory=list)  # D x 3 x N x H
+    sharding_wo: list[str | None] = field(default_factory=list)  # D x N x H
+    sharding_wup: list[str | None] = field(default_factory=list)  # D x 4D
+    sharding_wdown: list[str | None] = field(default_factory=list)  # 4D x D
+    sharding_mlp_hidden: list[str | None] = field(default_factory=list)  # S x 4D
+    sharding_res_stream: list[str | None] = field(default_factory=list)  # S x D
+    sharding_att_qkv: list[str | None] = field(default_factory=list)  # 3 x S x N x H
 
 
 def register_configs():
