@@ -18,7 +18,7 @@ def sample_one_token(
     temperature: float,
 ):
     y, cache_out = _transformer(config, params, x, cache_in, cache_size)
-    logits = y.astype(config.compute_dtype)
+    logits = y.astype(config.compute_dtype.value)
     cache_size = cache_size + x.shape[-1]
     next_token = jnp.array((jax.random.categorical(key, logits[-1] / temperature),))
     return next_token, cache_out, cache_size
