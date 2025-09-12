@@ -108,6 +108,9 @@ def main(config: Config):
     cache = init_kv_cache(config_sampling)[0]
     cache_size = 0
 
+    print(jax.debug.visualize_array_sharding(prompt))
+    print(jax.debug.visualize_array_sharding(cache))
+
     output, cache, cache_size = generate(
         config_sampling, key_sampling, train_state.params, prompt, cache, cache_size
     )
