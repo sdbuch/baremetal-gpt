@@ -14,6 +14,7 @@ class DType(Enum):
     INT16 = jnp.int16
 
 
+# Hydra will convert tuples to lists, but this way we don't need default_factory
 @jax.tree_util.register_static
 @dataclass(kw_only=True)
 class Config:
@@ -59,13 +60,13 @@ class Config:
     # Model sharding params (args to jax.P)-- list of mesh_axis_names els or None
     # NOTE: technically jax.P can merge axes, e.g. (('x', 'y')), but we reject this
     sharding_data: tuple[str | None, ...] = ("dp",)
-    sharding_wqkv: tuple[str | None, ...] = ()
-    sharding_wo: tuple[str | None, ...] = ()
-    sharding_wup: tuple[str | None, ...] = ()
-    sharding_wdown: tuple[str | None, ...] = ()
-    sharding_mlp_hidden: tuple[str | None, ...] = ()
-    sharding_res_stream: tuple[str | None, ...] = ()
-    sharding_att_qkv: tuple[str | None, ...] = ()
+    sharding_wqkv: tuple[str | None, ...] = () # D x 3 x N x H
+    sharding_wo: tuple[str | None, ...] = () # D x N x H
+    sharding_wup: tuple[str | None, ...] = () # D x 4D
+    sharding_wdown: tuple[str | None, ...] = () # 4D x D
+    sharding_mlp_hidden: tuple[str | None, ...] = () # S x 4D
+    sharding_res_stream: tuple[str | None, ...] = () # S x D
+    sharding_att_qkv: tuple[str | None, ...] = () # 3 x S x N x H
 
 
 def register_configs():

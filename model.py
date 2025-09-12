@@ -124,7 +124,7 @@ def _attn(
         probs = probs.astype(config.param_dtype.value)
         attn_out = jnp.einsum("nst,tnh->snh", probs, v)
     out = jnp.einsum(
-        "snh,dnh->sd",
+        "snh,hnd->sd",
         attn_out,
         params.w_o,
         out_sharding=jax.P(*config.sharding_res_stream),
@@ -289,7 +289,7 @@ def init_model_params(key, config: Config) -> Transformer:
         w_out = config.param_std * (
             jax.random.normal(
                 k_o,
-                (config.d_model, config.num_heads, config.d_head),
+                (config.d_head, config.num_heads, config.d_model),
                 config.param_dtype.value,
                 out_sharding=jax.P(*config.sharding_wo),
             )
@@ -328,9 +328,10 @@ def init_model_params(key, config: Config) -> Transformer:
     )
 
 
+# TODO: fix sharding
 def init_kv_cache(config: Config):
     if config.update_cache:
-        sharding = jax.P(*(config.sharding_data + (None,) + config.sharding_att_qkv))
+        sharding = jax.P(*(config.sharding_data + [None] + config.sharding_att_qkv))
         return jnp.zeros(
             (
                 config.global_batch_size,
@@ -345,7 +346,7 @@ def init_kv_cache(config: Config):
         )
     else:
         # Save memory with a dummy cache, since its updates are no-ops
-        sharding = jax.P(*(config.sharding_data + (None,) + config.sharding_att_qkv))
+        sharding = jax.P(*(config.sharding_data + [None] + config.sharding_att_qkv))
         return jnp.zeros(
             (config.global_batch_size, config.num_layers, 2, 1, 1, 1),
             dtype=config.param_dtype.value,
