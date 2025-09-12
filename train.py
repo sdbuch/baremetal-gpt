@@ -109,11 +109,12 @@ def main(config: Config):
     cache_size = 0
 
     print(jax.debug.visualize_array_sharding(prompt))
-    print(jax.debug.visualize_array_sharding(cache))
 
     output, cache, cache_size = generate(
         config_sampling, key_sampling, train_state.params, prompt, cache, cache_size
     )
+
+    print(jax.debug.visualize_array_sharding(output))
 
     print(f"Prompt: {prompt}")
     print(f"Cache size: {cache_size}")
