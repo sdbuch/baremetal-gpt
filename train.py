@@ -79,20 +79,14 @@ def main(config: Config):
 
         loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
         new_params_and_opt = jax.tree.map(
-            partial(opt_update, config),
-            train_state.params,
-            grad,
-            train_state.opt,
+            partial(opt_update, config), train_state.params, grad, train_state.opt
         )
         # Transpose the output tree to get param tree and state tree
         new_params, new_opt = map(
             lambda i: jax.tree.map(lambda x, y: y[i], grad, new_params_and_opt),
             range(2),
         )
-        new_state = TrainState(
-            params=new_params,
-            opt=new_opt,
-        )
+        new_state = TrainState(params=new_params, opt=new_opt)
 
         metrics = {"loss": loss}
         return metrics, new_state
