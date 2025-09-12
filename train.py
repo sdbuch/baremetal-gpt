@@ -1,6 +1,7 @@
 from functools import partial
 from pathlib import Path
 from typing import NamedTuple
+import copy
 
 import hydra
 import jax
@@ -40,12 +41,15 @@ def main(config: Config):
         "num_steps": 10**3,
         "lr": 1e-2,
     }
+    # TODO: Expose these somehow, parameter groups?
     config_sampling_args = {
         "global_batch_size": 1,  # one prompt
         "update_cache": True,  # inference mode
         "sharding_data": [],  # No parallelism atm
     }
-    config_sampling = Config(**config_sampling_args)
+    config_sampling = copy.deepcopy(config)
+    for key, value in config_sampling_args.items():
+        config_sampling.__setattr__(key, value)
 
     # Randomness
     key = jax.random.key(config.seed)
