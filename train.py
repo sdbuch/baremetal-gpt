@@ -1,15 +1,18 @@
 from functools import partial
+from pathlib import Path
 from typing import NamedTuple
 
+import hydra
 import jax
 import jax.numpy as jnp
-import tyro
 
-from config import Config
+from config import Config, register_configs, config_post_init
 from data.number_staircase import dataloader, make_data
 from data.utils import get_dataset_on_device, split_data
 from model import Transformer, _transformer, init_kv_cache, init_model_params
 from sample import generate
+
+register_configs()
 
 
 # Setup for training loop
@@ -23,8 +26,14 @@ def init_train_state(key, config: Config) -> TrainState:
     return TrainState(params=init_model_params(key, config), opt=None)
 
 
-def main(config: Config = Config()):
+@hydra.main(
+    version_base=None,
+    config_path=str(Path("configs").absolute().resolve()),
+    config_name="config",
+)
+def main(config: Config):
     # Config
+    config_post_init(config)
     config_args = {
         "num_vocab": 10,
         "num_layers": 4,
@@ -34,7 +43,7 @@ def main(config: Config = Config()):
     config_sampling_args = {
         "global_batch_size": 1,  # one prompt
         "update_cache": True,  # inference mode
-        "sharding_data": jax.P(),  # No parallelism atm
+        "sharding_data": [],  # No parallelism atm
     }
     config_sampling = Config(**config_sampling_args)
 
@@ -61,7 +70,7 @@ def main(config: Config = Config()):
             logits, cache_out = jax.vmap(partial(_transformer, config, params))(
                 inputs, cache
             )
-            logits = logits.astype(config.compute_dtype)
+            logits = logits.astype(config.compute_dtype.value)
             logprobs = jax.nn.log_softmax(logits, axis=-1)
             return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
@@ -104,4 +113,4 @@ def main(config: Config = Config()):
 
 
 if __name__ == "__main__":
-    tyro.cli(main)
+    main()

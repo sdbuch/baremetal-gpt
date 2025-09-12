@@ -1,11 +1,21 @@
 from dataclasses import dataclass
+from enum import Enum
 
 import jax
 import jax.numpy as jnp
+from hydra.core.config_store import ConfigStore
+
+
+class DType(Enum):
+    FLOAT32 = jnp.float32
+    FLOAT16 = jnp.float16
+    BFLOAT16 = jnp.bfloat16
+    INT32 = jnp.int32
+    INT16 = jnp.int16
 
 
 @jax.tree_util.register_static
-@dataclass(kw_only=True, frozen=True)
+@dataclass(kw_only=True)
 class Config:
     # Experiment orchestration params
     mesh_axis_names: tuple[str, ...] = ("dp",)
@@ -30,9 +40,9 @@ class Config:
     max_seq_len: int = 1024
 
     # Model dtypes
-    param_dtype = jnp.bfloat16  # weights, activations
-    compute_dtype = jnp.float32  # layernorm, attn logits, rope
-    optimizer_dtype = jnp.float32  # optimizer state
+    param_dtype: DType = DType.BFLOAT16  # weights, activations
+    compute_dtype: DType = DType.FLOAT32  # layernorm, attn logits, rope
+    optimizer_dtype: DType = DType.FLOAT32  # optimizer state
 
     # Model call-time params
     eps_ln: float = 1e-6
@@ -46,28 +56,33 @@ class Config:
     max_tokens_to_generate: int = 64
     temperature: float = 0.7
 
-    # Model sharding params
-    # TODO: Currently no support for pipeline parallel
-    # TODO: test!
-    sharding_data: jax.sharding.PartitionSpec = jax.P("dp")
-    sharding_wqkv: jax.sharding.PartitionSpec = jax.P()
-    sharding_wo: jax.sharding.PartitionSpec = jax.P()
-    sharding_wup: jax.sharding.PartitionSpec = jax.P()
-    sharding_wdown: jax.sharding.PartitionSpec = jax.P()
-    sharding_mlp_hidden: jax.sharding.PartitionSpec = jax.P()
-    sharding_res_stream: jax.sharding.PartitionSpec = jax.P()
-    sharding_att_qkv: jax.sharding.PartitionSpec = jax.P()
+    # Model sharding params (args to jax.P)-- list of mesh_axis_names els or None
+    # NOTE: technically jax.P can merge axes, e.g. (('x', 'y')), but we reject this
+    sharding_data: tuple[str | None, ...] = ("dp",)
+    sharding_wqkv: tuple[str | None, ...] = ()
+    sharding_wo: tuple[str | None, ...] = ()
+    sharding_wup: tuple[str | None, ...] = ()
+    sharding_wdown: tuple[str | None, ...] = ()
+    sharding_mlp_hidden: tuple[str | None, ...] = ()
+    sharding_res_stream: tuple[str | None, ...] = ()
+    sharding_att_qkv: tuple[str | None, ...] = ()
 
-    def __post_init__(self):
-        # Set up and register mesh
-        mesh = jax.make_mesh(
-            self.mesh_shape,
-            self.mesh_axis_names,
-            len(self.mesh_shape) * (jax.sharding.AxisType.Explicit,),
-        )
-        jax.sharding.set_mesh(mesh)
 
-        # Checks
-        assert self.d_head % 2 == 0, (
-            "Head dimension needs to be divisible by 2 for RoPE"
-        )
+def register_configs():
+    cs = ConfigStore.instance()
+    cs.store(name="config", node=Config)
+
+
+def config_post_init(config: Config):
+    # Register the argument's type as static (since hydra wraps Config)
+    jax.tree_util.register_static(type(config))  # for hydra!
+    # Set up and register mesh
+    mesh = jax.make_mesh(
+        config.mesh_shape,
+        config.mesh_axis_names,
+        len(config.mesh_shape) * (jax.sharding.AxisType.Explicit,),
+    )
+    jax.sharding.set_mesh(mesh)
+
+    # Check arguments
+    assert config.d_head % 2 == 0, "Head dimension needs to be divisible by 2 for RoPE"

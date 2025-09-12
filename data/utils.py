@@ -20,6 +20,6 @@ def get_dataset_on_device(
     config: Config, dataloader: Iterator[tuple[jax.Array, jax.Array]]
 ):
     return map(
-        partial(jax.make_array_from_process_local_data, config.sharding_data),
+        partial(jax.make_array_from_process_local_data, jax.P(*config.sharding_data)),
         dataloader,
     )
