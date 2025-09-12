@@ -34,6 +34,7 @@ def init_train_state(key, config: Config) -> TrainState:
 )
 def main(config: Config):
     # Config
+    jax.distributed.initialize()
     config_post_init(config)
     config_args = {
         "num_vocab": 10,

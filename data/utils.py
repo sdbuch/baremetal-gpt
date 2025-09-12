@@ -22,9 +22,8 @@ def get_dataset_on_device(
     config: Config, dataloader: Iterator[tuple[jax.Array, jax.Array]]
 ):
     return map(
-        partial(
-            jax.make_array_from_process_local_data,
-            NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data)),
+        lambda batch: jax.device_put(
+            batch, NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data))
         ),
         dataloader,
     )
