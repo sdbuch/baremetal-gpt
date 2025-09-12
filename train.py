@@ -7,11 +7,11 @@ import hydra
 import jax
 import jax.numpy as jnp
 
-from config import Config, config_post_init, register_configs, get_opt_update_fn_from_enum
+from config import Config, config_post_init, register_configs
 from data.number_staircase import dataloader, make_data
 from data.utils import get_dataset_on_device, split_data
 from model import Transformer, _transformer, init_kv_cache, init_model_params
-from optimizers import adam_update, init_adam_state, sgd_update
+from optimizers import get_opt_update_fn_from_enum, init_adam_state
 from sample import generate
 
 register_configs()
@@ -40,12 +40,6 @@ def main(config: Config):
     jax.distributed.initialize()
     config_post_init(config)
     opt_update = get_opt_update_fn_from_enum(config.optimizer_type)
-    config_args = {
-        "num_vocab": 10,
-        "num_layers": 4,
-        "num_steps": 10**3,
-        "lr": 1e-2,
-    }
     # TODO: Expose these somehow, parameter groups?
     config_sampling_args = {
         "global_batch_size": 1,  # one prompt

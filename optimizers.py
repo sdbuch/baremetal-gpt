@@ -1,10 +1,17 @@
-from types import NoneType
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 
-from config import Config
+from config import Config, OptType
+
+
+def get_opt_update_fn_from_enum(opt_type: OptType):
+    match opt_type:
+        case OptType.ADAM:
+            return adam_update
+        case OptType.SGD:
+            return sgd_update
 
 
 class OptState(NamedTuple):

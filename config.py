@@ -5,8 +5,6 @@ import jax
 import jax.numpy as jnp
 from hydra.core.config_store import ConfigStore
 
-from optimizers import adam_update, sgd_update
-
 
 class DType(Enum):
     FLOAT32 = jnp.float32
@@ -17,15 +15,8 @@ class DType(Enum):
 
 
 class OptType(Enum):
-    ADAM = 'adam'
-    SGD = 'sgd'
-
-def get_opt_update_fn_from_enum(opt_type: OptType):
-    match opt_type:
-        case OptType.ADAM:
-            return adam_update
-        case OptType.SGD:
-            return sgd_update
+    ADAM = "adam"
+    SGD = "sgd"
 
 
 @jax.tree_util.register_static
