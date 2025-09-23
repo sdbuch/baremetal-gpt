@@ -20,7 +20,6 @@ tpu = [
     "jax[tpu]>=0.7.2",
 ]
 
-
 [tool.setuptools]
 packages = ['bmgpt']
 
@@ -31,6 +30,9 @@ conflicts = [
       { extra = "tpu" },
     ],
 ]
+
+[tool.uv.sources]
+bmgpt = { path = ".", editable = true }
 
 [tool.ruff]
 # Basic configuration
