@@ -1,7 +1,7 @@
 [project]
-name = "nanocrate"
+name = "baremetal-gpt"
 version = "0.1.0"
-description = "Hackable transformer repo, in JAX"
+description = "Simple, hackable transformer training & inference, in bare-metal JAX"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -10,10 +10,10 @@ dependencies = [
 
 [project.optional-dependencies]
 cpu = [
-    "jax>=0.7.1",
+    "jax>=0.7.2",
 ]
 tpu = [
-    "jax[tpu]>=0.7.1",
+    "jax[tpu]>=0.7.2",
 ]
 
 [tool.uv]
