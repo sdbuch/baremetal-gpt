@@ -7,12 +7,12 @@ import hydra
 import jax
 import jax.numpy as jnp
 
-from config import Config, config_post_init, register_configs
-from data.number_staircase import dataloader, make_data
-from data.utils import get_dataset_on_device, split_data
-from model import Transformer, _transformer, init_kv_cache, init_model_params
-from optimizers import get_opt_update_fn_from_enum, init_adam_state
-from sample import generate
+from bmgpt.config import Config, config_post_init, register_configs
+from bmgpt.data.number_staircase import dataloader, make_data
+from bmgpt.data.utils import get_dataset_on_device, split_data
+from bmgpt.model import Transformer, _transformer, init_kv_cache, init_model_params
+from bmgpt.optimizers import get_opt_update_fn_from_enum, init_adam_state
+from bmgpt.sample import generate
 
 register_configs()
 

@@ -1,11 +1,10 @@
-from functools import partial
 from typing import Iterator
 
 import jax
 from jax._src.mesh import get_concrete_mesh
 from jax.sharding import NamedSharding
 
-from config import Config
+from bmgpt.config import Config
 
 
 def split_data(data: jax.Array, train_fraction: float, dev_fraction: float):

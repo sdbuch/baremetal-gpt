@@ -3,7 +3,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
-from config import Config, OptType
+from bmgpt.config import Config, OptType
 
 
 def get_opt_update_fn_from_enum(opt_type: OptType):

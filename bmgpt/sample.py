@@ -3,8 +3,8 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from config import Config
-from model import Transformer, _transformer
+from bmgpt.config import Config
+from bmgpt.model import Transformer, _transformer
 
 
 @partial(jax.jit, donate_argnums=(4,))

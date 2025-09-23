@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from config import Config
+from bmgpt.config import Config
 
 ################################
 # Architecture: building blocks

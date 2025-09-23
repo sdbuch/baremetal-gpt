@@ -4,7 +4,7 @@ from typing import Iterator
 import jax
 import jax.numpy as jnp
 
-from config import Config
+from bmgpt.config import Config
 
 
 def make_data(config: Config):
