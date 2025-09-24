@@ -24,7 +24,6 @@ def sample_one_token(
     return next_token, cache_out, cache_size
 
 
-@jax.jit
 def generate(
     config: Config,
     key,
@@ -33,20 +32,32 @@ def generate(
     cache: jax.Array,
     cache_size: int,
 ) -> tuple[jax.Array, jax.Array, int]:
-    output = prompt
-
     # Prefill
     key, sk = jax.random.split(key)
     next_token, cache, cache_size = sample_one_token(
         config, sk, params, prompt, cache, cache_size, config.temperature
     )
-    output = jnp.concatenate((output, next_token))
+    prefill = jnp.concatenate((prompt, next_token))
+
     # Generation loop
-    for step in range(config.max_tokens_to_generate):
-        key, sk = jax.random.split(key)
+    def loop_fn(next_token__cache__cache_size, key):
+        next_token, cache, cache_size = next_token__cache__cache_size
         next_token, cache, cache_size = sample_one_token(
-            config, sk, params, next_token, cache, cache_size, config.temperature
+            config, key, params, next_token, cache, cache_size, config.temperature
         )
-        output = jnp.concatenate((output, next_token))
+        return (next_token, cache, cache_size), next_token
+
+    keys = jax.random.split(key, config.max_tokens_to_generate)
+
+    (next_token, cache, cache_size), output = jax.lax.scan(
+        loop_fn, (next_token, cache, cache_size), keys
+    )
+
+    # for step in range(config.max_tokens_to_generate):
+    #     key, sk = jax.random.split(key)
+    #     next_token, cache, cache_size = sample_one_token(
+    #         config, sk, params, next_token, cache, cache_size, config.temperature
+    #     )
+    output = jnp.concatenate((prefill, output))
 
     return output, cache, cache_size
