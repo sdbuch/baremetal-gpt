@@ -7,7 +7,8 @@ COMMANDS="if [ ! -d \"baremetal-gpt\" ]; then git clone git@github.com:sdbuch/ba
     && cd baremetal-gpt \
     && git pull \
     && git checkout train-loop-first-cut \
-    && uv run --extra tpu train.py $@"
+    && uv sync --extra tpu \
+    && uv run train $@"
 
 gcloud compute tpus tpu-vm ssh "$TPU_NAME" \
   --ssh-flag="$SSH_FLAGS" \
