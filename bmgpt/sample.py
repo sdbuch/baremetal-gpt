@@ -12,14 +12,14 @@ def sample_one_token(
     config: Config,
     key,
     params: Transformer,
-    x: jax.Array,
+    seq: jax.Array,
     cache_in: jax.Array,
     cache_size: int,
     temperature: float,
 ):
-    y, cache_out = _transformer(config, params, x, cache_in, cache_size)
+    y, cache_out = _transformer(config, params, seq, cache_in, cache_size)
     logits = y.astype(config.compute_dtype.value)
-    cache_size = cache_size + x.shape[-1]
+    cache_size = cache_size + seq.shape[-1]
     next_token = jnp.array((jax.random.categorical(key, logits[-1] / temperature),))
     return next_token, cache_out, cache_size
 
@@ -45,7 +45,7 @@ def generate(
         next_token, cache, cache_size = sample_one_token(
             config, key, params, next_token, cache, cache_size, config.temperature
         )
-        return (next_token, cache, cache_size), next_token
+        return (next_token, cache, cache_size), next_token[0]
 
     keys = jax.random.split(key, config.max_tokens_to_generate)
 
