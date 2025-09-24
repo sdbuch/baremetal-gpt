@@ -20,6 +20,9 @@ tpu = [
     "jax[tpu]>=0.7.2",
 ]
 
+[project.scripts]
+train = "bmgpt.train:main"
+
 [tool.setuptools]
 packages = ['bmgpt']
 
