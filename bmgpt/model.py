@@ -328,7 +328,7 @@ def init_model_params(key, config: Config) -> Transformer:
     )
 
 
-# TODO: fix sharding
+# TODO: update sharding if attention sharding is modified
 def init_kv_cache(config: Config):
     if config.update_cache:
         sharding = jax.P(*(config.sharding_data + [None] + config.sharding_att_qkv))

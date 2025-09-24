@@ -6,6 +6,8 @@ import jax.numpy as jnp
 from bmgpt.config import Config
 from bmgpt.model import Transformer, _transformer
 
+# TODO: These functions are for bs1. Create a packing/masking wrapper for bs>1
+
 
 @partial(jax.jit, donate_argnums=(4,))
 def sample_one_token(
@@ -17,6 +19,7 @@ def sample_one_token(
     cache_size: int,
     temperature: float,
 ):
+    """Expects seq and cache_in to have no batch axis."""
     y, cache_out = _transformer(config, params, seq, cache_in, cache_size)
     logits = y.astype(config.compute_dtype.value)
     cache_size = cache_size + seq.shape[-1]
@@ -33,6 +36,7 @@ def generate(
     cache: jax.Array,
     cache_size: int,
 ) -> tuple[jax.Array, jax.Array, int]:
+    """Expects prompt and cache to have no batch axis."""
     # Note: next_token is a length-1 sequence throughout
     # Prefill
     key, sk = jax.random.split(key)

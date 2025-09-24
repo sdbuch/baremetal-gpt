@@ -65,7 +65,6 @@ def main(config: Config):
     cache = init_kv_cache(config)
     train_state = init_train_state(key_params, config)
 
-    # Start with SGD then adam (state)... then adamw (selective)... each challenges!
     @partial(jax.jit, donate_argnums=2)
     def train_step(config: Config, batch, train_state: TrainState):
         def loss_fn(params: Transformer):
@@ -103,16 +102,14 @@ def main(config: Config):
                 *[f"{metric}: {val}" for metric, val in log_metrics.items()], sep="\t"
             )
 
-    # Perform sampling!
-    # Setup
-    prompt = jnp.array((1, 2, 3, 4))
+    # Perform sampling
+    prompt = jnp.array((1,))
     cache = init_kv_cache(config_sampling)[0]
     cache_size = 0
 
     output, cache, cache_size = generate(
         config_sampling, key_sampling, train_state.params, prompt, cache, cache_size
     )
-
     print(f"Prompt: {prompt}")
     print(f"Cache size: {cache_size}")
     print(f"Generated text: {output}")
