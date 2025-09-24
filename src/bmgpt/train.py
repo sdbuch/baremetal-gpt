@@ -8,8 +8,12 @@ import jax
 import jax.numpy as jnp
 
 from bmgpt.config import Config, config_post_init, register_configs
-from bmgpt.data.number_staircase import dataloader, make_data
-from bmgpt.data.utils import get_dataset_on_device, split_data
+from bmgpt.data import (
+    dataloader,
+    get_dataset_on_device,
+    make_number_staircase_data,
+    split_data,
+)
 from bmgpt.model import Transformer, _transformer, init_kv_cache, init_model_params
 from bmgpt.optimizers import get_opt_update_fn_from_enum, init_adam_state
 from bmgpt.sample import generate
@@ -55,7 +59,7 @@ def main(config: Config):
     key_params, key_data, key_sampling = jax.random.split(key, 3)
 
     # Data
-    data = make_data(config)
+    data = make_number_staircase_data(config)
     key_data, sk = jax.random.split(key_data)
     data = jax.random.permutation(sk, data, axis=0)
     Xtr, Xdev, Xte = split_data(data, 0.8, 0.1)
