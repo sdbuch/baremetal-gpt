@@ -15,7 +15,11 @@ from bmgpt.data import (
     split_data,
 )
 from bmgpt.model import Transformer, _transformer, init_kv_cache, init_model_params
-from bmgpt.optimizers import get_opt_update_fn_from_enum, init_adam_state
+from bmgpt.optimizers import (
+    get_opt_update_fn_from_enum,
+    grad_norm_and_clip,
+    init_adam_state,
+)
 from bmgpt.sample import generate
 
 register_configs()
@@ -68,6 +72,7 @@ def main(config: Config):
     # Initialize state
     cache = init_kv_cache(config)
     train_state = init_train_state(key_params, config)
+    weight_decay_mask = jax.tree.map(lambda p: p.ndim > 1, train_state.params)
 
     @partial(jax.jit, donate_argnums=2)
     def train_step(config: Config, batch, train_state: TrainState):
@@ -81,8 +86,13 @@ def main(config: Config):
             return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
         loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
+        grad_clipped, grad_norms_squared = grad_norm_and_clip(config, grad)
         new_params_and_opt = jax.tree.map(
-            partial(opt_update, config), train_state.params, grad, train_state.opt
+            partial(opt_update, config),
+            train_state.params,
+            grad_clipped,
+            train_state.opt,
+            weight_decay_mask,
         )
         # Transpose the output tree to get param tree and state tree
         new_params, new_opt = map(

@@ -15,7 +15,7 @@ class DType(Enum):
 
 
 class OptType(Enum):
-    ADAM = "adam"
+    ADAMW = "adamw"
     SGD = "sgd"
 
 
@@ -33,11 +33,13 @@ class Config:
     num_steps: int = 10**3
 
     # Optimizer params
-    optimizer_type: OptType = OptType.ADAM
+    optimizer_type: OptType = OptType.ADAMW
     lr: float = 1e-3
     beta1: float = 0.9
     beta2: float = 0.999
     eps_adam: float = 1e-8
+    weight_decay: float = 1e-2
+    clip_grad: float = 1.0  # global ell^2 norm
 
     # Model architecture params
     num_vocab: int = 2**8
