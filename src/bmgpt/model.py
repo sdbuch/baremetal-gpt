@@ -36,7 +36,7 @@ class Attn(NamedTuple):
     w_o: Array
 
 
-def _precompute_rope_sincos(config: Config):
+def _precompute_rope_cossin(config: Config):
     freqs = jnp.exp(
         -jnp.log(config.rope_theta).astype(config.compute_dtype.value)
         * 2
@@ -60,6 +60,19 @@ def _apply_rope(
     return jnp.concatenate(
         (c * x_1 - s * x_2, c * x_2 + s * x_1), axis=-1, dtype=config.param_dtype.value
     )
+
+
+def _make_causal_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
+    """(seq_len_q, seq_len_k) bool array with True for past token positions"""
+    q_positions = cache_size + jnp.arange(seq_len_q)
+    k_positions = jnp.arange(seq_len_k)
+    return q_positions[:, None] >= k_positions[None, :]
+
+
+def _make_cache_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
+    """(seq_len_q, seq_len_k) bool array with True for actual cache+context positions"""
+    k_positions = jnp.arange(seq_len_k)
+    return k_positions[None, :] < cache_size + seq_len_q
 
 
 def _attn(
@@ -89,7 +102,7 @@ def _attn(
         if not config.update_cache:
             cache_size = 0  # ignore passed value
         with jax.ensure_compile_time_eval():
-            rope_cos, rope_sin = _precompute_rope_sincos(config)
+            rope_cos, rope_sin = _precompute_rope_cossin(config)
             positions = jnp.arange(s, out_sharding=jax.P())
         _apply_rope_one_head = partial(
             _apply_rope, config, rope_cos, rope_sin, positions + cache_size
@@ -109,9 +122,8 @@ def _attn(
 
     # Attention computation
     t = k.shape[0]
-    mask = (cache_size + jnp.arange(s))[:, None] >= jnp.arange(t)[None, :]
-    # with static kv cache, must mask unused memory!
-    mask = mask & (jnp.arange(t)[None, :] < cache_size + s)
+    mask = _make_causal_mask(s, t, cache_size)
+    mask = mask & _make_cache_mask(s, t, cache_size)  # need for static cache
     mask = mask[None, ...]  # broadcast over heads
     if config.use_fa:
         attn_out = jax.nn.dot_product_attention(q, k, v, scale=None, mask=mask)
@@ -330,8 +342,12 @@ def init_model_params(key, config: Config) -> Transformer:
 
 # TODO: update sharding if attention sharding is modified
 def init_kv_cache(config: Config):
+    if not config.sharding_data:
+        sharding_batch_layer = [None, None]
+    else:
+        sharding_batch_layer = config.sharding_data + [None]
+    sharding = jax.P(*(sharding_batch_layer + config.sharding_att_qkv))
     if config.update_cache:
-        sharding = jax.P(*(config.sharding_data + [None] + config.sharding_att_qkv))
         return jnp.zeros(
             (
                 config.global_batch_size,
@@ -346,7 +362,6 @@ def init_kv_cache(config: Config):
         )
     else:
         # Save memory with a dummy cache, since its updates are no-ops
-        sharding = jax.P(*(config.sharding_data + [None] + config.sharding_att_qkv))
         return jnp.zeros(
             (config.global_batch_size, config.num_layers, 2, 1, 1, 1),
             dtype=config.param_dtype.value,

@@ -19,7 +19,7 @@ class OptType(Enum):
     SGD = "sgd"
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, unsafe_hash=True)
 class Config:
     # Experiment orchestration params
     mesh_axis_names: list[str] = field(default_factory=lambda: ["dp"])
