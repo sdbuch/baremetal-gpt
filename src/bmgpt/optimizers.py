@@ -22,7 +22,10 @@ def grad_norm_and_clip(
     # Gradient norms in param precision (NOTE: might want fp32?)
     grad_norms_squared = jax.tree.map(lambda grad: jnp.sum(grad**2), model)
     global_grad_norm = jax.tree.reduce(operator.add, grad_norms_squared) ** 0.5
-    truncated_norm = jnp.maximum(global_grad_norm - config.clip_grad, 0.0) + 1.0
+    truncated_norm = jax.lax.select(
+        global_grad_norm >= config.clip_grad, global_grad_norm, 1.0
+    )
+    # truncated_norm = jnp.maximum(global_grad_norm - config.clip_grad, 0.0) + 1.0
     return jax.tree.map(lambda grad: grad / truncated_norm, model), grad_norms_squared
 
 
