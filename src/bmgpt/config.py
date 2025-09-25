@@ -19,7 +19,6 @@ class OptType(Enum):
     SGD = "sgd"
 
 
-@jax.tree_util.register_static
 @dataclass(kw_only=True)
 class Config:
     # Experiment orchestration params
