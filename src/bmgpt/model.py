@@ -199,9 +199,10 @@ def _block(
 ):
     att_skip = x_seq
     out = jax.vmap(partial(_layernorm, config, params.norm_attn))(x_seq)
-    out, cache_out = _attn(
-        config, params.attn, out, kv_cache=cache_in, cache_size=cache_size
-    )
+    # out, cache_out = _attn(
+    #     config, params.attn, out, kv_cache=cache_in, cache_size=cache_size
+    # )
+    cache_out = cache_in
     out += att_skip
 
     mlp_skip = out

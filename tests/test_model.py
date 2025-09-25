@@ -35,9 +35,9 @@ def test_manual_attn_matches_jax_no_kv():
     config_no_fa = Config(**(config_args | {"use_fa": False}))
     key = jax.random.key(config.seed)
     model = init_model_params(key, config)
-    input = jnp.arange(256)
-    out, _ = _transformer(config, model, input, None, 0)
-    out_no_fa, _ = _transformer(config_no_fa, model, input, None, 0)
+    seq = jnp.arange(256)
+    out, _ = _transformer(config, model, seq, None, 0)
+    out_no_fa, _ = _transformer(config_no_fa, model, seq, None, 0)
     # print(jnp.max(jnp.abs(out - out_no_fa)))
     assert jnp.allclose(out, out_no_fa)
 
@@ -52,8 +52,8 @@ def test_rope():
     }
     config = Config(**config_args)
     cos, sin = _precompute_rope_cossin(config)
-    x = jnp.arange(4)[None]
-    y = x[:, ::-1]
+    x = jnp.arange(4)[None].astype(config.param_dtype.value)
+    y = x[:, ::-1].astype(config.param_dtype.value)
 
     # Test: position zero does nothing
     xx = _apply_rope(config, cos, sin, jnp.array((0,)), x)
@@ -74,10 +74,10 @@ def test_rope():
 
     xxx = jnp.concatenate(
         (M00 @ jnp.array((x[0, 0], x[0, 2])), M01 @ jnp.array((x[0, 1], x[0, 3])))
-    )
+    ).astype(config.param_dtype.value)
     yyy = jnp.concatenate(
         (M10 @ jnp.array((y[0, 0], y[0, 2])), M11 @ jnp.array((y[0, 1], y[0, 3])))
-    )
+    ).astype(config.param_dtype.value)
     assert jnp.allclose(jnp.dot(xxx, yyy), (xx @ yy.mT)[0, 0])
 
 
@@ -126,6 +126,8 @@ def test_cache_correct_predictions():
     config_args = {
         "sharding_data": [],
         "update_cache": True,
+        "num_vocab": 8,
+        "num_layers": 1,
         "param_dtype": DType.FLOAT32
         if jax.default_backend() == "cpu"
         else DType.BFLOAT16,  # Test fails on CPU in BF16
@@ -134,20 +136,20 @@ def test_cache_correct_predictions():
     config_no_cache = Config(**(config_args | {"update_cache": False}))
     key = jax.random.key(config.seed)
     model = init_model_params(key, config)
-    seq_len = 32
-    input = jnp.arange(seq_len)
-    prefix, suffix = input[: seq_len // 2], input[seq_len // 2 :]
-    out, _ = _transformer(config_no_cache, model, input, None, 0)
+    seq_len = 8
+    seq = jnp.arange(seq_len)
+    prefix, suffix = seq[: seq_len // 2], seq[seq_len // 2 :]
+    out, _ = _transformer(config_no_cache, model, seq, None, 0)
 
     cache_init = init_kv_cache(config)[0]
-    prefill, cache = _transformer(config, model, prefix, cache_init, 0)
+    prefill, cache = _transformer(config_no_cache, model, prefix, None, 0)
     preds, cache_out = _transformer(config, model, suffix, cache, seq_len // 2)
 
     # print(out.shape)
     # print(prefill.shape)
     # print(preds.shape)
-    # print(jnp.max(jnp.abs(prefill - out[:seq_len//2, :])))
-    # print(jnp.max(jnp.abs(preds - out[seq_len//2:, :])))
+    print(jnp.max(jnp.abs(prefill - out[:seq_len//2, :])))
+    print(jnp.max(jnp.abs(preds - out[seq_len//2:, :])))
 
     assert jnp.allclose(prefill, out[: seq_len // 2, :], atol=1e-5)
     assert jnp.allclose(
