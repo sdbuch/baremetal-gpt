@@ -111,7 +111,7 @@ def test_attention_masks():
     # Test cache masking
     cache_mask = _make_cache_mask(q_seq_len, kv_cache_size, q_seq_len)
     stored_cache_mask = cache_mask[:, : 2 * q_seq_len]
-    empty_cache_mask = causal_mask[:, 2 * q_seq_len :]
+    empty_cache_mask = cache_mask[:, 2 * q_seq_len :]
     assert jnp.all(
         stored_cache_mask == jnp.ones((q_seq_len, 2 * q_seq_len)).astype(jnp.bool)
     )

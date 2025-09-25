@@ -70,7 +70,7 @@ def _make_causal_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
 
 
 def _make_cache_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
-    """(seq_len_q, seq_len_k) bool array with True for actual cache+context positions"""
+    """(1, seq_len_k) bool array with True for actual cache+context positions"""
     k_positions = jnp.arange(seq_len_k)
     return k_positions[None, :] < cache_size + seq_len_q
 
