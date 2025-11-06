@@ -136,7 +136,7 @@ def test_cache_correct_predictions():
         if jax.default_backend() == "cpu"
         else DType.BFLOAT16,  # Test fails on CPU in BF16
     }
-    tol_args = {"atol": 0.01}
+    tol_args = {"atol": 1e-6 if jax.default_backend() == "cpu" else 1e-2}
 
     config = Config(**config_args)
     config_no_cache = Config(**(config_args | {"update_cache": False}))
