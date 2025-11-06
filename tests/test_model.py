@@ -158,6 +158,4 @@ def test_cache_correct_predictions():
     print(jnp.max(jnp.abs(preds - out[seq_len // 2 :, :])))
 
     assert jnp.allclose(prefill, out[: seq_len // 2, :], **tol_args)
-    assert jnp.allclose(
-        preds, out[seq_len // 2 :, :], atol=1e-5
-    )  # Can't pass on CPU at 1e-6
+    assert jnp.allclose(preds, out[seq_len // 2 :, :], **tol_args)
