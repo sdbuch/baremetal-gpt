@@ -136,6 +136,8 @@ def test_cache_correct_predictions():
         if jax.default_backend() == "cpu"
         else DType.BFLOAT16,  # Test fails on CPU in BF16
     }
+    tol_args = {"rtol": 2 ** (-7), "atol": 0.0}
+
     config = Config(**config_args)
     config_no_cache = Config(**(config_args | {"update_cache": False}))
     key = jax.random.key(config.seed)
@@ -155,7 +157,7 @@ def test_cache_correct_predictions():
     print(jnp.max(jnp.abs(prefill - out[: seq_len // 2, :])))
     print(jnp.max(jnp.abs(preds - out[seq_len // 2 :, :])))
 
-    assert jnp.allclose(prefill, out[: seq_len // 2, :], atol=1e-3) # bf16 atol
+    assert jnp.allclose(prefill, out[: seq_len // 2, :], **tol_args)
     assert jnp.allclose(
         preds, out[seq_len // 2 :, :], atol=1e-5
     )  # Can't pass on CPU at 1e-6
