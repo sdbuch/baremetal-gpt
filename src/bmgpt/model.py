@@ -202,6 +202,7 @@ def _block(
     out, cache_out = _attn(
         config, params.attn, out, kv_cache=cache_in, cache_size=cache_size
     )
+    out += att_skip
 
     mlp_skip = out
     out = jax.vmap(partial(_layernorm, config, params.norm_mlp))(out)
