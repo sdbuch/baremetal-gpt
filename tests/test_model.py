@@ -148,8 +148,8 @@ def test_cache_correct_predictions():
     # print(out.shape)
     # print(prefill.shape)
     # print(preds.shape)
-    print(jnp.max(jnp.abs(prefill - out[: seq_len // 2, :])))
-    print(jnp.max(jnp.abs(preds - out[seq_len // 2 :, :])))
+    # print(jnp.max(jnp.abs(prefill - out[: seq_len // 2, :])))
+    # print(jnp.max(jnp.abs(preds - out[seq_len // 2 :, :])))
 
     assert jnp.allclose(prefill, out[: seq_len // 2, :], **tol_args)  # type: ignore[arg-type]
     assert jnp.allclose(preds, out[seq_len // 2 :, :], **tol_args)  # type: ignore[arg-type]
