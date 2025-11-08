@@ -76,7 +76,7 @@ def main(config: Config):
     opt_update = get_opt_update_fn_from_enum(config.optimizer_type)
     weight_decay_mask = jax.tree.map(lambda x, s: bool(s), train_state.params, spec)
 
-    @jax.jit(donate_argnums=2)
+    @partial(jax.jit, donate_argnums=2)
     def train_step(config: Config, batch, train_state: TrainState):
         def loss_fn(params: Transformer):
             inputs, targets = batch
