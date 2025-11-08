@@ -138,10 +138,11 @@ def test_cache_correct_predictions():
     seq_len = 2
     seq = jnp.arange(seq_len)
     prefix, suffix = seq[: seq_len // 2], seq[seq_len // 2 :]
-    out, _ = _transformer(config_no_cache, model, seq, None, 0)
+    null_cache = init_kv_cache(config_no_cache)[0]
+    out, _ = _transformer(config_no_cache, model, seq, null_cache, 0)
 
     cache_init = init_kv_cache(config)[0]
-    prefill, cache = _transformer(config_no_cache, model, prefix, None, 0)
+    prefill, cache = _transformer(config, model, prefix, cache_init, 0)
     preds, cache_out = _transformer(config, model, suffix, cache, seq_len // 2)
 
     # print(out.shape)
