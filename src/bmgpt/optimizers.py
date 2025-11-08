@@ -31,6 +31,11 @@ def grad_norm_and_clip(
     return jax.tree.map(lambda grad: grad / truncated_norm, model), grad_norms_squared
 
 
+##############################
+#      State Management
+##############################
+
+
 class OptState(NamedTuple):
     mu: jax.Array  # 1st moment EMA
     nu: jax.Array  # 2nd moment EMA
@@ -45,8 +50,13 @@ def init_adam_state(config: Config, param: jax.Array) -> OptState:
     )
 
 
+##############################
+#          Updates
+##############################
+
+
 def adamw_update(
-    config: Config, param: jax.Array, grad: jax.Array, state: OptState, mask: bool
+    config: Config, param: jax.Array, grad: jax.Array, state: OptState, wd_mask: bool
 ):
     beta1 = config.beta1
     beta2 = config.beta2
@@ -54,24 +64,24 @@ def adamw_update(
     eps = config.eps_adam
     weight_decay = config.weight_decay
 
-    mu = beta1 * state.mu + (1 - beta1) * grad
+    mu = beta1 * state.mu + (1 - beta1) * grad.astype(config.optimizer_dtype.value)
     nu = beta2 * state.nu + (1 - beta2) * grad.astype(config.optimizer_dtype.value) ** 2
     new_state = OptState(mu=mu, nu=nu, step=state.step + 1)
 
     mu_debias = mu / (1 - beta1**new_state.step)
     nu_debias = nu / (1 - beta2**new_state.step)
     update = -lr * mu_debias / (eps + jnp.sqrt(nu_debias))
-    if mask:
+    if wd_mask:
         # Apply weight decay
         update = update - lr * weight_decay * param
-    return param + update.astype(config.param_dtype.value), new_state
+    return update.astype(config.param_dtype.value), new_state
 
 
 def sgd_update(
-    config: Config, param: jax.Array, grad: jax.Array, state: OptState, mask: bool
+    config: Config, param: jax.Array, grad: jax.Array, state: OptState, wd_mask: bool
 ):
     update = -config.lr * grad
-    if mask:
+    if wd_mask:
         # Apply weight decay
         update = update - config.lr * config.weight_decay * param
-    return param + update, state
+    return update, state

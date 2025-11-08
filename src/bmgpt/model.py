@@ -1,5 +1,5 @@
 from functools import partial
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -244,101 +244,127 @@ def _transformer(
 #####################################
 
 
-def init_model_params(key, config: Config) -> Transformer:
-    def init_embedding(key) -> Embedding:
-        emb = config.param_std * jax.random.normal(
-            key,
-            (config.num_vocab, config.d_model),
-            config.param_dtype.value,
-            out_sharding=jax.P(*config.sharding_res_stream),
-        )
-        return Embedding(w=emb)
+def init_embedding(config: Config, key) -> Embedding:
+    emb = config.param_std * jax.random.normal(
+        key,
+        (config.num_vocab, config.d_model),
+        config.param_dtype.value,
+        out_sharding=jax.P(*config.sharding_res_stream),
+    )
+    return Embedding(w=emb)
 
-    def init_unembedding(key) -> Unembedding:
-        unemb = config.param_std * jax.random.normal(
-            key,
-            (config.d_model, config.num_vocab),
-            config.param_dtype.value,
-            out_sharding=jax.P(*config.sharding_res_stream),
-        )
-        return Unembedding(w=unemb)
 
-    def init_mlp(key) -> Mlp:
-        k_w_up, k_w_down = jax.random.split(key, 2)
-        w_up = config.param_std * jax.random.normal(
-            k_w_up,
-            (config.d_model, config.mlp_factor * config.d_model),
-            config.param_dtype.value,
-            out_sharding=jax.P(*config.sharding_wup),
-        )
-        w_down = config.param_std * (
-            jax.random.normal(
-                k_w_down,
-                (config.mlp_factor * config.d_model, config.d_model),
-                config.param_dtype.value,
-                out_sharding=jax.P(*config.sharding_wdown),
-            )
-        )
-        bias_up = jnp.zeros(
-            (config.mlp_factor * config.d_model,),
-            config.param_dtype.value,
-            out_sharding=jax.P(*config.sharding_mlp_hidden),
-        )
-        bias_down = jnp.zeros(
-            (config.d_model,),
-            config.param_dtype.value,
-            out_sharding=jax.P(*config.sharding_res_stream),
-        )
-        return Mlp(w_up=w_up, bias_up=bias_up, w_down=w_down, bias_down=bias_down)
+def init_unembedding(config: Config, key) -> Unembedding:
+    unemb = config.param_std * jax.random.normal(
+        key,
+        (config.d_model, config.num_vocab),
+        config.param_dtype.value,
+        out_sharding=jax.P(*config.sharding_res_stream),
+    )
+    return Unembedding(w=unemb)
 
-    def init_attn(key) -> Attn:
-        k_qkv, k_o = jax.random.split(key, 2)
-        w_qkv = config.param_std * jax.random.normal(
-            k_qkv,
-            (config.d_model, 3, config.num_heads, config.d_head),
-            config.param_dtype.value,
-            out_sharding=jax.P(*config.sharding_wqkv),
-        )
-        w_out = config.param_std * (
-            jax.random.normal(
-                k_o,
-                (config.d_head, config.num_heads, config.d_model),
-                config.param_dtype.value,
-                out_sharding=jax.P(*config.sharding_wo),
-            )
-        )
-        return Attn(w_qkv=w_qkv, w_o=w_out)
 
-    def init_layernorm() -> LayerNorm:
-        gamma = jnp.ones(
-            (config.d_model,),
+def init_mlp(config: Config, key) -> Mlp:
+    k_w_up, k_w_down = jax.random.split(key, 2)
+    w_up = config.param_std * jax.random.normal(
+        k_w_up,
+        (config.d_model, config.mlp_factor * config.d_model),
+        config.param_dtype.value,
+        out_sharding=jax.P(*config.sharding_wup),
+    )
+    w_down = config.param_std * (
+        jax.random.normal(
+            k_w_down,
+            (config.mlp_factor * config.d_model, config.d_model),
             config.param_dtype.value,
-            out_sharding=jax.P(*config.sharding_res_stream),
+            out_sharding=jax.P(*config.sharding_wdown),
         )
-        beta = jnp.zeros(
-            (config.d_model,),
+    )
+    bias_up = jnp.zeros(
+        (config.mlp_factor * config.d_model,),
+        config.param_dtype.value,
+        out_sharding=jax.P(*config.sharding_mlp_hidden),
+    )
+    bias_down = jnp.zeros(
+        (config.d_model,),
+        config.param_dtype.value,
+        out_sharding=jax.P(*config.sharding_res_stream),
+    )
+    return Mlp(w_up=w_up, bias_up=bias_up, w_down=w_down, bias_down=bias_down)
+
+
+def init_attn(config: Config, key) -> Attn:
+    k_qkv, k_o = jax.random.split(key, 2)
+    w_qkv = config.param_std * jax.random.normal(
+        k_qkv,
+        (config.d_model, 3, config.num_heads, config.d_head),
+        config.param_dtype.value,
+        out_sharding=jax.P(*config.sharding_wqkv),
+    )
+    w_out = config.param_std * (
+        jax.random.normal(
+            k_o,
+            (config.d_head, config.num_heads, config.d_model),
             config.param_dtype.value,
-            out_sharding=jax.P(*config.sharding_res_stream),
+            out_sharding=jax.P(*config.sharding_wo),
         )
-        return LayerNorm(gamma=gamma, beta=beta)
+    )
+    return Attn(w_qkv=w_qkv, w_o=w_out)
 
-    def init_block(key) -> Block:
-        key_attn, key_mlp = jax.random.split(key)
-        return Block(
-            norm_attn=init_layernorm(),
-            attn=init_attn(key_attn),
-            norm_mlp=init_layernorm(),
-            mlp=init_mlp(key_mlp),
-        )
 
+def init_layernorm(config: Config) -> LayerNorm:
+    gamma = jnp.ones(
+        (config.d_model,),
+        config.param_dtype.value,
+        out_sharding=jax.P(*config.sharding_res_stream),
+    )
+    beta = jnp.zeros(
+        (config.d_model,),
+        config.param_dtype.value,
+        out_sharding=jax.P(*config.sharding_res_stream),
+    )
+    return LayerNorm(gamma=gamma, beta=beta)
+
+
+def init_block(config: Config, key) -> Block:
+    key_attn, key_mlp = jax.random.split(key)
+    return Block(
+        norm_attn=init_layernorm(config),
+        attn=init_attn(config, key_attn),
+        norm_mlp=init_layernorm(config),
+        mlp=init_mlp(config, key_mlp),
+    )
+
+
+def init_model(key, config: Config) -> Transformer:
     # Make the full network
     key_emb, key_blocks, key_unemb = jax.random.split(key, 3)
     keys_blocks = jax.random.split(key_blocks, config.num_layers)
-    return Transformer(
-        emb=init_embedding(key_emb),
-        blocks=jax.vmap(init_block)(keys_blocks),
-        unemb=init_unembedding(key_unemb),
+    model = Transformer(
+        emb=init_embedding(config, key_emb),
+        blocks=jax.vmap(partial(init_block, config))(keys_blocks),
+        unemb=init_unembedding(config, key_unemb),
     )
+
+    return model
+
+
+def model_spec(model: Transformer) -> Any:
+    # Make the spec (we need some way to pass metadata around)
+    # HACK: not great... disadvantage of bare metal without custom pytree
+    def _make_spec_from_str(path: str) -> tuple[int, int] | None:
+        param_str = path[-1].__str__()
+        matrix_axes_dict = {
+            ".w_qkv": (-4, -1),
+            ".w_o": (-3, -1),
+            ".w_up": (-2, -1),
+            ".w_down": (-2, -1),
+            ".w": (-2, -1),
+        }
+        return matrix_axes_dict.get(param_str, None)
+
+    spec = jax.tree.map_with_path(lambda p, x: _make_spec_from_str(p), model)
+    return spec
 
 
 # TODO: update sharding if attention sharding is modified

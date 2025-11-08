@@ -14,7 +14,7 @@ from bmgpt.data import (
     make_number_staircase_data,
     split_data,
 )
-from bmgpt.model import Transformer, _transformer, init_kv_cache, init_model_params
+from bmgpt.model import Transformer, _transformer, init_kv_cache, init_model, model_spec
 from bmgpt.optimizers import (
     get_opt_update_fn_from_enum,
     grad_norm_and_clip,
@@ -28,14 +28,14 @@ register_configs()
 # Setup for training loop
 class TrainState(NamedTuple):
     params: Transformer
-    opt: Any
+    opt_state: Any
 
 
 @jax.jit
 def init_train_state(key, config: Config) -> TrainState:
-    model_params = init_model_params(key, config)
+    model_params = init_model(key, config)
     adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
-    return TrainState(params=model_params, opt=adam_state)
+    return TrainState(params=model_params, opt_state=adam_state)
 
 
 @hydra.main(
@@ -47,7 +47,6 @@ def main(config: Config):
     # Config
     jax.distributed.initialize()
     config_post_init(config)
-    opt_update = get_opt_update_fn_from_enum(config.optimizer_type)
     # TODO: Expose these somehow, parameter groups?
     config_sampling_args = {
         "global_batch_size": 1,  # one prompt
@@ -69,10 +68,12 @@ def main(config: Config):
     Xtr, Xdev, Xte = split_data(data, 0.8, 0.1)
     batch = get_dataset_on_device(config, dataloader(key_data, config, Xtr))
 
-    # Initialize state
+    # Initialize state, configure optimization
     cache = init_kv_cache(config)
     train_state = init_train_state(key_params, config)
-    weight_decay_mask = jax.tree.map(lambda p: p.ndim > 1, train_state.params)
+    spec = model_spec(train_state.params)
+    opt_update = get_opt_update_fn_from_enum(config.optimizer_type)
+    weight_decay_mask = jax.tree.map(lambda x, s: bool(s), train_state.params, spec)
 
     @partial(jax.jit, donate_argnums=2)
     def train_step(config: Config, batch, train_state: TrainState):
@@ -87,19 +88,20 @@ def main(config: Config):
 
         loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
         grad_clipped, grad_norms_squared = grad_norm_and_clip(config, grad)
-        new_params_and_opt = jax.tree.map(
+        update__opt_state = jax.tree.map(
             partial(opt_update, config),
             train_state.params,
             grad_clipped,
-            train_state.opt,
+            train_state.opt_state,
             weight_decay_mask,
         )
-        # Transpose the output tree to get param tree and state tree
-        new_params, new_opt = map(
-            lambda i: jax.tree.map(lambda x, y: y[i], grad, new_params_and_opt),
+        # Transpose the output tree to get update tree and state tree
+        update, opt_state = map(
+            lambda i: jax.tree.map(lambda x, y: y[i], grad, update__opt_state),
             range(2),
         )
-        new_state = TrainState(params=new_params, opt=new_opt)
+        params = jax.tree.map(lambda x, y: x + y, train_state.params, update)
+        new_state = TrainState(params=params, opt_state=opt_state)
 
         metrics = {"loss": loss}
         return metrics, new_state
