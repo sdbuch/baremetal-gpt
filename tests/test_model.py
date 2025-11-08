@@ -12,15 +12,8 @@ from bmgpt.model import (
     _precompute_rope_cossin,
     _transformer,
     init_kv_cache,
-    init_model_params,
+    init_model,
 )
-
-
-@pytest.fixture(scope="session", autouse=True)
-def setup_config():
-    c = Config(mesh_shape=[1])
-    config_post_init(c)
-    yield
 
 
 def test_manual_attn_matches_jax_no_kv():
@@ -34,7 +27,7 @@ def test_manual_attn_matches_jax_no_kv():
     config = Config(**config_args)
     config_no_fa = Config(**(config_args | {"use_fa": False}))
     key = jax.random.key(config.seed)
-    model = init_model_params(key, config)
+    model = init_model(key, config)
     seq = jnp.arange(256)
     out, _ = _transformer(config, model, seq, None, 0)
     out_no_fa, _ = _transformer(config_no_fa, model, seq, None, 0)
@@ -141,7 +134,7 @@ def test_cache_correct_predictions():
     config = Config(**config_args)
     config_no_cache = Config(**(config_args | {"update_cache": False}))
     key = jax.random.key(config.seed)
-    model = init_model_params(key, config)
+    model = init_model(key, config)
     seq_len = 2
     seq = jnp.arange(seq_len)
     prefix, suffix = seq[: seq_len // 2], seq[seq_len // 2 :]
