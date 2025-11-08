@@ -6,7 +6,7 @@ SSH_FLAGS='-A -o ForwardAgent=yes'
 COMMANDS="if [ ! -d \"baremetal-gpt\" ]; then git clone git@github.com:sdbuch/baremetal-gpt; fi \
     && export HYDRA_FULL_ERROR=1 \
     && cd baremetal-gpt \
-    && git pull \
+    && git fetch \
     && git checkout train-loop-first-cut \
     && uv sync --extra tpu \
     && uv run train $@"

@@ -89,7 +89,6 @@ def main(config: Config):
 
         loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
         grad_clipped, grad_norms_squared = grad_norm_and_clip(config, grad)
-        grad_clipped = grad
         update__opt_state = jax.tree.map(
             partial(opt_update, config),
             train_state.params,
