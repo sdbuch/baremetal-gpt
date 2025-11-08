@@ -1,4 +1,5 @@
 import copy
+import operator
 from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -103,7 +104,10 @@ def main(config: Config):
         params = jax.tree.map(lambda x, y: x + y, train_state.params, update)
         new_state = TrainState(params=params, opt_state=opt_state)
 
-        metrics = {"loss": loss}
+        metrics = {
+            "loss": loss,
+            "grad_norm": jax.tree.reduce(operator.add, grad_norms_squared) ** 0.5,
+        }
         return metrics, new_state
 
     # Simple training loop
