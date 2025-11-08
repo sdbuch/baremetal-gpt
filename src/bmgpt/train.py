@@ -76,7 +76,7 @@ def main(config: Config):
     opt_update = get_opt_update_fn_from_enum(config.optimizer_type)
     weight_decay_mask = jax.tree.map(lambda x, s: bool(s), train_state.params, spec)
 
-    @partial(jax.jit, donate_argnums=2)
+    @jax.jit(donate_argnums=2)
     def train_step(config: Config, batch, train_state: TrainState):
         def loss_fn(params: Transformer):
             inputs, targets = batch
@@ -115,9 +115,8 @@ def main(config: Config):
     for step in range(config.num_steps):
         cur_metrics, train_state = train_step(config, next(batch), train_state)
         log_metrics, prev_metrics = prev_metrics, cur_metrics
-        if log_metrics:
+        if jax.process_index() == 0 and log_metrics:
             log_metrics |= {"step": step}
-            log_metrics |= {"pid": jax.process_index()}
             print(
                 *[f"{metric}: {val}" for metric, val in log_metrics.items()], sep="\t"
             )
