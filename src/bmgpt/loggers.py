@@ -59,16 +59,20 @@ class PrintLogger(Logger):
 class WandbLogger(Logger):
     def __init__(self, config: Config):
         super().__init__(config)
+        self.is_master = jax.process_index() == 0
 
     def __enter__(self):
-        if jax.process_index() == 0:
-            wandb.init(project=self.project_name, name=self.run_name, config=self.config)
+        if self.is_master:
+            wandb.init(
+                project=self.project_name, name=self.run_name, config=self.config
+            )
         return super().__enter__()
 
     def __exit__(self, exc_type, exc_value, traceback):
-        if jax.process_index() == 0:
+        if self.is_master:
             wandb.finish()
         return super().__exit__(exc_type, exc_value, traceback)
 
     def log(self, log_dict: dict):
-        wandb.log(log_dict)
+        if self.is_master:
+            wandb.log(log_dict)
