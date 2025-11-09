@@ -51,7 +51,7 @@ def split_data(data: jax.Array, train_fraction: float, dev_fraction: float):
 
 def get_dataset_on_device(
     config: Config, dataloader: Iterator[tuple[jax.Array, jax.Array]]
-) -> map[tuple[jax.Array, jax.Array]]:
+) -> Iterator[tuple[jax.Array, jax.Array]]:
     return map(
         lambda batch: jax.device_put(
             batch, NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data))
