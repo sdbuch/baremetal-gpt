@@ -115,6 +115,7 @@ def main(config: Config):
         for step in range(config.num_steps):
             q = next(batch)
             print(q[0].addressable_shards)
+            print(q[0].addressable_data().shape)
             cur_metrics, train_state = train_step(config, next(batch), train_state)
             log_metrics, prev_metrics = prev_metrics, cur_metrics
             if log_metrics:
