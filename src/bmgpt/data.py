@@ -4,6 +4,7 @@ from typing import Iterator
 import jax
 import jax.numpy as jnp
 from jax._src.mesh import get_concrete_mesh
+from jax._src import xla_bridge
 from jax.sharding import NamedSharding
 
 from bmgpt.config import Config
@@ -36,6 +37,9 @@ def dataloader(
         offsets = jax.random.randint(key, (config.global_batch_size,), 0, num_data)
         print(data.at[offsets, :-1].get().is_fully_addressable)
         print(jax.typeof(data.at[offsets, :-1].get()))
+        # if xla_bridge.process_count() == len(s._internal_device_list.process_indices):  # pytype: disable=attribute-error
+        print(xla_bridge.process_count())
+        print(NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data)._internal_device_list.process_indices))
         yield (data.at[offsets, :-1].get(), data.at[offsets, 1:].get())
 
 
