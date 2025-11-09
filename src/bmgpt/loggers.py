@@ -2,6 +2,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 
 import wandb
+from omegaconf import DictConfig, OmegaConf
 
 from bmgpt.config import Config, LoggerType
 
@@ -25,7 +26,11 @@ class Logger:
     def __init__(self, config: Config):
         self.project_name = config.project_name
         self.run_name = get_run_name(config.run_name)
-        self.config = asdict(config)
+        if isinstance(config, DictConfig):
+            config_dict = OmegaConf.to_container(config, resolve=True)
+        else:
+            config_dict = asdict(config)
+        self.config = config_dict
 
     def __enter__(self):
         return self
