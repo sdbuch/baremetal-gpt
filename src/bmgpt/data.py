@@ -17,7 +17,11 @@ def make_number_staircase_data(config: Config):
         [int(c) for c in text[i : i + config.seq_len + 1]]
         for i in range(len(text) - config.seq_len - 1)
     ]
-    data = jnp.array(seqs, dtype=jnp.int32)
+    data = jnp.array(
+        seqs,
+        dtype=jnp.int32,
+        device=NamedSharding(get_concrete_mesh(), jax.P()),
+    )
     return data
 
 

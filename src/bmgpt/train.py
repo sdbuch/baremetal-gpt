@@ -90,7 +90,7 @@ def main(config: Config):
             return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
         loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
-        grad_clipped, grad_norms_squared = grad_norm_and_clip(config, grad)
+        grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
         update__opt_state = jax.tree.map(
             partial(opt_update, config),
             train_state.params,
@@ -106,10 +106,7 @@ def main(config: Config):
         params = jax.tree.map(lambda x, y: x + y, train_state.params, update)
         new_state = TrainState(params=params, opt_state=opt_state)
 
-        metrics = {
-            "loss": loss,
-            "grad_norm": jax.tree.reduce(operator.add, grad_norms_squared) ** 0.5,
-        }
+        metrics = {"loss": loss, "grad_norm": global_grad_norm}
         return metrics, new_state
 
     # Simple training loop

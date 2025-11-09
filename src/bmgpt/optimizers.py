@@ -18,7 +18,7 @@ def get_opt_update_fn_from_enum(opt_type: OptType):
 
 def grad_norm_and_clip(
     config: Config, model: Transformer
-) -> tuple[Transformer, Transformer]:
+) -> tuple[Transformer, Transformer, float]:
     # Gradient norms in param precision (NOTE: might want fp32?)
     grad_norms_squared = jax.tree.map(lambda grad: jnp.sum(grad**2), model)
     global_grad_norm = jax.tree.reduce(operator.add, grad_norms_squared) ** 0.5
@@ -27,8 +27,11 @@ def grad_norm_and_clip(
         global_grad_norm,
         jnp.ones_like(global_grad_norm),
     )
-    # truncated_norm = jnp.maximum(global_grad_norm - config.clip_grad, 0.0) + 1.0
-    return jax.tree.map(lambda grad: grad / truncated_norm, model), grad_norms_squared
+    return (
+        jax.tree.map(lambda grad: grad / truncated_norm, model),
+        grad_norms_squared,
+        global_grad_norm,
+    )
 
 
 ##############################
