@@ -5,6 +5,8 @@ shift
 SSH_FLAGS='-A -o ForwardAgent=yes'
 COMMANDS="if [ ! -d \"baremetal-gpt\" ]; then git clone git@github.com:sdbuch/baremetal-gpt; fi \
     && export HYDRA_FULL_ERROR=1 \
+    && export WANDB_ENTITY='$WANDB_ENTITY' \
+    && export WANDB_API_KEY='$WANDB_API_KEY' \
     && cd baremetal-gpt \
     && git pull \
     && git checkout train-loop-first-cut \

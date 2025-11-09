@@ -37,6 +37,7 @@ def generate(
     cache_size: int,
 ) -> tuple[jax.Array, jax.Array, int]:
     """Expects prompt and cache to have no batch axis."""
+    # TODO: Implement batched inference
     # Note: next_token is a length-1 sequence throughout
     # Prefill
     key, sk = jax.random.split(key)

@@ -19,12 +19,20 @@ class OptType(Enum):
     SGD = "sgd"
 
 
+class LoggerType(Enum):
+    PRINT = "print"
+    WANDB = "wandb"
+
+
 @dataclass(kw_only=True, unsafe_hash=True)
 class Config:
     # Experiment orchestration params
     mesh_axis_names: list[str] = field(default_factory=lambda: ["dp"])
     mesh_shape: list[int] = field(default_factory=lambda: [4])
     seed: int = 1337
+    logger_type: LoggerType = LoggerType.WANDB
+    project_name: str = 'bmgpt-debug'
+    run_name: str = ''
 
     # Data params
     seq_len: int = 256

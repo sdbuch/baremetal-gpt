@@ -15,6 +15,7 @@ from bmgpt.data import (
     make_number_staircase_data,
     split_data,
 )
+from bmgpt.loggers import get_logger_class_from_enum
 from bmgpt.model import Transformer, _transformer, init_kv_cache, init_model, model_spec
 from bmgpt.optimizers import (
     get_opt_update_fn_from_enum,
@@ -48,6 +49,7 @@ def main(config: Config):
     # Config
     jax.distributed.initialize()
     config_post_init(config)
+    Logger = get_logger_class_from_enum(config.logger_type)
     # TODO: Expose these somehow, parameter groups?
     config_sampling_args = {
         "global_batch_size": 1,  # one prompt
@@ -112,26 +114,25 @@ def main(config: Config):
 
     # Simple training loop
     prev_metrics = None
-    for step in range(config.num_steps):
-        cur_metrics, train_state = train_step(config, next(batch), train_state)
-        log_metrics, prev_metrics = prev_metrics, cur_metrics
-        if jax.process_index() == 0 and log_metrics:
-            log_metrics |= {"step": step}
-            print(
-                *[f"{metric}: {val}" for metric, val in log_metrics.items()], sep="\t"
-            )
+    with Logger(config) as logger:
+        for step in range(config.num_steps):
+            cur_metrics, train_state = train_step(config, next(batch), train_state)
+            log_metrics, prev_metrics = prev_metrics, cur_metrics
+            if jax.process_index() == 0 and log_metrics:
+                log_metrics |= {"step": step}
+                logger.log(log_metrics)
 
-    # Perform sampling
-    prompt = jnp.array((1,))
-    cache = init_kv_cache(config_sampling)[0]
-    cache_size = 0
+        # Perform sampling
+        prompt = jnp.array((1,))
+        cache = init_kv_cache(config_sampling)[0]
+        cache_size = 0
 
-    output, cache, cache_size = generate(
-        config_sampling, key_sampling, train_state.params, prompt, cache, cache_size
-    )
-    print(f"Prompt: {prompt}")
-    print(f"Cache size: {cache_size}")
-    print(f"Generated text: {output}")
+        output, cache, cache_size = generate(
+            config_sampling, key_sampling, train_state.params, prompt, cache, cache_size
+        )
+        print(f"Prompt: {prompt}")
+        print(f"Cache size: {cache_size}")
+        print(f"Generated text: {output}")
 
 
 if __name__ == "__main__":
