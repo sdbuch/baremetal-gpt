@@ -34,7 +34,8 @@ def dataloader(
     for step in it.count():
         key = jax.random.fold_in(key, step)
         offsets = jax.random.randint(key, (config.global_batch_size,), 0, num_data)
-        print(offsets)
+        print(data.at[offsets, :-1].get().sharding)
+        print(jax.typeof(data.at[offsets, :-1].get()))
         yield (data.at[offsets, :-1].get(), data.at[offsets, 1:].get())
 
 
