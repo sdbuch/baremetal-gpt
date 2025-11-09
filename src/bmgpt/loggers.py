@@ -1,6 +1,7 @@
 from dataclasses import asdict
 from datetime import datetime, timezone
 
+import jax
 import wandb
 from omegaconf import DictConfig, OmegaConf
 
@@ -60,11 +61,13 @@ class WandbLogger(Logger):
         super().__init__(config)
 
     def __enter__(self):
-        wandb.init(project=self.project_name, name=self.run_name, config=self.config)
+        if jax.process_index() == 0:
+            wandb.init(project=self.project_name, name=self.run_name, config=self.config)
         return super().__enter__()
 
     def __exit__(self, exc_type, exc_value, traceback):
-        wandb.finish()
+        if jax.process_index() == 0:
+            wandb.finish()
         return super().__exit__(exc_type, exc_value, traceback)
 
     def log(self, log_dict: dict):

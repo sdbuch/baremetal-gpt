@@ -118,7 +118,7 @@ def main(config: Config):
         for step in range(config.num_steps):
             cur_metrics, train_state = train_step(config, next(batch), train_state)
             log_metrics, prev_metrics = prev_metrics, cur_metrics
-            if jax.process_index() == 0 and log_metrics:
+            if log_metrics:
                 log_metrics |= {"step": step}
                 logger.log(log_metrics)
 
