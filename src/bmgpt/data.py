@@ -38,9 +38,11 @@ def dataloader(
         print(jax.typeof(data.at[offsets, :-1].get()))
         # if xla_bridge.process_count() == len(s._internal_device_list.process_indices):  # pytype: disable=attribute-error
         print(xla_bridge.process_count())
+        print(NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data))._internal_device_list)
         print(NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data))._internal_device_list.process_indices)
         print(NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data)).is_fully_addressable)
         print(NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data)).device_set)
+        print(data.at[offsets, :-1].get().sharding._internal_device_list)
         print(data.at[offsets, :-1].get().is_fully_addressable)
         print(data.at[offsets, :-1].get().sharding.device_set)
         yield (data.at[offsets, :-1].get(), data.at[offsets, 1:].get())
