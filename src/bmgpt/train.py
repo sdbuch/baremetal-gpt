@@ -35,7 +35,7 @@ class TrainState(NamedTuple):
     kv_cache: jax.Array
 
 
-@jax.jit
+@partial(jax.jit, static_argnums=2)
 def init_train_state(key, config: Config, mesh: Mesh) -> TrainState:
     with jax.set_mesh(mesh):
         model_params = init_model(key, config)
