@@ -3,8 +3,8 @@ from typing import Iterator
 
 import jax
 import jax.numpy as jnp
-from jax._src import xla_bridge
-from jax._src.mesh import get_concrete_mesh
+
+# from jax._src.mesh import get_concrete_mesh
 from jax.sharding import Mesh, NamedSharding
 
 from bmgpt.config import Config

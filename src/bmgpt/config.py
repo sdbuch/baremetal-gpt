@@ -99,7 +99,6 @@ def mesh_from_config(config: Config):
         config.mesh_axis_names,
         len(config.mesh_shape) * (jax.sharding.AxisType.Explicit,),
     )
-    # jax.set_mesh(mesh)
     return mesh
 
 

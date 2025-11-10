@@ -1,5 +1,4 @@
 import copy
-import operator
 from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -7,7 +6,6 @@ from typing import Any, NamedTuple
 import hydra
 import jax
 import jax.numpy as jnp
-from jax.sharding import Mesh
 
 from bmgpt.config import Config, config_post_init, mesh_from_config, register_configs
 from bmgpt.data import (

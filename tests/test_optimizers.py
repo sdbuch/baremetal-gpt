@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import optax
 import pytest
 
-from bmgpt.config import Config, DType, config_post_init
+from bmgpt.config import Config, DType, config_post_init, mesh_from_config
 from bmgpt.model import (
     Transformer,
     _apply_rope,
@@ -127,9 +127,11 @@ def test_adam_update():
 
 
 def test_update_mask():
-    config = Config()
+    config = Config(mesh_shape=[1])
+    mesh = mesh_from_config(config)
     key = jax.random.key(config.seed)
-    state = init_train_state(key, config)
+    with jax.set_mesh(mesh):
+        state = init_train_state(key, config)
     spec = model_spec(state.params)
     weight_decay_mask = jax.tree.map(lambda x, s: bool(s), state.params, spec)
 
