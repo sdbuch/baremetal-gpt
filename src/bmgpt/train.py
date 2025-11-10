@@ -75,7 +75,7 @@ def main(config: Config):
     data = jax.random.permutation(sk, data, axis=0)
     Xtr, Xdev, Xte = split_data(data, 0.8, 0.1)
     print(key_data.is_fully_addressable)
-    batch = get_dataset_on_device(config, dataloader(key_data, config, Xtr), mesh)
+    batch_iter = get_dataset_on_device(config, dataloader(key_data, config, Xtr), mesh)
 
     # Initialize state, configure optimization
     with jax.set_mesh(mesh):
@@ -119,30 +119,33 @@ def main(config: Config):
 
     # Simple training loop
     prev_metrics = None
-    with Logger(config) as logger, jax.set_mesh(mesh):
+    with Logger(config) as logger:
         for step in range(config.num_steps):
-            cur_metrics, train_state = train_step(config, next(batch), train_state)
+            batch = next(batch_iter)
+            with jax.set_mesh(mesh):
+                cur_metrics, train_state = train_step(config, batch, train_state)
             log_metrics, prev_metrics = prev_metrics, cur_metrics
             if log_metrics:
                 log_metrics |= {"step": step}
                 logger.log(log_metrics)
 
         # Perform sampling
-        prompt = jnp.array((1,))
-        cache = init_kv_cache(config_sampling)[0]
-        cache_size = 0
+        with jax.set_mesh(mesh):
+            prompt = jnp.array((1,))
+            cache = init_kv_cache(config_sampling)[0]
+            cache_size = 0
 
-        output, cache, cache_size = generate(
-            config_sampling,
-            key_sampling,
-            train_state.params,
-            prompt,
-            cache,
-            cache_size,
-        )
-        print(f"Prompt: {prompt}")
-        print(f"Cache size: {cache_size}")
-        print(f"Generated text: {output}")
+            output, cache, cache_size = generate(
+                config_sampling,
+                key_sampling,
+                train_state.params,
+                prompt,
+                cache,
+                cache_size,
+            )
+            print(f"Prompt: {prompt}")
+            print(f"Cache size: {cache_size}")
+            print(f"Generated text: {output}")
 
 
 if __name__ == "__main__":
