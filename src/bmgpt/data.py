@@ -30,17 +30,16 @@ def make_number_staircase_data(config: Config):
 def dataloader(
     key, config: Config, data: jax.Array
 ) -> Iterator[tuple[jax.Array, jax.Array]]:
-    process_id = jax.process_index()
-    key = jax.random.fold_in(key, process_id)
+    key = jax.random.fold_in(key, jax.process_index())
     num_data = len(data)
     for step in it.count():
         key = jax.random.fold_in(key, step)
         offsets = jax.random.randint(key, (config.global_batch_size,), 0, num_data)
-        print(jax.typeof(offsets))
-        print(offsets.devices())
-        print(offsets.is_fully_addressable)
-        print(offsets.is_fully_replicated)
-        print(offsets)
+        jax.debug.print(jax.typeof(offsets))
+        jax.debug.print(offsets.devices())
+        jax.debug.print(offsets.is_fully_addressable)
+        jax.debug.print(offsets.is_fully_replicated)
+        jax.debug.print(offsets)
         # print(xla_bridge.process_count())
         # print(
         #     NamedSharding(
