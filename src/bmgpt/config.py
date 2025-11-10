@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -29,10 +30,11 @@ class Config:
     # Experiment orchestration params
     mesh_axis_names: list[str] = field(default_factory=lambda: ["dp"])
     mesh_shape: list[int] = field(default_factory=lambda: [4])
+    mesh: Any | None = None
     seed: int = 1337
     logger_type: LoggerType = LoggerType.WANDB
-    project_name: str = 'bmgpt-debug'
-    run_name: str = ''
+    project_name: str = "bmgpt-debug"
+    run_name: str = ""
 
     # Data params
     seq_len: int = 256
@@ -102,15 +104,9 @@ def config_post_init(config: Config):
         config.mesh_axis_names,
         len(config.mesh_shape) * (jax.sharding.AxisType.Explicit,),
     )
+    config.mesh = mesh
 
-    # 0.5.2 jax.set_mesh causes subsequent key generations to be fully
-    #   replicated... doesn't really make sense, as you could fold_in a process
-    #   index and have the keys diverge, but they're still fully replicated
-    # so we generate it here and return it
-    key = jax.random.key(config.seed)
-    jax.set_mesh(mesh)
+    # jax.set_mesh(mesh)
 
     # Check arguments
     assert config.d_head % 2 == 0, "Head dimension needs to be divisible by 2 for RoPE"
-
-    return key
