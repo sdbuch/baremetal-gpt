@@ -35,12 +35,11 @@ class TrainState(NamedTuple):
     kv_cache: jax.Array
 
 
-@partial(jax.jit, static_argnums=2)
-def init_train_state(key, config: Config, mesh: Mesh) -> TrainState:
-    with jax.set_mesh(mesh):
-        model_params = init_model(key, config)
-        adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
-        cache = init_kv_cache(config)
+@jax.jit
+def init_train_state(key, config: Config) -> TrainState:
+    model_params = init_model(key, config)
+    adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
+    cache = init_kv_cache(config)
     return TrainState(params=model_params, opt_state=adam_state, kv_cache=cache)
 
 
@@ -79,7 +78,8 @@ def main(config: Config):
     batch = get_dataset_on_device(config, dataloader(key_data, config, Xtr))
 
     # Initialize state, configure optimization
-    train_state = init_train_state(key_params, config, mesh)
+    with jax.set_mesh(mesh):
+        train_state = init_train_state(key_params, config, mesh)
     spec = model_spec(train_state.params)
     opt_update = get_opt_update_fn_from_enum(config.optimizer_type)
     weight_decay_mask = jax.tree.map(lambda x, s: bool(s), train_state.params, spec)
