@@ -67,14 +67,12 @@ def main(config: Config):
     # Randomness
     key = jax.random.key(config.seed)
     key_params, key_data, key_sampling = jax.random.split(key, 3)
-    print(key_data.is_fully_addressable)
 
     # Data
     data = make_number_staircase_data(config)
     key_data, sk = jax.random.split(key_data)
     data = jax.random.permutation(sk, data, axis=0)
     Xtr, Xdev, Xte = split_data(data, 0.8, 0.1)
-    print(key_data.is_fully_addressable)
     batch_iter = get_dataset_on_device(config, dataloader(key_data, config, Xtr), mesh)
 
     # Initialize state, configure optimization
