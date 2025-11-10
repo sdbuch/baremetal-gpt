@@ -95,7 +95,8 @@ def main(config: Config):
             logprobs = jax.nn.log_softmax(logits, axis=-1)
             return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
-        loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
+        with jax.set_mesh(mesh):
+            loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
         grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
         update__opt_state = jax.tree.map(
             partial(opt_update, config),
