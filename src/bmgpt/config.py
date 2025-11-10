@@ -30,7 +30,7 @@ class Config:
     # Experiment orchestration params
     mesh_axis_names: list[str] = field(default_factory=lambda: ["dp"])
     mesh_shape: list[int] = field(default_factory=lambda: [4])
-    mesh = MISSING
+    mesh: jax.sharding.Mesh = MISSING
     seed: int = 1337
     logger_type: LoggerType = LoggerType.WANDB
     project_name: str = "bmgpt-debug"
