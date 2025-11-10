@@ -50,6 +50,8 @@ def main(config: Config):
     jax.distributed.initialize()
     kk = jax.random.key(1337)
     print(kk.is_fully_addressable)
+    q = jax.random.normal(kk, (128, 128))
+    print(q.is_fully_addressable)
     config_post_init(config)
     kkk = jax.random.key(1337)
     print(kkk.is_fully_addressable)
