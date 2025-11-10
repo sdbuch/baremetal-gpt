@@ -34,7 +34,10 @@ def dataloader(
     num_data = len(data)
     for step in it.count():
         key = jax.random.fold_in(key, step)
-        offsets = jax.random.randint(key, (config.global_batch_size,), 0, num_data)
+        # offsets = jax.random.randint(key, (config.global_batch_size,), 0, num_data)
+        offsets = jax.random.randint(
+            key, (config.global_batch_size // jax.process_count(),), 0, num_data
+        )
         print(jax.local_devices())
         print(jax.typeof(offsets))
         print(offsets.devices())
@@ -80,8 +83,12 @@ def get_dataset_on_device(
     config: Config, dataloader: Iterator[tuple[jax.Array, jax.Array]]
 ) -> Iterator[tuple[jax.Array, jax.Array]]:
     return map(
-        lambda batch: jax.device_put(
-            batch, NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data))
+        # lambda batch: jax.device_put(
+        #     batch, NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data))
+        # ),
+        # dataloader,
+        lambda batch: jax.make_array_from_process_local_data(
+            NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data)), batch
         ),
         dataloader,
     )
