@@ -39,6 +39,7 @@ def dataloader(
         print(offsets.devices())
         print(offsets.is_fully_addressable)
         print(offsets.is_fully_replicated)
+        print(offsets)
         # print(xla_bridge.process_count())
         # print(
         #     NamedSharding(
