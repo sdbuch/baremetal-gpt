@@ -37,6 +37,8 @@ def dataloader(
         offsets = jax.random.randint(key, (config.global_batch_size,), 0, num_data)
         print(jax.typeof(offsets))
         print(offsets.devices())
+        print(offsets.is_fully_addressable)
+        print(offsets.is_fully_replicated)
         # print(xla_bridge.process_count())
         # print(
         #     NamedSharding(
