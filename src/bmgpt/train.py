@@ -48,6 +48,8 @@ def init_train_state(key, config: Config) -> TrainState:
 def main(config: Config):
     # Config
     jax.distributed.initialize()
+    kk = jax.random.key(1337)
+    print(kk.is_fully_addressable)
     config_post_init(config)
     Logger = get_logger_class_from_enum(config.logger_type)
     # TODO: Expose these somehow, parameter groups?
@@ -62,9 +64,7 @@ def main(config: Config):
 
     # Randomness
     key = jax.random.key(config.seed)
-    kk = jax.random.key(1337)
     print(key.is_fully_addressable)
-    print(kk.is_fully_addressable)
     key_params, key_data, key_sampling = jax.random.split(key, 3)
 
     # Data
