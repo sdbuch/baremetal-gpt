@@ -62,7 +62,9 @@ def main(config: Config):
 
     # Randomness
     key = jax.random.key(config.seed)
+    kk = jax.random.key(1337)
     print(key.is_fully_addressable)
+    print(kk.is_fully_addressable)
     key_params, key_data, key_sampling = jax.random.split(key, 3)
 
     # Data
