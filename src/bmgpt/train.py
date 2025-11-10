@@ -119,32 +119,30 @@ def main(config: Config):
 
     # Simple training loop
     prev_metrics = None
-    with Logger(config) as logger:
+    with Logger(config) as logger, jax.set_mesh(mesh):
         for step in range(config.num_steps):
-            with jax.set_mesh(mesh):
-                cur_metrics, train_state = train_step(config, next(batch), train_state)
+            cur_metrics, train_state = train_step(config, next(batch), train_state)
             log_metrics, prev_metrics = prev_metrics, cur_metrics
             if log_metrics:
                 log_metrics |= {"step": step}
                 logger.log(log_metrics)
 
         # Perform sampling
-        with jax.set_mesh(mesh):
-            prompt = jnp.array((1,))
-            cache = init_kv_cache(config_sampling)[0]
-            cache_size = 0
+        prompt = jnp.array((1,))
+        cache = init_kv_cache(config_sampling)[0]
+        cache_size = 0
 
-            output, cache, cache_size = generate(
-                config_sampling,
-                key_sampling,
-                train_state.params,
-                prompt,
-                cache,
-                cache_size,
-            )
-            print(f"Prompt: {prompt}")
-            print(f"Cache size: {cache_size}")
-            print(f"Generated text: {output}")
+        output, cache, cache_size = generate(
+            config_sampling,
+            key_sampling,
+            train_state.params,
+            prompt,
+            cache,
+            cache_size,
+        )
+        print(f"Prompt: {prompt}")
+        print(f"Cache size: {cache_size}")
+        print(f"Generated text: {output}")
 
 
 if __name__ == "__main__":

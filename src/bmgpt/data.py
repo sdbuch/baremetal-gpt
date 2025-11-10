@@ -27,16 +27,16 @@ def dataloader(
     key, config: Config, data: jax.Array
 ) -> Iterator[tuple[jax.Array, jax.Array]]:
     num_data = len(data)
+    print(key.is_fully_addressable)
     key = jax.random.fold_in(key, jax.process_index())
+    print(key.is_fully_addressable)
     for step in it.count():
         key = jax.random.fold_in(key, step)
+        print(key.is_fully_addressable)
         # offsets = jax.random.randint(key, (config.global_batch_size,), 0, num_data)
         offsets = jax.random.randint(
             key, (config.global_batch_size // jax.process_count(),), 0, num_data
         )
-        print(jax.local_devices())
-        print(jax.typeof(offsets))
-        print(offsets.devices())
         print(offsets.is_fully_addressable)
         print(offsets.is_fully_replicated)
         print(offsets)
