@@ -7,8 +7,9 @@ from typing import Any, NamedTuple
 import hydra
 import jax
 import jax.numpy as jnp
+from jax.sharding import Mesh
 
-from bmgpt.config import Config, config_post_init, register_configs
+from bmgpt.config import Config, config_post_init, mesh_from_config, register_configs
 from bmgpt.data import (
     dataloader,
     get_dataset_on_device,
@@ -31,13 +32,16 @@ register_configs()
 class TrainState(NamedTuple):
     params: Transformer
     opt_state: Any
+    kv_cache: jax.Array
 
 
 @jax.jit
-def init_train_state(key, config: Config) -> TrainState:
-    model_params = init_model(key, config)
-    adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
-    return TrainState(params=model_params, opt_state=adam_state)
+def init_train_state(key, config: Config, mesh: Mesh) -> TrainState:
+    with jax.set_mesh(mesh):
+        model_params = init_model(key, config)
+        adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
+        cache = init_kv_cache(config)
+    return TrainState(params=model_params, opt_state=adam_state, kv_cache=cache)
 
 
 @hydra.main(
@@ -48,8 +52,8 @@ def init_train_state(key, config: Config) -> TrainState:
 def main(config: Config):
     # Config
     jax.distributed.initialize()
-    key = config_post_init(config)
-    print(key.is_fully_addressable)
+    config_post_init(config)
+    mesh = mesh_from_config(config)
     Logger = get_logger_class_from_enum(config.logger_type)
     # TODO: Expose these somehow, parameter groups?
     config_sampling_args = {
@@ -62,6 +66,7 @@ def main(config: Config):
         config_sampling.__setattr__(k, v)
 
     # Randomness
+    key = jax.random.key(config.seed)
     key_params, key_data, key_sampling = jax.random.split(key, 3)
     print(key_data.is_fully_addressable)
 
@@ -74,8 +79,7 @@ def main(config: Config):
     batch = get_dataset_on_device(config, dataloader(key_data, config, Xtr))
 
     # Initialize state, configure optimization
-    cache = init_kv_cache(config)
-    train_state = init_train_state(key_params, config)
+    train_state = init_train_state(key_params, config, mesh)
     spec = model_spec(train_state.params)
     opt_update = get_opt_update_fn_from_enum(config.optimizer_type)
     weight_decay_mask = jax.tree.map(lambda x, s: bool(s), train_state.params, spec)
@@ -84,8 +88,8 @@ def main(config: Config):
     def train_step(config: Config, batch, train_state: TrainState):
         def loss_fn(params: Transformer):
             inputs, targets = batch
-            logits, cache_out = jax.vmap(partial(_transformer, config, params))(
-                inputs, cache
+            logits, _ = jax.vmap(partial(_transformer, config, params))(
+                inputs, train_state.kv_cache
             )
             logits = logits.astype(config.compute_dtype.value)
             logprobs = jax.nn.log_softmax(logits, axis=-1)
@@ -106,7 +110,9 @@ def main(config: Config):
             range(2),
         )
         params = jax.tree.map(lambda x, y: x + y, train_state.params, update)
-        new_state = TrainState(params=params, opt_state=opt_state)
+        new_state = TrainState(
+            params=params, opt_state=opt_state, kv_cache=train_state.kv_cache
+        )
 
         metrics = {"loss": loss, "grad_norm": global_grad_norm}
         return metrics, new_state
@@ -122,16 +128,22 @@ def main(config: Config):
                 logger.log(log_metrics)
 
         # Perform sampling
-        prompt = jnp.array((1,))
-        cache = init_kv_cache(config_sampling)[0]
-        cache_size = 0
+        with jax.set_mesh(mesh):
+            prompt = jnp.array((1,))
+            cache = init_kv_cache(config_sampling)[0]
+            cache_size = 0
 
-        output, cache, cache_size = generate(
-            config_sampling, key_sampling, train_state.params, prompt, cache, cache_size
-        )
-        print(f"Prompt: {prompt}")
-        print(f"Cache size: {cache_size}")
-        print(f"Generated text: {output}")
+            output, cache, cache_size = generate(
+                config_sampling,
+                key_sampling,
+                train_state.params,
+                prompt,
+                cache,
+                cache_size,
+            )
+            print(f"Prompt: {prompt}")
+            print(f"Cache size: {cache_size}")
+            print(f"Generated text: {output}")
 
 
 if __name__ == "__main__":

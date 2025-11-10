@@ -1,7 +1,5 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from omegaconf import MISSING
-from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -31,7 +29,6 @@ class Config:
     # Experiment orchestration params
     mesh_axis_names: list[str] = field(default_factory=lambda: ["dp"])
     mesh_shape: list[int] = field(default_factory=lambda: [4])
-    mesh: Any = MISSING
     seed: int = 1337
     logger_type: LoggerType = LoggerType.WANDB
     project_name: str = "bmgpt-debug"
@@ -96,18 +93,18 @@ def register_configs():
     cs.store(name="config", node=Config)
 
 
-def config_post_init(config: Config):
-    # Register the argument's type as static (since hydra wraps Config)
-    jax.tree_util.register_static(type(config))  # for hydra!
-    # Set up and register mesh
+def mesh_from_config(config: Config):
     mesh = jax.make_mesh(
         config.mesh_shape,
         config.mesh_axis_names,
         len(config.mesh_shape) * (jax.sharding.AxisType.Explicit,),
     )
-    config.mesh = mesh
-
     # jax.set_mesh(mesh)
+    return mesh
 
+
+def config_post_init(config: Config):
+    # Register the argument's type as static (since hydra wraps Config)
+    jax.tree_util.register_static(type(config))
     # Check arguments
     assert config.d_head % 2 == 0, "Head dimension needs to be divisible by 2 for RoPE"
