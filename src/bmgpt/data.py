@@ -35,11 +35,11 @@ def dataloader(
     for step in it.count():
         key = jax.random.fold_in(key, step)
         offsets = jax.random.randint(key, (config.global_batch_size,), 0, num_data)
-        jax.debug.print("{x}", x=jax.typeof(offsets))
-        jax.debug.print("{x}", x=offsets.devices())
-        jax.debug.print("{x}", x=offsets.is_fully_addressable)
-        jax.debug.print("{x}", x=offsets.is_fully_replicated)
-        jax.debug.print("{x}", x=offsets)
+        print(jax.typeof(offsets))
+        print(offsets.devices())
+        print(offsets.is_fully_addressable)
+        print(offsets.is_fully_replicated)
+        print(offsets)
         # print(xla_bridge.process_count())
         # print(
         #     NamedSharding(
