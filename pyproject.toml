@@ -1,20 +1,32 @@
+[build-system]
+requires = ["uv_build>=0.8.22,<0.9.0"]
+build-backend = "uv_build"
+
 [project]
-name = "nanocrate"
+name = "baremetal-gpt"
 version = "0.1.0"
-description = "Hackable transformer repo, in JAX"
+description = "Simple, hackable transformer training & inference, in bare-metal JAX"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "hydra-core>=1.3.2",
+    "optax>=0.2.6",
+    "wandb>=0.22.3",
+]
 
 [project.optional-dependencies]
 cpu = [
-    "jax>=0.7.1",
+    "jax>=0.7.2",
 ]
 tpu = [
-    "jax[tpu]>=0.7.1",
+    "jax[tpu]>=0.7.2",
 ]
 
+[project.scripts]
+train = "bmgpt.train:main"
+
 [tool.uv]
+config-settings = { editable_mode = 'compat' }
 conflicts = [
     [
       { extra = "cpu" },
@@ -22,9 +34,36 @@ conflicts = [
     ],
 ]
 
+[tool.uv.build-backend]
+module-name = "bmgpt"
+
+[tool.uv.sources]
+bmgpt = { path = ".", editable = true }
+
+[tool.ruff]
+# Basic configuration
+line-length = 88
+
+[tool.ruff.lint]
+# Enable fix mode (equivalent to --fix flag)
+fixable = ["ALL"]
+unfixable = []
+
+# Rule selection
+select = ["E", "W", "F"]  # Error, Warning, and Pyflakes rules
+
+# Rules to ignore
+ignore = [
+    "F401",  # Unused import
+    "F821",  # Undefined name
+    "E402",  # Module level import not at top of file
+    "F841",  # Local variable assigned but not used
+]
+
 [dependency-groups]
 dev = [
+    "debugpy>=1.8.16",
     "ipython>=8.37.0",
     "pytest>=8.4.1",
-    "rich>=14.1.0"
+    "rich>=14.1.0",
 ]
