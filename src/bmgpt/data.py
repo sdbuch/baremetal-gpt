@@ -3,8 +3,8 @@ from typing import Iterator
 
 import jax
 import jax.numpy as jnp
-from jax._src.mesh import get_concrete_mesh
 from jax._src import xla_bridge
+from jax._src.mesh import get_concrete_mesh
 from jax.sharding import NamedSharding
 
 from bmgpt.config import Config
@@ -35,16 +35,30 @@ def dataloader(
     for step in it.count():
         key = jax.random.fold_in(key, step)
         offsets = jax.random.randint(key, (config.global_batch_size,), 0, num_data)
-        print(jax.typeof(data.at[offsets, :-1].get()))
-        # if xla_bridge.process_count() == len(s._internal_device_list.process_indices):  # pytype: disable=attribute-error
-        print(xla_bridge.process_count())
-        print(NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data))._internal_device_list)
-        print(NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data))._internal_device_list.process_indices)
-        print(NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data)).is_fully_addressable)
-        print(NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data)).device_set)
-        print(data.at[offsets, :-1].get().sharding._internal_device_list)
-        print(data.at[offsets, :-1].get().is_fully_addressable)
-        print(data.at[offsets, :-1].get().sharding.device_set)
+        print(jax.typeof(offsets))
+        print(offsets.devices())
+        # print(xla_bridge.process_count())
+        # print(
+        #     NamedSharding(
+        #         get_concrete_mesh(), jax.P(*config.sharding_data)
+        #     )._internal_device_list
+        # )
+        # print(
+        #     NamedSharding(
+        #         get_concrete_mesh(), jax.P(*config.sharding_data)
+        #     )._internal_device_list.process_indices
+        # )
+        # print(
+        #     NamedSharding(
+        #         get_concrete_mesh(), jax.P(*config.sharding_data)
+        #     ).is_fully_addressable
+        # )
+        # print(
+        #     NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data)).device_set
+        # )
+        # print(data.at[offsets, :-1].get().sharding._internal_device_list)
+        # print(data.at[offsets, :-1].get().is_fully_addressable)
+        # print(data.at[offsets, :-1].get().sharding.device_set)
         yield (data.at[offsets, :-1].get(), data.at[offsets, 1:].get())
 
 

@@ -113,9 +113,6 @@ def main(config: Config):
     prev_metrics = None
     with Logger(config) as logger:
         for step in range(config.num_steps):
-            q = next(batch)
-            # print(q[0].addressable_shards)
-            print(q[0].addressable_data(0).shape)
             cur_metrics, train_state = train_step(config, next(batch), train_state)
             log_metrics, prev_metrics = prev_metrics, cur_metrics
             if log_metrics:
