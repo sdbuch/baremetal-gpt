@@ -79,7 +79,7 @@ def main(config: Config):
 
     # Initialize state, configure optimization
     with jax.set_mesh(mesh):
-        train_state = init_train_state(key_params, config, mesh)
+        train_state = init_train_state(key_params, config)
     spec = model_spec(train_state.params)
     opt_update = get_opt_update_fn_from_enum(config.optimizer_type)
     weight_decay_mask = jax.tree.map(lambda x, s: bool(s), train_state.params, spec)
