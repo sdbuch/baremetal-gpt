@@ -30,10 +30,10 @@ def make_number_staircase_data(config: Config):
 def dataloader(
     key, config: Config, data: jax.Array
 ) -> Iterator[tuple[jax.Array, jax.Array]]:
-    key = jax.random.fold_in(key, jax.process_index())
     num_data = len(data)
     for step in it.count():
         key = jax.random.fold_in(key, step)
+        key = jax.random.fold_in(key, jax.process_index())
         # offsets = jax.random.randint(key, (config.global_batch_size,), 0, num_data)
         offsets = jax.random.randint(
             key, (config.global_batch_size // jax.process_count(),), 0, num_data
