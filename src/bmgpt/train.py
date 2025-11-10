@@ -75,7 +75,7 @@ def main(config: Config):
     data = jax.random.permutation(sk, data, axis=0)
     Xtr, Xdev, Xte = split_data(data, 0.8, 0.1)
     print(key_data.is_fully_addressable)
-    batch = get_dataset_on_device(config, dataloader(key_data, config, Xtr))
+    batch = get_dataset_on_device(config, dataloader(key_data, config, Xtr), mesh)
 
     # Initialize state, configure optimization
     with jax.set_mesh(mesh):

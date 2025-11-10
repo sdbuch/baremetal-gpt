@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from jax._src import xla_bridge
 from jax._src.mesh import get_concrete_mesh
-from jax.sharding import NamedSharding
+from jax.sharding import Mesh, NamedSharding
 
 from bmgpt.config import Config
 
@@ -76,7 +76,7 @@ def split_data(data: jax.Array, train_fraction: float, dev_fraction: float):
 
 
 def get_dataset_on_device(
-    config: Config, dataloader: Iterator[tuple[jax.Array, jax.Array]]
+    config: Config, dataloader: Iterator[tuple[jax.Array, jax.Array]], mesh: Mesh
 ) -> Iterator[tuple[jax.Array, jax.Array]]:
     return map(
         # lambda batch: jax.device_put(
@@ -84,7 +84,7 @@ def get_dataset_on_device(
         # ),
         # dataloader,
         lambda batch: jax.make_array_from_process_local_data(
-            NamedSharding(get_concrete_mesh(), jax.P(*config.sharding_data)), batch
+            NamedSharding(mesh, jax.P(*config.sharding_data)), batch
         ),
         dataloader,
     )
