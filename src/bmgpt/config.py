@@ -102,7 +102,15 @@ def config_post_init(config: Config):
         config.mesh_axis_names,
         len(config.mesh_shape) * (jax.sharding.AxisType.Explicit,),
     )
+
+    # 0.5.2 jax.set_mesh causes subsequent key generations to be fully
+    #   replicated... doesn't really make sense, as you could fold_in a process
+    #   index and have the keys diverge, but they're still fully replicated
+    # so we generate it here and return it
+    key = jax.random.key(config.seed)
     jax.set_mesh(mesh)
 
     # Check arguments
     assert config.d_head % 2 == 0, "Head dimension needs to be divisible by 2 for RoPE"
+
+    return key

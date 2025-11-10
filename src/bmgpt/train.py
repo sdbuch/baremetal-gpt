@@ -48,15 +48,8 @@ def init_train_state(key, config: Config) -> TrainState:
 def main(config: Config):
     # Config
     jax.distributed.initialize()
-    kk = jax.random.key(1337)
-    print(kk.is_fully_addressable)
-    q = jax.random.normal(kk, (128, 128))
-    print(q.is_fully_addressable)
-    config_post_init(config)
-    kkk = jax.random.key(1337)
-    print(kkk.is_fully_addressable)
-    kkkk = jax.random.fold_in(kkk, jax.process_index())
-    print(kkkk.is_fully_addressable)
+    key = config_post_init(config)
+    print(key.is_fully_addressable)
     Logger = get_logger_class_from_enum(config.logger_type)
     # TODO: Expose these somehow, parameter groups?
     config_sampling_args = {
@@ -69,9 +62,8 @@ def main(config: Config):
         config_sampling.__setattr__(k, v)
 
     # Randomness
-    key = jax.random.key(config.seed)
-    print(key.is_fully_addressable)
     key_params, key_data, key_sampling = jax.random.split(key, 3)
+    print(key_data.is_fully_addressable)
 
     # Data
     data = make_number_staircase_data(config)
