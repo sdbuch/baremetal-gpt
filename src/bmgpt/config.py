@@ -102,7 +102,7 @@ def config_post_init(config: Config):
         config.mesh_axis_names,
         len(config.mesh_shape) * (jax.sharding.AxisType.Explicit,),
     )
-    jax.sharding.set_mesh(mesh)
+    jax.set_mesh(mesh)
 
     # Check arguments
     assert config.d_head % 2 == 0, "Head dimension needs to be divisible by 2 for RoPE"
