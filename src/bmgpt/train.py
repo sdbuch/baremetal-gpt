@@ -51,6 +51,8 @@ def main(config: Config):
     kk = jax.random.key(1337)
     print(kk.is_fully_addressable)
     config_post_init(config)
+    kkk = jax.random.key(1337)
+    print(kkk.is_fully_addressable)
     Logger = get_logger_class_from_enum(config.logger_type)
     # TODO: Expose these somehow, parameter groups?
     config_sampling_args = {
