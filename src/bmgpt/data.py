@@ -31,6 +31,7 @@ def dataloader(
     key, config: Config, data: jax.Array
 ) -> Iterator[tuple[jax.Array, jax.Array]]:
     num_data = len(data)
+    key = jax.random.fold_in(key, jax.process_index())
     for step in it.count():
         key = jax.random.fold_in(key, step)
         # offsets = jax.random.randint(key, (config.global_batch_size,), 0, num_data)
