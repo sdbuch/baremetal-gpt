@@ -70,6 +70,8 @@ def main(config: Config):
     data = jax.random.permutation(sk, data, axis=0)
     Xtr, Xdev, Xte = split_data(data, 0.8, 0.1)
     d = dataloader(key_data, config, Xtr)
+    b = next(d)
+    print(b)
     batch = get_dataset_on_device(config, d)
 
     # Initialize state, configure optimization
