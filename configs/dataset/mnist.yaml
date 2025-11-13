@@ -2,7 +2,8 @@
 
 dataset:
   name: MNIST
-  seq_len: 196  # 2x2 patches
+  path: "data/mnist/patch_4x4"
+  seq_len: 49  # 4x4 patches
   num_vocab: None
 
 model:

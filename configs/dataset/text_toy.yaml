@@ -2,6 +2,7 @@
 
 dataset:
   name: NUMBER_STAIRCASE
+  path: ""
   seq_len: 256
   num_vocab: 10
 

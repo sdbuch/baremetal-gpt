@@ -52,6 +52,7 @@ class ExperimentConfig:
 class DatasetConfig:
     ## Data params
     name: DatasetName = MISSING
+    path: str = MISSING
     seq_len: int = MISSING
     num_vocab: int = MISSING
     global_batch_size: int = 128
