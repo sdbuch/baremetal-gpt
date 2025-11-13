@@ -1,3 +1,5 @@
+import copy
+
 import jax
 import jax.numpy as jnp
 import pytest
@@ -17,19 +19,18 @@ from bmgpt.model import (
 
 
 def test_manual_attn_matches_jax_no_kv():
-    config_args = {
-        "sharding_data": [],
-        "mesh_shape": [1],
-        "param_dtype": DType.FLOAT32
-        if jax.default_backend() == "cpu"
-        else DType.BFLOAT16,  # Test fails on CPU in BF16
-        "seq_len": 256,
-        "num_vocab": 256,
-    }
-    config = Config(**config_args)
-    config_no_fa = Config(**(config_args | {"use_fa": False}))
+    config = Config()
+    config.sharding.data = []
+    config.sharding.mesh_shape = [1]
+    config.model.param_dtype = (
+        DType.FLOAT32 if jax.default_backend() == "cpu" else DType.BFLOAT16
+    )
+    config.dataset.seq_len = 256
+    config.dataset.num_vocab = 256
+    config_no_fa = copy.deepcopy(config)
+    config_no_fa.model.use_fa = False
     mesh = mesh_from_config(config)
-    key = jax.random.key(config.seed)
+    key = jax.random.key(config.experiment.seed)
     seq = jnp.arange(256)
     with jax.set_mesh(mesh):
         null_cache = init_kv_cache(config)[0]
@@ -41,20 +42,19 @@ def test_manual_attn_matches_jax_no_kv():
 
 
 def test_rope():
-    config_args = {
-        "param_dtype": DType.FLOAT32
-        if jax.default_backend() == "cpu"
-        else DType.BFLOAT16,  # Test fails on CPU in BF16
-        "max_seq_len": 64,
-        "d_head": 4,
-        "mesh_shape": [1],
-    }
-    config = Config(**config_args)
+    config = Config()
+    config.sharding.data = []
+    config.sharding.mesh_shape = [1]
+    config.model.param_dtype = (
+        DType.FLOAT32 if jax.default_backend() == "cpu" else DType.BFLOAT16
+    )
+    config.model.d_head = 4
+    config.model.max_seq_len = 64
     mesh = mesh_from_config(config)
     with jax.set_mesh(mesh):
         cos, sin = _precompute_rope_cossin(config)
-        x = jnp.arange(4)[None].astype(config.param_dtype.value)
-        y = x[:, ::-1].astype(config.param_dtype.value)
+        x = jnp.arange(4)[None].astype(config.model.param_dtype.value)
+        y = x[:, ::-1].astype(config.model.param_dtype.value)
 
         # Test: position zero does nothing
         xx = _apply_rope(config, cos, sin, jnp.array((0,)), x)
@@ -77,10 +77,10 @@ def test_rope():
 
         xxx = jnp.concatenate(
             (M00 @ jnp.array((x[0, 0], x[0, 2])), M01 @ jnp.array((x[0, 1], x[0, 3])))
-        ).astype(config.param_dtype.value)
+        ).astype(config.model.param_dtype.value)
         yyy = jnp.concatenate(
             (M10 @ jnp.array((y[0, 0], y[0, 2])), M11 @ jnp.array((y[0, 1], y[0, 3])))
-        ).astype(config.param_dtype.value)
+        ).astype(config.model.param_dtype.value)
     assert jnp.allclose(jnp.dot(xxx, yyy), (xx @ yy.mT)[0, 0])
 
 
@@ -128,28 +128,25 @@ def test_cache_correct_predictions():
     # Test we get same preds on new tokens if we have past tokens in cache vs context
     # NOTE: Test is not a great idea, as we don't have determinism from XLA-compiled...
     # see https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/
-    config_args = {
-        "sharding_data": [],
-        "num_vocab": 8,
-        "num_layers": 1,
-        "param_dtype": DType.FLOAT32
-        if jax.default_backend() == "cpu"
-        else DType.BFLOAT16,  # Test fails on CPU in BF16
-        "mesh_shape": [1],
-    }
+    config = Config()
+    config.sharding.data = []
+    config.sharding.mesh_shape = [1]
+    config.model.param_dtype = (
+        DType.FLOAT32 if jax.default_backend() == "cpu" else DType.BFLOAT16
+    )
+    config.model.num_layers = 1
+    config.dataset.num_vocab = 8
     tol_args = {"atol": 1e-6 if jax.default_backend() == "cpu" else 1e-2}
 
-    config = Config(**config_args)
     mesh = mesh_from_config(config)
-    config_no_cache = Config(**(config_args))
-    key = jax.random.key(config.seed)
+    key = jax.random.key(config.experiment.seed)
     seq_len = 2
     seq = jnp.arange(seq_len)
     prefix, suffix = seq[: seq_len // 2], seq[seq_len // 2 :]
     with jax.set_mesh(mesh):
         model = init_model(key, config)
-        null_cache = init_kv_cache(config_no_cache)[0]
-        out, _ = _transformer(config_no_cache, model, seq, null_cache, 0)
+        null_cache = init_kv_cache(config)[0]
+        out, _ = _transformer(config, model, seq, null_cache, 0)
 
         cache_init = init_kv_cache(config)[0]
         prefill, cache = _transformer(config, model, prefix, cache_init, 0)

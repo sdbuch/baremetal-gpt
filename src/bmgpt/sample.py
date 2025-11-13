@@ -21,7 +21,7 @@ def sample_one_token(
 ):
     """Expects seq and cache_in to have no batch axis."""
     y, cache_out = _transformer(config, params, seq, cache_in, cache_size)
-    logits = y.astype(config.compute_dtype.value)
+    logits = y.astype(config.model.compute_dtype.value)
     cache_size = cache_size + seq.shape[-1]
     next_token = jnp.array((jax.random.categorical(key, logits[-1] / temperature),))
     return next_token, cache_out, cache_size
@@ -41,18 +41,18 @@ def generate(
     # Prefill
     key, sk = jax.random.split(key)
     next_token, cache, cache_size = sample_one_token(
-        config, sk, params, prompt, cache, cache_size, config.temperature
+        config, sk, params, prompt, cache, cache_size, config.inference.temperature
     )
     prefill = jnp.concatenate((prompt, next_token))
 
     # Generation loop
     def loop_fn(next_token__cache__cache_size, key):
         next_token, cache, cache_size = sample_one_token(
-            config, key, params, *next_token__cache__cache_size, config.temperature
+            config, key, params, *next_token__cache__cache_size, config.inference.temperature
         )
         return (next_token, cache, cache_size), next_token[0]
 
-    keys = jax.random.split(key, config.max_tokens_to_generate)
+    keys = jax.random.split(key, config.inference.max_tokens_to_generate)
     (next_token, cache, cache_size), output = jax.lax.scan(
         loop_fn, (next_token, cache, cache_size), keys
     )

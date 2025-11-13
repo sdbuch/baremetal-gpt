@@ -49,7 +49,7 @@ def main(config: Config):
     jax.distributed.initialize()
     config_post_init(config)
     mesh = mesh_from_config(config)
-    Logger = logger_factory(config.logger_type)
+    Logger = logger_factory(config.experiment.logger_type)
     # TODO: Expose these somehow, parameter groups?
     config_sampling_args = {
         "global_batch_size": 1,  # one prompt
@@ -61,7 +61,7 @@ def main(config: Config):
         config_sampling.__setattr__(k, v)
 
     # Randomness
-    key = jax.random.key(config.seed)
+    key = jax.random.key(config.experiment.seed)
     key_params, key_data, key_sampling = jax.random.split(key, 3)
 
     # Data
@@ -74,7 +74,7 @@ def main(config: Config):
     with jax.set_mesh(mesh):
         train_state = init_train_state(key_params, config)
     spec = model_spec(train_state.params)
-    opt_update = opt_update_factory(config.optimizer_type)
+    opt_update = opt_update_factory(config.optimizer.optimizer_type)
     weight_decay_mask = jax.tree.map(lambda x, s: bool(s), train_state.params, spec)
 
     @partial(jax.jit, donate_argnums=2)
@@ -84,7 +84,7 @@ def main(config: Config):
             logits, _ = jax.vmap(partial(_transformer, config, params))(
                 inputs, train_state.kv_cache
             )
-            logits = logits.astype(config.compute_dtype.value)
+            logits = logits.astype(config.model.compute_dtype.value)
             logprobs = jax.nn.log_softmax(logits, axis=-1)
             return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
@@ -113,7 +113,7 @@ def main(config: Config):
     # Simple training loop
     prev_metrics = None
     with Logger(config) as logger:
-        for step in range(config.num_steps):
+        for step in range(config.optimizer.num_steps):
             batch = next(batch_iter)
             with jax.set_mesh(mesh):
                 cur_metrics, train_state = train_step(config, batch, train_state)

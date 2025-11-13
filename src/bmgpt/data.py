@@ -11,7 +11,7 @@ from bmgpt.config import Config, DatasetName
 
 
 def dataset_dataloader_factory(config: Config):
-    match config.dataset_name:
+    match config.dataset.name:
         case DatasetName.MNIST:
             return (None, None)
         case DatasetName.NUMBER_STAIRCASE:
@@ -28,8 +28,8 @@ def make_number_staircase_data(config: Config):
     # Small, so mega replicate for ease
     text = "012345678987654321" * 1024
     seqs = [
-        [int(c) for c in text[i : i + config.seq_len + 1]]
-        for i in range(len(text) - config.seq_len - 1)
+        [int(c) for c in text[i : i + config.dataset.seq_len + 1]]
+        for i in range(len(text) - config.dataset.seq_len - 1)
     ]
     data = jnp.array(seqs, dtype=jnp.int32)
     Xtr, Xdev, Xte = split_data(data, 0.8, 0.1)
@@ -63,7 +63,7 @@ def dataloader_ntp_no_replacement(
     for step in it.count():
         key = jax.random.fold_in(key, step)
         offsets = jax.random.randint(
-            key, (config.global_batch_size // jax.process_count(),), 0, num_data
+            key, (config.dataset.global_batch_size // jax.process_count(),), 0, num_data
         )
         yield (data.at[offsets, :-1].get(), data.at[offsets, 1:].get())
 
@@ -75,15 +75,18 @@ def dataloader_ntp_no_replacement(
 def dataloader_classification(
     key, config: Config, data: jax.Array, labels: jax.Array
 ) -> Iterator[tuple[jax.Array, jax.Array]]:
-    data = data[: (len(data) // config.global_batch_size) * config.global_batch_size]
+    data = data[
+        : (len(data) // config.dataset.global_batch_size)
+        * config.dataset.global_batch_size
+    ]
     num_data = len(data)
-    local_batch_size = config.global_batch_size // jax.process_count()
+    local_batch_size = config.dataset.global_batch_size // jax.process_count()
     # key = jax.random.fold_in(key, jax.process_index())
     for epoch in it.count():
         key = jax.random.fold_in(key, epoch)
         perm = jax.random.permutation(key, num_data)
         data, labels = data[perm], labels[perm]
-        for step in range(num_data // config.global_batch_size):
+        for step in range(num_data // config.dataset.global_batch_size):
             offset = jax.process_index() * num_data // jax.process_count()
             index = step + offset
             yield (
@@ -103,7 +106,7 @@ def get_dataset_on_device(
 ) -> Iterator[tuple[jax.Array, jax.Array]]:
     return map(
         lambda batch: jax.make_array_from_process_local_data(
-            NamedSharding(mesh, jax.P(*config.sharding_data)), batch
+            NamedSharding(mesh, jax.P(*config.sharding.data)), batch
         ),
         dataloader,
     )

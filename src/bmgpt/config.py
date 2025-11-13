@@ -40,21 +40,25 @@ class DatasetName(Enum):
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
-class Config:
+class ExperimentConfig:
     ## Experiment orchestration params
-    mesh_axis_names: list[str] = field(default_factory=lambda: ["dp"])
-    mesh_shape: list[int] = MISSING
     seed: int = 1337
     logger_type: LoggerType = LoggerType.WANDB
     project_name: str = "bmgpt-debug"
     run_name: str = ""
 
+
+@dataclass(kw_only=True, unsafe_hash=True)
+class DatasetConfig:
     ## Data params
-    dataset_name: DatasetName = MISSING
+    name: DatasetName = MISSING
     seq_len: int = MISSING
     num_vocab: int = MISSING
     global_batch_size: int = 128
 
+
+@dataclass(kw_only=True, unsafe_hash=True)
+class OptimizerConfig:
     ## Optimizer params
     num_steps: int = 10**3
     optimizer_type: OptType = OptType.ADAMW
@@ -65,6 +69,9 @@ class Config:
     weight_decay: float = 1e-2
     clip_grad: float = 1.0  # global ell^2 norm
 
+
+@dataclass(kw_only=True, unsafe_hash=True)
+class ModelConfig:
     ## Model architecture params
     # Overarching
     transformer_type: TransformerType = MISSING
@@ -95,32 +102,56 @@ class Config:
     # Discrete-specific model parameters
     # Continuous-specific model parameters
 
+
+@dataclass(kw_only=True, unsafe_hash=True)
+class InferenceConfig:
     ## Autoregressive inference params
     max_tokens_to_generate: int = 64
     temperature: float = 0.7
 
+
+@dataclass(kw_only=True, unsafe_hash=True)
+class ShardingConfig:
     ## Model sharding params (args to jax.P)-- list of mesh_axis_names els or None
     # NOTE: technically jax.P can merge axes, e.g. (('x', 'y')), but we reject this
-    sharding_data: list[str | None] = field(default_factory=lambda: ["dp"])
-    sharding_wqkv: list[str | None] = field(default_factory=list)  # D x 3 x N x H
-    sharding_wo: list[str | None] = field(default_factory=list)  # D x N x H
-    sharding_wup: list[str | None] = field(default_factory=list)  # D x 4D
-    sharding_wdown: list[str | None] = field(default_factory=list)  # 4D x D
-    sharding_mlp_hidden: list[str | None] = field(default_factory=list)  # S x 4D
-    sharding_res_stream: list[str | None] = field(default_factory=list)  # S x D
-    sharding_att_qkv: list[str | None] = field(default_factory=list)  # 3 x S x N x H
+    mesh_shape: list[int] = MISSING
+    mesh_axis_names: list[str] = field(default_factory=lambda: ["dp"])
+    data: list[str | None] = field(default_factory=lambda: ["dp"])
+    wqkv: list[str | None] = field(default_factory=list)  # D x 3 x N x H
+    wo: list[str | None] = field(default_factory=list)  # D x N x H
+    wup: list[str | None] = field(default_factory=list)  # D x 4D
+    wdown: list[str | None] = field(default_factory=list)  # 4D x D
+    mlp_hidden: list[str | None] = field(default_factory=list)  # S x 4D
+    res_stream: list[str | None] = field(default_factory=list)  # S x D
+    att_qkv: list[str | None] = field(default_factory=list)  # 3 x S x N x H
+
+
+@dataclass(kw_only=True, unsafe_hash=True)
+class Config:
+    experiment: ExperimentConfig = field(default_factory=ExperimentConfig)
+    dataset: DatasetConfig = field(default_factory=DatasetConfig)
+    optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+    model: ModelConfig = field(default_factory=ModelConfig)
+    inference: InferenceConfig = field(default_factory=InferenceConfig)
+    sharding: ShardingConfig = field(default_factory=ShardingConfig)
 
 
 def register_configs():
     cs = ConfigStore.instance()
+    cs.store(group="experiment", name="base_experiment", node=ExperimentConfig)
+    cs.store(group="dataset", name="base_dataset", node=DatasetConfig)
+    cs.store(group="optimizer", name="base_optimizer", node=OptimizerConfig)
+    cs.store(group="model", name="base_model", node=ModelConfig)
+    cs.store(group="inference", name="base_inference", node=InferenceConfig)
+    cs.store(group="sharding", name="base_sharding", node=ShardingConfig)
     cs.store(name="config", node=Config)
 
 
 def mesh_from_config(config: Config):
     mesh = jax.make_mesh(
-        config.mesh_shape,
-        config.mesh_axis_names,
-        len(config.mesh_shape) * (jax.sharding.AxisType.Explicit,),
+        config.sharding.mesh_shape,
+        config.sharding.mesh_axis_names,
+        len(config.sharding.mesh_shape) * (jax.sharding.AxisType.Explicit,),
     )
     return mesh
 
@@ -128,9 +159,12 @@ def mesh_from_config(config: Config):
 def config_post_init(config: Config):
     """Call after jax.distributed.initialize()"""
     # Register the argument's type as static (since hydra wraps Config)
+    # We make everything above unsafe_hash=True to allow this!
     jax.tree_util.register_static(type(config))
     # Check arguments
-    assert config.d_head % 2 == 0, "Head dimension needs to be divisible by 2 for RoPE"
-    assert config.global_batch_size % jax.process_count() == 0, (
+    assert config.model.d_head % 2 == 0, (
+        "Head dimension needs to be divisible by 2 for RoPE"
+    )
+    assert config.dataset.global_batch_size % jax.process_count() == 0, (
         "Number of hosts needs to divide the global batch size"
     )

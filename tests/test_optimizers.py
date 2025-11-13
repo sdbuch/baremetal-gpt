@@ -26,9 +26,10 @@ from bmgpt.train import init_train_state
 
 
 def test_sgd_update():
-    config = Config(weight_decay=1000.0)
+    config = Config()
+    config.optimizer.weight_decay=1000.0
     # Simple least squares
-    key = jax.random.key(config.seed)
+    key = jax.random.key(config.experiment.seed)
     k, sk = jax.random.split(key)
     A, X = jax.random.normal(k, (2, 100, 200))
     Y = jax.random.normal(sk, (100, 100))
@@ -40,7 +41,7 @@ def test_sgd_update():
 
     # Compare updates: no wd
     upd, state = sgd_update(config, X, grad, None, False)
-    upd_optax_fn = optax.sgd(config.lr)
+    upd_optax_fn = optax.sgd(config.optimizer.lr)
     state_optax = upd_optax_fn.init(X)
     upd_optax, state_optax = upd_optax_fn.update(grad, state_optax, X)
     assert jnp.allclose(upd, upd_optax)
@@ -53,8 +54,8 @@ def test_sgd_update():
     # Compare updates: wd
     upd, state = sgd_update(config, X, grad, None, True)
     upd_optax_fn = optax.chain(
-        optax.sgd(config.lr),
-        optax.add_decayed_weights(-config.weight_decay * config.lr),
+        optax.sgd(config.optimizer.lr),
+        optax.add_decayed_weights(-config.optimizer.weight_decay * config.optimizer.lr),
     )
     state_optax = upd_optax_fn.init(X)
     upd_optax, state_optax = upd_optax_fn.update(grad, state_optax, X)
@@ -68,9 +69,11 @@ def test_sgd_update():
 
 def test_adam_update():
     dtype = DType.FLOAT32
-    config = Config(param_dtype=dtype, weight_decay=100.0)
+    config = Config()
+    config.model.param_dtype=dtype
+    config.optimizer.weight_decay=100.0
     # Simple least squares
-    key = jax.random.key(config.seed)
+    key = jax.random.key(config.experiment.seed)
     k, sk = jax.random.split(key)
     A, X = jax.random.normal(k, (2, 100, 200), dtype=dtype.value)
     Y = jax.random.normal(sk, (100, 100), dtype=dtype.value)
@@ -84,10 +87,10 @@ def test_adam_update():
     state = init_adam_state(config, X)
     upd, state_new = adamw_update(config, X, grad, state, False)
     upd_optax_fn = optax.adamw(
-        config.lr,
-        config.beta1,
-        config.beta2,
-        config.eps_adam,
+        config.optimizer.lr,
+        config.optimizer.beta1,
+        config.optimizer.beta2,
+        config.optimizer.eps_adam,
         weight_decay=0.0,
         # weight_decay=config.weight_decay,
     )
@@ -110,11 +113,11 @@ def test_adam_update():
     # Compare updates: wd
     upd, state_new = adamw_update(config, X, grad, state, True)
     upd_optax_fn = optax.adamw(
-        config.lr,
-        config.beta1,
-        config.beta2,
-        config.eps_adam,
-        weight_decay=config.weight_decay,
+        config.optimizer.lr,
+        config.optimizer.beta1,
+        config.optimizer.beta2,
+        config.optimizer.eps_adam,
+        weight_decay=config.optimizer.weight_decay,
     )
     state_optax = upd_optax_fn.init(X)
     upd_optax, state_optax_new = upd_optax_fn.update(grad, state_optax, X)
@@ -127,9 +130,12 @@ def test_adam_update():
 
 
 def test_update_mask():
-    config = Config(mesh_shape=[1], seq_len=256, num_vocab=256)
+    config = Config()
+    config.sharding.mesh_shape=[1]
+    config.dataset.seq_len=256
+    config.dataset.num_vocab=256
     mesh = mesh_from_config(config)
-    key = jax.random.key(config.seed)
+    key = jax.random.key(config.experiment.seed)
     with jax.set_mesh(mesh):
         state = init_train_state(key, config)
     spec = model_spec(state.params)
