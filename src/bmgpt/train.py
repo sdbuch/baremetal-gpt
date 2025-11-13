@@ -9,17 +9,15 @@ import jax.numpy as jnp
 
 from bmgpt.config import Config, config_post_init, mesh_from_config, register_configs
 from bmgpt.data import (
-    dataloader,
+    dataset_dataloader_factory,
     get_dataset_on_device,
-    make_number_staircase_data,
-    split_data,
 )
-from bmgpt.loggers import get_logger_class_from_enum
+from bmgpt.loggers import logger_factory
 from bmgpt.model import Transformer, _transformer, init_kv_cache, init_model, model_spec
 from bmgpt.optimizers import (
-    get_opt_update_fn_from_enum,
     grad_norm_and_clip,
     init_adam_state,
+    opt_update_factory,
 )
 from bmgpt.sample import generate
 
@@ -51,7 +49,7 @@ def main(config: Config):
     jax.distributed.initialize()
     config_post_init(config)
     mesh = mesh_from_config(config)
-    Logger = get_logger_class_from_enum(config.logger_type)
+    Logger = logger_factory(config.logger_type)
     # TODO: Expose these somehow, parameter groups?
     config_sampling_args = {
         "global_batch_size": 1,  # one prompt
@@ -67,17 +65,16 @@ def main(config: Config):
     key_params, key_data, key_sampling = jax.random.split(key, 3)
 
     # Data
-    data = make_number_staircase_data(config)
-    key_data, sk = jax.random.split(key_data)
-    data = jax.random.permutation(sk, data, axis=0)
-    Xtr, Xdev, Xte = split_data(data, 0.8, 0.1)
-    batch_iter = get_dataset_on_device(config, dataloader(key_data, config, Xtr), mesh)
+    data, dataloader = dataset_dataloader_factory(config)
+    batch_iter = get_dataset_on_device(
+        config, dataloader(key_data, config, data), mesh
+    )
 
     # Initialize state, configure optimization
     with jax.set_mesh(mesh):
         train_state = init_train_state(key_params, config)
     spec = model_spec(train_state.params)
-    opt_update = get_opt_update_fn_from_enum(config.optimizer_type)
+    opt_update = opt_update_factory(config.optimizer_type)
     weight_decay_mask = jax.tree.map(lambda x, s: bool(s), train_state.params, spec)
 
     @partial(jax.jit, donate_argnums=2)

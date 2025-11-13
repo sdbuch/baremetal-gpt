@@ -99,8 +99,6 @@ def _attn(
 
     # Apply RoPE
     if config.use_rope:
-        if not config.update_cache:
-            cache_size = 0  # ignore passed value
         with jax.ensure_compile_time_eval():
             rope_cos, rope_sin = _precompute_rope_cossin(config)
             positions = jnp.arange(s, out_sharding=jax.P())
@@ -111,14 +109,10 @@ def _attn(
         q, k = _apply_rope_all_heads(q), _apply_rope_all_heads(k)
 
     # Read/update/concatenate the cache
-    if config.update_cache:
-        k_cache, v_cache = kv_cache[0], kv_cache[1]
-        k = jax.lax.dynamic_update_slice(k_cache, k, (cache_size, 0, 0))
-        v = jax.lax.dynamic_update_slice(v_cache, v, (cache_size, 0, 0))
-        kv_cache_out = jnp.concatenate((k[None], v[None]), axis=0)
-    else:
-        kv_cache_out = kv_cache
-        cache_size = 0  # ignore passed value
+    k_cache, v_cache = kv_cache[0], kv_cache[1]
+    k = jax.lax.dynamic_update_slice(k_cache, k, (cache_size, 0, 0))
+    v = jax.lax.dynamic_update_slice(v_cache, v, (cache_size, 0, 0))
+    kv_cache_out = jnp.concatenate((k[None], v[None]), axis=0)
 
     # Attention computation
     t = k.shape[0]
@@ -373,23 +367,15 @@ def init_kv_cache(config: Config):
     else:
         sharding_batch_layer = config.sharding_data + [None]
     sharding = jax.P(*(sharding_batch_layer + config.sharding_att_qkv))
-    if config.update_cache:
-        return jnp.zeros(
-            (
-                config.global_batch_size,
-                config.num_layers,
-                2,
-                config.max_seq_len,
-                config.num_heads,
-                config.d_head,
-            ),
-            dtype=config.param_dtype.value,
-            out_sharding=sharding,
-        )
-    else:
-        # Save memory with a dummy cache, since its updates are no-ops
-        return jnp.zeros(
-            (config.global_batch_size, config.num_layers, 2, 1, 1, 1),
-            dtype=config.param_dtype.value,
-            out_sharding=sharding,
-        )
+    return jnp.zeros(
+        (
+            config.global_batch_size,
+            config.num_layers,
+            2,
+            config.max_seq_len,
+            config.num_heads,
+            config.d_head,
+        ),
+        dtype=config.param_dtype.value,
+        out_sharding=sharding,
+    )

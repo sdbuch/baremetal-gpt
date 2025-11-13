@@ -8,7 +8,7 @@ from omegaconf import DictConfig, OmegaConf
 from bmgpt.config import Config, LoggerType
 
 
-def get_logger_class_from_enum(logger_type: LoggerType):
+def logger_factory(logger_type: LoggerType):
     match logger_type:
         case LoggerType.PRINT:
             return PrintLogger

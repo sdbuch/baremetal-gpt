@@ -9,7 +9,7 @@ COMMANDS="if [ ! -d \"baremetal-gpt\" ]; then git clone git@github.com:sdbuch/ba
     && export WANDB_API_KEY='$WANDB_API_KEY' \
     && cd baremetal-gpt \
     && git pull \
-    && git checkout text-data \
+    && git checkout vision \
     && uv sync --extra tpu \
     && uv run train $@"
 

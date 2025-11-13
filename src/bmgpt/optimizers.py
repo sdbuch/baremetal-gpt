@@ -8,7 +8,7 @@ from bmgpt.config import Config, OptType
 from bmgpt.model import Transformer
 
 
-def get_opt_update_fn_from_enum(opt_type: OptType):
+def opt_update_factory(opt_type: OptType):
     match opt_type:
         case OptType.ADAMW:
             return adamw_update
