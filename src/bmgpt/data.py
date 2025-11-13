@@ -1,10 +1,9 @@
 import itertools as it
+from pathlib import Path
 from typing import Iterator
 
 import jax
 import jax.numpy as jnp
-
-# from jax._src.mesh import get_concrete_mesh
 from jax.sharding import Mesh, NamedSharding
 
 from bmgpt.config import Config, DatasetName
@@ -13,14 +12,20 @@ from bmgpt.config import Config, DatasetName
 def dataset_dataloader_factory(config: Config):
     match config.dataset.name:
         case DatasetName.MNIST:
-            return (None, None)
+            return (load_mnist(config), dataloader_classification)
         case DatasetName.NUMBER_STAIRCASE:
             return (make_number_staircase_data(config), dataloader_ntp_no_replacement)
 
 
 ##################################
-##        (Toy) Datasets
+##           Datasets
 ##################################
+
+
+def load_mnist(config: Config, split="train"):
+    path = Path(config.dataset.path)
+    data = jnp.load(path / ("mnist_" + split + ".npz"))
+    return data["images"], data["labels"]
 
 
 def make_number_staircase_data(config: Config):
@@ -73,24 +78,27 @@ def dataloader_ntp_no_replacement(
 # - Random sampling without replacement to draw batches (consumes key)
 # - "drop_last" behavior (batches are always the same size, even last batch of epoch)
 def dataloader_classification(
-    key, config: Config, data: jax.Array, labels: jax.Array
+    key,
+    config: Config,
+    data: tuple[jax.Array, jax.Array],
 ) -> Iterator[tuple[jax.Array, jax.Array]]:
-    data = data[
-        : (len(data) // config.dataset.global_batch_size)
+    inputs, labels = data
+    inputs = inputs[
+        : (len(inputs) // config.dataset.global_batch_size)
         * config.dataset.global_batch_size
     ]
-    num_data = len(data)
+    num_data = len(inputs)
     local_batch_size = config.dataset.global_batch_size // jax.process_count()
     # key = jax.random.fold_in(key, jax.process_index())
     for epoch in it.count():
         key = jax.random.fold_in(key, epoch)
         perm = jax.random.permutation(key, num_data)
-        data, labels = data[perm], labels[perm]
+        inputs, labels = inputs[perm], labels[perm]
         for step in range(num_data // config.dataset.global_batch_size):
             offset = jax.process_index() * num_data // jax.process_count()
             index = step + offset
             yield (
-                data.at[index : index + local_batch_size].get(),
+                inputs.at[index : index + local_batch_size].get(),
                 labels.at[index : index + local_batch_size].get(),
             )
 
