@@ -1,0 +1,4 @@
+dataset_name: NUMBER_STAIRCASE
+seq_len: 256
+num_vocab: 10
+transformer_type: DISCRETE

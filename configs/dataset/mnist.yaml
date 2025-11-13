@@ -1,0 +1,5 @@
+dataset_name: MNIST
+seq_len: 196  # 2x2 patches
+num_vocab: None
+transformer_type: CONTINUOUS
+is_causal: False  # use full attention
