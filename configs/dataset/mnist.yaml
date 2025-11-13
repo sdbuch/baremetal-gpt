@@ -1,5 +1,10 @@
-name: MNIST
-seq_len: 196  # 2x2 patches
-num_vocab: None
-transformer_type: CONTINUOUS
-is_causal: False  # use full attention
+# @package _global_
+
+dataset:
+  name: MNIST
+  seq_len: 196  # 2x2 patches
+  num_vocab: None
+
+model:
+  transformer_type: CONTINUOUS
+  is_causal: False  # use full attention

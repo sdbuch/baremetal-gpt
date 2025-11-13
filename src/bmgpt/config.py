@@ -61,8 +61,8 @@ class DatasetConfig:
 class OptimizerConfig:
     ## Optimizer params
     num_steps: int = 10**3
-    optimizer_type: OptType = OptType.ADAMW
-    lr: float = 1e-3
+    type: OptType = OptType.ADAMW
+    lr: float = 3e-4
     beta1: float = 0.9
     beta2: float = 0.999
     eps_adam: float = 1e-8

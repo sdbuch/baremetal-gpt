@@ -48,7 +48,11 @@ def generate(
     # Generation loop
     def loop_fn(next_token__cache__cache_size, key):
         next_token, cache, cache_size = sample_one_token(
-            config, key, params, *next_token__cache__cache_size, config.inference.temperature
+            config,
+            key,
+            params,
+            *next_token__cache__cache_size,
+            config.inference.temperature,
         )
         return (next_token, cache, cache_size), next_token[0]
 

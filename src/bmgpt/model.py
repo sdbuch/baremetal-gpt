@@ -58,7 +58,9 @@ def _apply_rope(
     x_1, x_2 = x[:, : config.model.d_head // 2], x[:, config.model.d_head // 2 :]
     c, s = cos.at[positions].get(), sin.at[positions].get()
     return jnp.concatenate(
-        (c * x_1 - s * x_2, c * x_2 + s * x_1), axis=-1, dtype=config.model.param_dtype.value
+        (c * x_1 - s * x_2, c * x_2 + s * x_1),
+        axis=-1,
+        dtype=config.model.param_dtype.value,
     )
 
 
@@ -122,7 +124,9 @@ def _attn(
     if config.model.use_fa:
         attn_out = jax.nn.dot_product_attention(q, k, v, scale=None, mask=mask)
     else:
-        logits = jnp.einsum("snh,tnh->nst", q, k).astype(config.model.compute_dtype.value)
+        logits = jnp.einsum("snh,tnh->nst", q, k).astype(
+            config.model.compute_dtype.value
+        )
         # Scale and causal mask
         logits *= 1.0 / config.model.d_head**0.5
         logits = jnp.where(mask, logits, -jnp.inf)
