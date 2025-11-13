@@ -1,4 +1,10 @@
-name: NUMBER_STAIRCASE
-seq_len: 256
-num_vocab: 10
-transformer_type: DISCRETE
+# @package _global_
+
+dataset:
+  name: NUMBER_STAIRCASE
+  seq_len: 256
+  num_vocab: 10
+
+model:
+  transformer_type: DISCRETE
+  is_causal: True
