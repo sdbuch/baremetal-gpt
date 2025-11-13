@@ -127,7 +127,7 @@ def test_adam_update():
 
 
 def test_update_mask():
-    config = Config(mesh_shape=[1])
+    config = Config(mesh_shape=[1], seq_len=256, num_vocab=256)
     mesh = mesh_from_config(config)
     key = jax.random.key(config.seed)
     with jax.set_mesh(mesh):

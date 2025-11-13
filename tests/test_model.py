@@ -20,10 +20,11 @@ def test_manual_attn_matches_jax_no_kv():
     config_args = {
         "sharding_data": [],
         "mesh_shape": [1],
-        "update_cache": False,
         "param_dtype": DType.FLOAT32
         if jax.default_backend() == "cpu"
         else DType.BFLOAT16,  # Test fails on CPU in BF16
+        "seq_len": 256,
+        "num_vocab": 256,
     }
     config = Config(**config_args)
     config_no_fa = Config(**(config_args | {"use_fa": False}))
@@ -31,9 +32,10 @@ def test_manual_attn_matches_jax_no_kv():
     key = jax.random.key(config.seed)
     seq = jnp.arange(256)
     with jax.set_mesh(mesh):
+        null_cache = init_kv_cache(config)[0]
         model = init_model(key, config)
-        out, _ = _transformer(config, model, seq, None, 0)
-        out_no_fa, _ = _transformer(config_no_fa, model, seq, None, 0)
+        out, _ = _transformer(config, model, seq, null_cache, 0)
+        out_no_fa, _ = _transformer(config_no_fa, model, seq, null_cache, 0)
     # print(jnp.max(jnp.abs(out - out_no_fa)))
     assert jnp.allclose(out, out_no_fa)
 
@@ -128,7 +130,6 @@ def test_cache_correct_predictions():
     # see https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/
     config_args = {
         "sharding_data": [],
-        "update_cache": True,
         "num_vocab": 8,
         "num_layers": 1,
         "param_dtype": DType.FLOAT32
@@ -140,7 +141,7 @@ def test_cache_correct_predictions():
 
     config = Config(**config_args)
     mesh = mesh_from_config(config)
-    config_no_cache = Config(**(config_args | {"update_cache": False}))
+    config_no_cache = Config(**(config_args))
     key = jax.random.key(config.seed)
     seq_len = 2
     seq = jnp.arange(seq_len)
