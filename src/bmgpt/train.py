@@ -51,14 +51,9 @@ def main(config: Config):
     mesh = mesh_from_config(config)
     Logger = logger_factory(config.experiment.logger_type)
     # TODO: Expose these somehow, parameter groups?
-    config_sampling_args = {
-        "global_batch_size": 1,  # one prompt
-        "update_cache": True,  # inference mode
-        "sharding_data": [],  # No parallelism atm
-    }
     config_sampling = copy.deepcopy(config)
-    for k, v in config_sampling_args.items():
-        config_sampling.__setattr__(k, v)
+    config_sampling.dataset.global_batch_size = 1
+    config_sampling.sharding.data = []
 
     # Randomness
     key = jax.random.key(config.experiment.seed)
@@ -66,9 +61,7 @@ def main(config: Config):
 
     # Data
     data, dataloader = dataset_dataloader_factory(config)
-    batch_iter = get_dataset_on_device(
-        config, dataloader(key_data, config, data), mesh
-    )
+    batch_iter = get_dataset_on_device(config, dataloader(key_data, config, data), mesh)
 
     # Initialize state, configure optimization
     with jax.set_mesh(mesh):
@@ -122,7 +115,8 @@ def main(config: Config):
                 log_metrics |= {"step": step}
                 logger.log(log_metrics)
 
-        # Perform sampling
+        # Evaluate
+        # TODO: currently just samples 1 rollout
         with jax.set_mesh(mesh):
             prompt = jnp.array((1,))
             cache = init_kv_cache(config_sampling)[0]
