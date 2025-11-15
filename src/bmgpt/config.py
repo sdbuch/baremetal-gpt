@@ -67,7 +67,7 @@ class Config:
     # Model call-time params
     eps_ln: float = 1e-6
     use_bias_ln: bool = False
-    use_fa: bool = True
+    use_splash: bool = True
     use_bias_mlp: bool = False
     use_rope: bool = True
 
@@ -85,7 +85,7 @@ class Config:
     sharding_wdown: list[str | None] = field(default_factory=list)  # 4D x D
     sharding_mlp_hidden: list[str | None] = field(default_factory=list)  # S x 4D
     sharding_res_stream: list[str | None] = field(default_factory=list)  # S x D
-    sharding_att_qkv: list[str | None] = field(default_factory=list)  # 3 x S x N x H
+    sharding_att_qkv: list[str | None] = field(default_factory=list)  # 3 x N x S x H
 
 
 def register_configs():

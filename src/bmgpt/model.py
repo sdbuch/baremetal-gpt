@@ -4,6 +4,11 @@ from typing import Any, NamedTuple
 import jax
 import jax.numpy as jnp
 from jax import Array
+from jax.experimental.pallas.ops.tpu.splash_attention import (
+    CausalMask,
+    MultiHeadMask,
+    make_splash_mha_single_device,
+)
 
 from bmgpt.config import Config
 
@@ -89,7 +94,7 @@ def _attn(
     # x_seq: s x d
 
     qkv = jnp.einsum(
-        "sd,d3nh->3snh",
+        "sd,d3nh->3nsh",
         x_seq,
         params.w_qkv,
         out_sharding=jax.P(*config.sharding_att_qkv),
@@ -107,7 +112,7 @@ def _attn(
         _apply_rope_one_head = partial(
             _apply_rope, config, rope_cos, rope_sin, positions + cache_size
         )
-        _apply_rope_all_heads = jax.vmap(_apply_rope_one_head, in_axes=1, out_axes=1)
+        _apply_rope_all_heads = jax.vmap(_apply_rope_one_head)
         q, k = _apply_rope_all_heads(q), _apply_rope_all_heads(k)
 
     # Read/update/concatenate the cache
@@ -122,21 +127,24 @@ def _attn(
 
     # Attention computation
     t = k.shape[0]
-    mask = _make_causal_mask(s, t, cache_size)
-    mask = mask & _make_cache_mask(s, t, cache_size)  # need for static cache
-    mask = mask[None, ...]  # broadcast over heads
-    if config.use_fa:
-        attn_out = jax.nn.dot_product_attention(q, k, v, scale=None, mask=mask)
+    if config.use_splash:
+        # attn_out = jax.nn.dot_product_attention(q, k, v, scale=None, mask=mask)
+        mask = MultiHeadMask([CausalMask((s, t)) for _ in range(config.num_heads)])
+        attn_out = attn_fun(q, k, v)
     else:
-        logits = jnp.einsum("snh,tnh->nst", q, k).astype(config.compute_dtype.value)
+        # Make mask
+        mask = _make_causal_mask(s, t, cache_size)
+        mask = mask & _make_cache_mask(s, t, cache_size)  # need for static cache
+        mask = mask[None, ...]  # broadcast over heads
         # Scale and causal mask
+        logits = jnp.einsum("nsh,nth->nst", q, k).astype(config.compute_dtype.value)
         logits *= 1.0 / config.d_head**0.5
         logits = jnp.where(mask, logits, -jnp.inf)
         probs = jax.nn.softmax(logits, axis=2)  # type: ignore[reportArgumentType]
         probs = probs.astype(config.param_dtype.value)
-        attn_out = jnp.einsum("nst,tnh->snh", probs, v)
+        attn_out = jnp.einsum("nst,nth->nsh", probs, v)
     out = jnp.einsum(
-        "snh,hnd->sd",
+        "nsh,hnd->sd",
         attn_out,
         params.w_o,
         out_sharding=jax.P(*config.sharding_res_stream),
@@ -379,8 +387,8 @@ def init_kv_cache(config: Config):
                 config.global_batch_size,
                 config.num_layers,
                 2,
-                config.max_seq_len,
                 config.num_heads,
+                config.max_seq_len,
                 config.d_head,
             ),
             dtype=config.param_dtype.value,
