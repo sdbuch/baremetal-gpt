@@ -100,7 +100,7 @@ def _attn(
         out_sharding=jax.P(*config.sharding_att_qkv),
     )
     q, k, v = [qkv[i] for i in range(3)]
-    s = q.shape[0]  # we save k shape later, after possibly prepending cache
+    s = q.shape[1]  # we save k shape later, after possibly prepending cache
 
     # Apply RoPE
     if config.use_rope:
@@ -126,7 +126,7 @@ def _attn(
         cache_size = 0  # ignore passed value
 
     # Attention computation
-    t = k.shape[0]
+    t = k.shape[1]
     if config.use_splash:
         # attn_out = jax.nn.dot_product_attention(q, k, v, scale=None, mask=mask)
         mask = MultiHeadMask([CausalMask((s, t)) for _ in range(config.num_heads)])
