@@ -1,3 +1,5 @@
 outputs
 *egg-info
 __pycache__
+*.npy
+*.npz

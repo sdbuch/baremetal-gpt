@@ -8,7 +8,7 @@ from omegaconf import DictConfig, OmegaConf
 from bmgpt.config import Config, LoggerType
 
 
-def get_logger_class_from_enum(logger_type: LoggerType):
+def logger_factory(logger_type: LoggerType):
     match logger_type:
         case LoggerType.PRINT:
             return PrintLogger
@@ -25,8 +25,8 @@ def get_run_name(base: str) -> str:
 
 class Logger:
     def __init__(self, config: Config):
-        self.project_name = config.project_name
-        self.run_name = get_run_name(config.run_name)
+        self.project_name = config.experiment.project_name
+        self.run_name = get_run_name(config.experiment.run_name)
         if isinstance(config, DictConfig):
             config_dict = OmegaConf.to_container(config, resolve=True)
         else:

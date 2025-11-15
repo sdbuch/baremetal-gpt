@@ -9,17 +9,15 @@ import jax.numpy as jnp
 
 from bmgpt.config import Config, config_post_init, mesh_from_config, register_configs
 from bmgpt.data import (
-    dataloader,
+    dataset_dataloader_factory,
     get_dataset_on_device,
-    make_number_staircase_data,
-    split_data,
 )
-from bmgpt.loggers import get_logger_class_from_enum
+from bmgpt.loggers import logger_factory
 from bmgpt.model import Transformer, _transformer, init_kv_cache, init_model, model_spec
 from bmgpt.optimizers import (
-    get_opt_update_fn_from_enum,
     grad_norm_and_clip,
     init_adam_state,
+    opt_update_factory,
 )
 from bmgpt.sample import generate
 
@@ -51,33 +49,25 @@ def main(config: Config):
     jax.distributed.initialize()
     config_post_init(config)
     mesh = mesh_from_config(config)
-    Logger = get_logger_class_from_enum(config.logger_type)
+    Logger = logger_factory(config.experiment.logger_type)
     # TODO: Expose these somehow, parameter groups?
-    config_sampling_args = {
-        "global_batch_size": 1,  # one prompt
-        "update_cache": True,  # inference mode
-        "sharding_data": [],  # No parallelism atm
-    }
     config_sampling = copy.deepcopy(config)
-    for k, v in config_sampling_args.items():
-        config_sampling.__setattr__(k, v)
+    config_sampling.dataset.global_batch_size = 1
+    config_sampling.sharding.data = []
 
     # Randomness
-    key = jax.random.key(config.seed)
+    key = jax.random.key(config.experiment.seed)
     key_params, key_data, key_sampling = jax.random.split(key, 3)
 
     # Data
-    data = make_number_staircase_data(config)
-    key_data, sk = jax.random.split(key_data)
-    data = jax.random.permutation(sk, data, axis=0)
-    Xtr, Xdev, Xte = split_data(data, 0.8, 0.1)
-    batch_iter = get_dataset_on_device(config, dataloader(key_data, config, Xtr), mesh)
+    data, dataloader = dataset_dataloader_factory(config)
+    batch_iter = get_dataset_on_device(config, dataloader(key_data, config, data), mesh)
 
     # Initialize state, configure optimization
     with jax.set_mesh(mesh):
         train_state = init_train_state(key_params, config)
     spec = model_spec(train_state.params)
-    opt_update = get_opt_update_fn_from_enum(config.optimizer_type)
+    opt_update = opt_update_factory(config.optimizer.type)
     weight_decay_mask = jax.tree.map(lambda x, s: bool(s), train_state.params, spec)
 
     @partial(jax.jit, donate_argnums=2)
@@ -87,7 +77,7 @@ def main(config: Config):
             logits, _ = jax.vmap(partial(_transformer, config, params))(
                 inputs, train_state.kv_cache
             )
-            logits = logits.astype(config.compute_dtype.value)
+            logits = logits.astype(config.model.compute_dtype.value)
             logprobs = jax.nn.log_softmax(logits, axis=-1)
             return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
@@ -116,7 +106,7 @@ def main(config: Config):
     # Simple training loop
     prev_metrics = None
     with Logger(config) as logger:
-        for step in range(config.num_steps):
+        for step in range(config.optimizer.num_steps):
             batch = next(batch_iter)
             with jax.set_mesh(mesh):
                 cur_metrics, train_state = train_step(config, batch, train_state)
@@ -125,7 +115,8 @@ def main(config: Config):
                 log_metrics |= {"step": step}
                 logger.log(log_metrics)
 
-        # Perform sampling
+        # Evaluate
+        # TODO: currently just samples 1 rollout
         with jax.set_mesh(mesh):
             prompt = jnp.array((1,))
             cache = init_kv_cache(config_sampling)[0]
