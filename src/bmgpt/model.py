@@ -118,8 +118,8 @@ def _attn(
     # Read/update/concatenate the cache
     if config.update_cache:
         k_cache, v_cache = kv_cache[0], kv_cache[1]
-        k = jax.lax.dynamic_update_slice(k_cache, k, (cache_size, 0, 0))
-        v = jax.lax.dynamic_update_slice(v_cache, v, (cache_size, 0, 0))
+        k = jax.lax.dynamic_update_slice(k_cache, k, (0, cache_size, 0))
+        v = jax.lax.dynamic_update_slice(v_cache, v, (0, cache_size, 0))
         kv_cache_out = jnp.concatenate((k[None], v[None]), axis=0)
     else:
         kv_cache_out = kv_cache
