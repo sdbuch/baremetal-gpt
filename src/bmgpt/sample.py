@@ -9,7 +9,7 @@ from bmgpt.model import Transformer, _transformer
 # TODO: These functions are for bs1. Create a packing/masking wrapper for bs>1
 
 
-@partial(jax.jit, donate_argnums=(4,))
+@partial(jax.jit, static_argnums=(2,), donate_argnums=(4,))
 def sample_one_token(
     config: Config,
     key,
@@ -43,7 +43,14 @@ def generate(
     # Prefill
     key, sk = jax.random.split(key)
     next_token, cache, cache_size = sample_one_token(
-        config, sk, params, prompt, cache, cache_size, config.inference.temperature
+        config,
+        sk,
+        mesh,
+        params,
+        prompt,
+        cache,
+        cache_size,
+        config.inference.temperature,
     )
     prefill = jnp.concatenate((prompt, next_token))
 
