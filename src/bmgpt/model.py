@@ -10,6 +10,7 @@ from jax.experimental.pallas.ops.tpu.splash_attention import (
     SegmentIds,
     make_splash_mha_single_device,
 )
+from jax.sharding import auto_axes
 
 from bmgpt.config import Config
 
@@ -135,9 +136,9 @@ def _attn(
                 for _ in range(config.model.num_heads)
             ]
         )
-        attn_fun = make_splash_mha_single_device(mask)
-        q_segment_ids = jnp.zeros((s,), out_sharding=jax.P())
-        kv_segment_ids = jnp.zeros((t,), out_sharding=jax.P())
+        attn_fun = auto_axes(make_splash_mha_single_device(mask))
+        q_segment_ids = jnp.zeros((s,))
+        kv_segment_ids = jnp.zeros((t,))
         kv_segment_ids = kv_segment_ids.at[cache_size : config.model.max_seq_len].set(1)
         segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
         attn_out = attn_fun(q, k, v, segment_ids=segment_ids)
