@@ -125,6 +125,7 @@ def main(config: Config):
             output, cache, cache_size = generate(
                 config_sampling,
                 key_sampling,
+                mesh,
                 train_state.params,
                 prompt,
                 cache,

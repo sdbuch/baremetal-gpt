@@ -138,11 +138,10 @@ def _attn(
                 for _ in range(config.model.num_heads)
             ]
         )
-        # attn_fun = make_splash_mha_single_device(mask)
-        dp_spec = jax.P(None, None)
-        dp_sharding = jax.sharding.NamedSharding(mesh, dp_spec)
+        splash_spec = jax.P(None, None)
+        splash_sharding = jax.sharding.NamedSharding(mesh, splash_spec)
         kernel = make_splash_mha(mask, head_shards=1, q_seq_shards=1)
-        kernel_spec = kernel.manual_sharding_spec(dp_sharding)
+        kernel_spec = kernel.manual_sharding_spec(splash_sharding)
 
         q_segment_ids = jnp.zeros((s,))
         kv_segment_ids = jnp.zeros((t,))
@@ -152,8 +151,8 @@ def _attn(
         @partial(
             jax.shard_map,
             mesh=mesh,
-            in_specs=(kernel_spec, dp_spec, dp_spec, dp_spec, jax.P()),
-            out_specs=dp_spec,
+            in_specs=(kernel_spec, splash_spec, splash_spec, splash_spec, jax.P()),
+            out_specs=splash_spec,
             check_vma=False,
         )
         def splash_sharded(kernel, q, k, v, segment_ids):

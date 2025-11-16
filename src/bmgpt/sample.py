@@ -13,6 +13,7 @@ from bmgpt.model import Transformer, _transformer
 def sample_one_token(
     config: Config,
     key,
+    mesh,
     params: Transformer,
     seq: jax.Array,
     cache_in: jax.Array,
@@ -20,7 +21,7 @@ def sample_one_token(
     temperature: float,
 ):
     """Expects seq and cache_in to have no batch axis."""
-    y, cache_out = _transformer(config, params, seq, cache_in, cache_size)
+    y, cache_out = _transformer(config, mesh, params, seq, cache_in, cache_size)
     logits = y.astype(config.model.compute_dtype.value)
     cache_size = cache_size + seq.shape[-1]  # TODO: this should maybe be internal
     next_token = jnp.array((jax.random.categorical(key, logits[-1] / temperature),))
@@ -31,6 +32,7 @@ def sample_one_token(
 def generate(
     config: Config,
     key,
+    mesh,
     params: Transformer,
     prompt: jax.Array,
     cache: jax.Array,
