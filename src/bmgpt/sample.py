@@ -20,7 +20,7 @@ def sample_one_token(
     temperature: float,
 ):
     """Expects seq and cache_in to have no batch axis."""
-    y, cache_out = _transformer(config, params, seq, cache_in, cache_size)
+    y, cache_out = _transformer(config, None, params, seq, cache_in, cache_size)
     logits = y.astype(config.model.compute_dtype.value)
     cache_size = cache_size + seq.shape[-1]  # TODO: this should maybe be internal
     next_token = jnp.array((jax.random.categorical(key, logits[-1] / temperature),))
