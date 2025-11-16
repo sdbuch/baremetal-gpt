@@ -82,7 +82,7 @@ def _make_causal_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
 def _make_cache_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
     """(1, seq_len_k) bool array with True for actual cache+context positions"""
     k_positions = jnp.arange(seq_len_k)
-    return k_positions[None, :] < cache_size #+ seq_len_q
+    return k_positions[None, :] < cache_size  # + seq_len_q
 
 
 def _attn(
@@ -107,6 +107,7 @@ def _attn(
     )
     q, k, v = [qkv[i] for i in range(3)]
     s = q.shape[1]
+    h = q.shape[-1]
 
     # Cache + RoPE scheme: we update the cache after applying RoPE to K,
     #  so new Q/K just needs to RoPE with positions + cache_size!
@@ -158,7 +159,7 @@ def _attn(
         def splash_sharded(kernel, q, k, v, segment_ids):
             return kernel(q, k, v, segment_ids=segment_ids)
 
-        attn_out = splash_sharded(kernel, q, k, v, segment_ids)
+        attn_out = splash_sharded(kernel, q / h**0.25, k / h**0.25, v, segment_ids)
     else:
         # Make mask
         mask = _make_causal_mask(s, t, config.model.max_seq_len)
