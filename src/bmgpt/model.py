@@ -136,15 +136,18 @@ def _attn(
             ]
         )
         attn_fun = make_splash_mha_single_device(mask)
-        q_segment_ids = jnp.zeros((s,))
-        kv_segment_ids = jnp.zeros((t,))
+        q_segment_ids = jnp.zeros((s,), out_sharding=jax.P())
+        kv_segment_ids = jnp.zeros((t,), out_sharding=jax.P())
         kv_segment_ids = kv_segment_ids.at[cache_size : config.model.max_seq_len].set(1)
         segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
         attn_out = attn_fun(q, k, v, segment_ids=segment_ids)
     else:
-        raise NotImplementedError("Need to adapt for concat cache")
         # Make mask
         mask = _make_causal_mask(s, t, cache_size)
+        cache_mask = _make_cache_mask(s, t, cache_size) | (
+            ~_make_cache_mask(s, t, config.model.max_seq_len)
+        )
+        mask = mask & cache_mask
         mask = mask[None, ...]  # broadcast over heads
         # Scale and causal mask
         logits = jnp.einsum("nsh,nth->nst", q, k).astype(
