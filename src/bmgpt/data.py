@@ -25,7 +25,7 @@ def dataset_dataloader_factory(config: Config):
 def load_mnist(config: Config, split="train"):
     path = Path(config.dataset.path)
     data = jnp.load(path / ("mnist_" + split + ".npz"))
-    return data["images"], data["labels"]
+    return jnp.array(data["images"]), jnp.array(data["labels"])
 
 
 def make_number_staircase_data(config: Config):
