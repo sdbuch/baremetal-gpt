@@ -8,8 +8,8 @@ from jax.experimental.pallas.ops.tpu.splash_attention import (
     CausalMask,
     MultiHeadMask,
     SegmentIds,
+    make_splash_mha,
     make_splash_mha_single_device,
-    make_splash_mha
 )
 from jax.sharding import auto_axes
 
@@ -87,6 +87,7 @@ def _make_cache_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
 
 def _attn(
     config: Config,
+    mesh: jax.sharding.Mesh,
     params: Attn,
     x_seq: jax.Array,
     kv_cache: jax.Array,  # 2 x config.max_seq_len x n x h (see below)
@@ -137,14 +138,28 @@ def _attn(
                 for _ in range(config.model.num_heads)
             ]
         )
-        # kernel = make_splash_mha(mask, head_shards=1, q_seq_shards=1)
-        # kernel_spec = kernel.manual_sharding_spec(NamedSharding(mesh, P('dp', None, None, None)))
-        attn_fun = make_splash_mha_single_device(mask)
+        # attn_fun = make_splash_mha_single_device(mask)
+        dp_spec = jax.P("dp", None, None, None)
+        dp_sharding = jax.sharding.NamedSharding(mesh, dp_spec)
+        kernel = make_splash_mha(mask, head_shards=1, q_seq_shards=1)
+        kernel_spec = kernel.manual_sharding_spec(dp_sharding)
+
         q_segment_ids = jnp.zeros((s,))
         kv_segment_ids = jnp.zeros((t,))
         kv_segment_ids = kv_segment_ids.at[cache_size : config.model.max_seq_len].set(1)
         segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
-        attn_out = attn_fun(q, k, v, segment_ids=segment_ids)
+
+        @partial(
+            jax.shard_map,
+            mesh=mesh,
+            in_specs=(kernel_spec, dp_spec, dp_spec, dp_spec),
+            out_specs=dp_spec,
+            check_vma=True,
+        )
+        def splash_sharded(kernel, q, k, v):
+            return kernel(q, k, v, segment_ids=segment_ids)
+
+        attn_out = splash_sharded(kernel, q, k, v)
     else:
         # Make mask
         mask = _make_causal_mask(s, t, cache_size)
@@ -219,6 +234,7 @@ class Block(NamedTuple):
 
 def _block(
     config: Config,
+    mesh: jax.sharding.Mesh,
     params: Block,
     x_seq: Array,
     cache_in: jax.Array,
@@ -227,7 +243,7 @@ def _block(
     att_skip = x_seq
     out = jax.vmap(partial(_layernorm, config, params.norm_attn))(x_seq)
     out, cache_out = _attn(
-        config, params.attn, out, kv_cache=cache_in, cache_size=cache_size
+        config, mesh, params.attn, out, kv_cache=cache_in, cache_size=cache_size
     )
     out += att_skip
 
@@ -247,6 +263,7 @@ class Transformer(NamedTuple):
 
 def _transformer(
     config: Config,
+    mesh: jax.sharding.Mesh,
     params: Transformer,
     tokens: Array,
     cache_in: jax.Array,
@@ -256,7 +273,7 @@ def _transformer(
 
     def _block_fun(x_seq: Array, params__cache_in: tuple[Block, jax.Array]):
         params, cache_in = params__cache_in
-        return _block(config, params, x_seq, cache_in, cache_size)
+        return _block(config, mesh, params, x_seq, cache_in, cache_size)
 
     out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache_in))
 
