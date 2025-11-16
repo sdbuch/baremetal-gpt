@@ -152,7 +152,7 @@ def _attn(
         @partial(
             jax.shard_map,
             mesh=mesh,
-            in_specs=(kernel_spec, dp_spec, dp_spec, dp_spec, None),
+            in_specs=(kernel_spec, dp_spec, dp_spec, dp_spec, jax.P()),
             out_specs=dp_spec,
             check_vma=True,
         )
