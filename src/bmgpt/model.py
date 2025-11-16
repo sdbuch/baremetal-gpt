@@ -9,6 +9,7 @@ from jax.experimental.pallas.ops.tpu.splash_attention import (
     MultiHeadMask,
     SegmentIds,
     make_splash_mha_single_device,
+    make_splash_mha
 )
 from jax.sharding import auto_axes
 
@@ -136,12 +137,20 @@ def _attn(
                 for _ in range(config.model.num_heads)
             ]
         )
+        # kernel = make_splash_mha(mask, head_shards=1, q_seq_shards=1)
+        # kernel_spec = kernel.manual_sharding_spec(NamedSharding(mesh, P('dp', None, None, None)))
         attn_fun = make_splash_mha_single_device(mask)
         q_segment_ids = jnp.zeros((s,))
         kv_segment_ids = jnp.zeros((t,))
         kv_segment_ids = kv_segment_ids.at[cache_size : config.model.max_seq_len].set(1)
         segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
+
+        q = jax.lax.with_sharding_constraint(q, jax.P('dp'))
+        k = jax.lax.with_sharding_constraint(k, jax.P('dp'))
+        v = jax.lax.with_sharding_constraint(v, jax.P('dp'))
+
         attn_out = attn_fun(q, k, v, segment_ids=segment_ids)
+        attn_out = jax.lax.with_sharding_constraint(attn_out, jax.P('dp'))
     else:
         # Make mask
         mask = _make_causal_mask(s, t, cache_size)
