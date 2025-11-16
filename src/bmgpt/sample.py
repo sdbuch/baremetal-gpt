@@ -28,7 +28,7 @@ def sample_one_token(
     return next_token, cache_out, cache_size
 
 
-@jax.jit
+@partial(jax.jit, static_argnums=(2,))
 def generate(
     config: Config,
     key,
