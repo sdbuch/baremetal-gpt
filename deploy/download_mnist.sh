@@ -5,6 +5,7 @@ TPU_NAME="$1"
 shift
 SSH_FLAGS='-A -o ForwardAgent=yes'
 COMMANDS="if [ ! -d \"baremetal-gpt\" ]; then git clone git@github.com:sdbuch/baremetal-gpt; fi \
+    && export HF_TOKEN='$HF_TOKEN' \
     && cd baremetal-gpt \
     && git pull \
     && git checkout vision \

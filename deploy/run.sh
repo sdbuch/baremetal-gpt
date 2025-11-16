@@ -7,6 +7,7 @@ COMMANDS="if [ ! -d \"baremetal-gpt\" ]; then git clone git@github.com:sdbuch/ba
     && export HYDRA_FULL_ERROR=1 \
     && export WANDB_ENTITY='$WANDB_ENTITY' \
     && export WANDB_API_KEY='$WANDB_API_KEY' \
+    && export HF_TOKEN='$HF_TOKEN' \
     && cd baremetal-gpt \
     && git pull \
     && git checkout vision \
