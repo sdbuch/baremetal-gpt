@@ -139,7 +139,7 @@ def _attn(
             ]
         )
         # attn_fun = make_splash_mha_single_device(mask)
-        dp_spec = jax.P()
+        dp_spec = jax.P(None, None)
         dp_sharding = jax.sharding.NamedSharding(mesh, dp_spec)
         kernel = make_splash_mha(mask, head_shards=1, q_seq_shards=1)
         kernel_spec = kernel.manual_sharding_spec(dp_sharding)
