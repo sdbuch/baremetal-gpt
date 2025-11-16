@@ -154,7 +154,7 @@ def _attn(
             mesh=mesh,
             in_specs=(kernel_spec, dp_spec, dp_spec, dp_spec, jax.P()),
             out_specs=dp_spec,
-            check_vma=True,
+            check_vma=False,
         )
         def splash_sharded(kernel, q, k, v, segment_ids):
             return kernel(q, k, v, segment_ids=segment_ids)
