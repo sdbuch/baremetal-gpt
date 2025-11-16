@@ -1,0 +1,4 @@
+# @package _global_
+
+sharding:
+  mesh_shape: [4]
