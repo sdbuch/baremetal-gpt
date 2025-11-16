@@ -156,10 +156,10 @@ def _attn(
             out_specs=dp_spec,
             check_vma=True,
         )
-        def splash_sharded(kernel, q, k, v):
+        def splash_sharded(kernel, q, k, v, segment_ids):
             return kernel(q, k, v, segment_ids=segment_ids)
 
-        attn_out = splash_sharded(kernel, q, k, v)
+        attn_out = splash_sharded(kernel, q, k, v, segment_ids)
     else:
         # Make mask
         mask = _make_causal_mask(s, t, cache_size)
