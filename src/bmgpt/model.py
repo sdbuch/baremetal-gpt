@@ -161,7 +161,7 @@ def _attn(
         attn_out = splash_sharded(kernel, q, k, v, segment_ids)
     else:
         # Make mask
-        mask = _make_causal_mask(s, t, cache_size)
+        mask = _make_causal_mask(s, t, config.model.max_seq_len)
         cache_mask = _make_cache_mask(s, t, cache_size) | (
             ~_make_cache_mask(s, t, config.model.max_seq_len)
         )
