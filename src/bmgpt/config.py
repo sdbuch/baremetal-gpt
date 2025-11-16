@@ -76,6 +76,7 @@ class ModelConfig:
     ## Model architecture params
     # Overarching
     transformer_type: TransformerType = MISSING
+    max_seq_len: int = 1024  # should be larger than train sequence length
 
     # Transformer-type-agnostic params
     is_causal: bool = True
@@ -86,7 +87,6 @@ class ModelConfig:
     num_layers: int = 12
     param_std: float = 0.02
     rope_theta: float = 10000.0
-    max_seq_len: int = 1024
 
     # Model dtypes
     param_dtype: DType = DType.BFLOAT16  # weights, activations

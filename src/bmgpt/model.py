@@ -7,6 +7,7 @@ from jax import Array
 from jax.experimental.pallas.ops.tpu.splash_attention import (
     CausalMask,
     MultiHeadMask,
+    SegmentIds,
     make_splash_mha_single_device,
 )
 
@@ -125,15 +126,26 @@ def _attn(
     t = k.shape[1]
     if config.model.use_splash:
         # attn_out = jax.nn.dot_product_attention(q, k, v, scale=None, mask=mask)
-        mask = MultiHeadMask([CausalMask((s, t)) for _ in range(config.model.num_heads)])
-        attn_out = attn_fun(q, k, v)
+        mask = MultiHeadMask(
+            [
+                CausalMask(shape=(s, t), offset=config.model.max_seq_len)
+                for _ in range(config.model.num_heads)
+            ]
+        )
+        attn_fun = make_splash_mha_single_device(mask)
+        q_segment_ids = jnp.zeros((s,))
+        kv_segment_ids = jnp.zeros((t,))
+        kv_segment_ids.at[s + cache_size :].set(1)
+        segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
+        attn_out = attn_fun(q, k, v, segment_ids=segment_ids)
     else:
         # Make mask
         mask = _make_causal_mask(s, t, cache_size)
-        mask = mask & _make_cache_mask(s, t, cache_size)  # need for static cache
         mask = mask[None, ...]  # broadcast over heads
         # Scale and causal mask
-        logits = jnp.einsum("nsh,nth->nst", q, k).astype(config.model.compute_dtype.value)
+        logits = jnp.einsum("nsh,nth->nst", q, k).astype(
+            config.model.compute_dtype.value
+        )
         logits *= 1.0 / config.model.d_head**0.5
         logits = jnp.where(mask, logits, -jnp.inf)
         probs = jax.nn.softmax(logits, axis=2)  # type: ignore[reportArgumentType]
