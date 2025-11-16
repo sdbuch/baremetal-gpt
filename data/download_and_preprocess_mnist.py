@@ -26,8 +26,8 @@ def main(patch_size: int = 4):
     @jax.jit
     def preprocess_img(im: jax.Array) -> jax.Array:
         # TODO: if adapting this to multichannel img, update this
-        # Convert to bf16
-        im = im.astype(jnp.bfloat16)
+        # Convert to float
+        im = im.astype(jnp.float32)
         # Rescale to [0, 1]
         im /= 255.0
         # Patchify (non-overlapping)
@@ -42,7 +42,7 @@ def main(patch_size: int = 4):
         jax.vmap(preprocess_img), (train_imgs, test_imgs)
     )
     mu = train_imgs.mean()
-    sigma = train_imgs.std()
+    sigma = (jnp.sum((train_imgs - mu)**2, axis=-1)**0.5).mean()
     train_imgs, test_imgs = jax.tree.map(
         lambda im: (im - mu) / sigma, (train_imgs, test_imgs)
     )
