@@ -78,6 +78,7 @@ def main(config: Config):
                 inputs, train_state.kv_cache
             )
             logits = logits.astype(config.model.compute_dtype.value)
+            logits = jax.lax.with_sharding_constraint(logits, jax.P("dp"))
             logprobs = jax.nn.log_softmax(logits, axis=-1)
             return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
