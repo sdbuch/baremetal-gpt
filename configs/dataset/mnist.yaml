@@ -4,7 +4,7 @@ dataset:
   name: MNIST
   path: "data/mnist/patch_4x4"
   seq_len: 49  # 4x4 patches
-  num_vocab: None
+  num_vocab: 0
 
 model:
   transformer_type: CONTINUOUS
