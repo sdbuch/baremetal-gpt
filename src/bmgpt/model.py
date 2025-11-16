@@ -103,9 +103,10 @@ def _attn(
         out_sharding=jax.P(*config.sharding.att_qkv),
     )
     q, k, v = [qkv[i] for i in range(3)]
-    s = q.shape[1]  # we save k shape later, after possibly prepending cache
+    s = q.shape[1]
 
-    # Apply RoPE
+    # Cache + RoPE scheme: we update the cache after applying RoPE to K,
+    #  so new Q/K just needs to RoPE with positions + cache_size!
     if config.model.use_rope:
         with jax.ensure_compile_time_eval():
             rope_cos, rope_sin = _precompute_rope_cossin(config)
@@ -116,16 +117,18 @@ def _attn(
         _apply_rope_all_heads = jax.vmap(_apply_rope_one_head)
         q, k = _apply_rope_all_heads(q), _apply_rope_all_heads(k)
 
-    # Read/update/concatenate the cache
+    # Cache read scheme: to enable same mask for the same s value (Q seq len),
+    #  we concatenate the full cache to K, and mask empty entries with splash attn
     k_cache, v_cache = kv_cache[0], kv_cache[1]
-    k = jax.lax.dynamic_update_slice(k_cache, k, (0, cache_size, 0))
-    v = jax.lax.dynamic_update_slice(v_cache, v, (0, cache_size, 0))
-    kv_cache_out = jnp.concatenate((k[None], v[None]), axis=0)
+    k = jnp.concatenate((k_cache, k), axis=1)
+    v = jnp.concatenate((v_cache, v), axis=1)
+    k_cache_out = jax.lax.dynamic_update_slice(k_cache, k, (0, cache_size, 0))
+    v_cache_out = jax.lax.dynamic_update_slice(v_cache, v, (0, cache_size, 0))
+    kv_cache_out = jnp.concatenate((k_cache_out[None], v_cache_out[None]), axis=0)
 
-    # Attention computation
-    t = k.shape[1]
+    # Attention
+    t = k.shape[1]  # t = s + config.model.max_seq_len
     if config.model.use_splash:
-        # attn_out = jax.nn.dot_product_attention(q, k, v, scale=None, mask=mask)
         mask = MultiHeadMask(
             [
                 CausalMask(shape=(s, t), offset=config.model.max_seq_len)
@@ -135,10 +138,11 @@ def _attn(
         attn_fun = make_splash_mha_single_device(mask)
         q_segment_ids = jnp.zeros((s,))
         kv_segment_ids = jnp.zeros((t,))
-        kv_segment_ids.at[s + cache_size :].set(1)
+        kv_segment_ids = kv_segment_ids.at[cache_size : config.model.max_seq_len].set(1)
         segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
         attn_out = attn_fun(q, k, v, segment_ids=segment_ids)
     else:
+        raise NotImplementedError("Need to adapt for concat cache")
         # Make mask
         mask = _make_causal_mask(s, t, cache_size)
         mask = mask[None, ...]  # broadcast over heads
