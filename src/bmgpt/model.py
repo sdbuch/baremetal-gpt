@@ -141,13 +141,7 @@ def _attn(
         kv_segment_ids = jnp.zeros((t,))
         kv_segment_ids = kv_segment_ids.at[cache_size : config.model.max_seq_len].set(1)
         segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
-        attn_out = auto_axes(attn_fun)(
-            q,
-            k,
-            v,
-            segment_ids=segment_ids,
-            out_sharding=jax.P(*config.sharding.att_qkv[1:]),
-        )
+        attn_out = attn_fun(q, k, v, segment_ids=segment_ids)
     else:
         # Make mask
         mask = _make_causal_mask(s, t, cache_size)
