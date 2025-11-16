@@ -120,10 +120,10 @@ def _attn(
     # Cache read scheme: to enable same mask for the same s value (Q seq len),
     #  we concatenate the full cache to K, and mask empty entries with splash attn
     k_cache, v_cache = kv_cache[0], kv_cache[1]
-    k = jnp.concatenate((k_cache, k), axis=1)
-    v = jnp.concatenate((v_cache, v), axis=1)
     k_cache_out = jax.lax.dynamic_update_slice(k_cache, k, (0, cache_size, 0))
     v_cache_out = jax.lax.dynamic_update_slice(v_cache, v, (0, cache_size, 0))
+    k = jnp.concatenate((k_cache, k), axis=1)
+    v = jnp.concatenate((v_cache, v), axis=1)
     kv_cache_out = jnp.concatenate((k_cache_out[None], v_cache_out[None]), axis=0)
 
     # Attention
