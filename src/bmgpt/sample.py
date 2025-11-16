@@ -9,11 +9,10 @@ from bmgpt.model import Transformer, _transformer
 # TODO: These functions are for bs1. Create a packing/masking wrapper for bs>1
 
 
-@partial(jax.jit, static_argnums=(2,), donate_argnums=(4,))
+@partial(jax.jit, donate_argnums=(4,))
 def sample_one_token(
     config: Config,
     key,
-    mesh,
     params: Transformer,
     seq: jax.Array,
     cache_in: jax.Array,
@@ -21,18 +20,17 @@ def sample_one_token(
     temperature: float,
 ):
     """Expects seq and cache_in to have no batch axis."""
-    y, cache_out = _transformer(config, mesh, params, seq, cache_in, cache_size)
+    y, cache_out = _transformer(config, params, seq, cache_in, cache_size)
     logits = y.astype(config.model.compute_dtype.value)
     cache_size = cache_size + seq.shape[-1]  # TODO: this should maybe be internal
     next_token = jnp.array((jax.random.categorical(key, logits[-1] / temperature),))
     return next_token, cache_out, cache_size
 
 
-@partial(jax.jit, static_argnums=(2,))
+@jax.jit
 def generate(
     config: Config,
     key,
-    mesh,
     params: Transformer,
     prompt: jax.Array,
     cache: jax.Array,
@@ -43,14 +41,7 @@ def generate(
     # Prefill
     key, sk = jax.random.split(key)
     next_token, cache, cache_size = sample_one_token(
-        config,
-        sk,
-        mesh,
-        params,
-        prompt,
-        cache,
-        cache_size,
-        config.inference.temperature,
+        config, sk, params, prompt, cache, cache_size, config.inference.temperature
     )
     prefill = jnp.concatenate((prompt, next_token))
 

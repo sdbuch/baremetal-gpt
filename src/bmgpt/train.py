@@ -54,6 +54,7 @@ def main(config: Config):
     config_sampling = copy.deepcopy(config)
     config_sampling.dataset.global_batch_size = 1
     config_sampling.sharding.data = []
+    config_sampling.model.use_splash = False # TODO: Need to implement padding
 
     # Randomness
     key = jax.random.key(config.experiment.seed)
@@ -125,7 +126,6 @@ def main(config: Config):
             output, cache, cache_size = generate(
                 config_sampling,
                 key_sampling,
-                mesh,
                 train_state.params,
                 prompt,
                 cache,
