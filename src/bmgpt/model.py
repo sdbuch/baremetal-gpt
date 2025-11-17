@@ -120,7 +120,7 @@ def _attn(
 
     # Attention computation
     t = k.shape[0]
-    if not config.model.is_causal:
+    if config.model.is_causal:
         mask = _make_causal_mask(s, t, cache_size)
         mask = mask & _make_cache_mask(s, t, cache_size)  # need for static cache
     else:
