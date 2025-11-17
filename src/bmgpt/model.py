@@ -185,7 +185,7 @@ class ClassificationHead(NamedTuple):
 
 
 def _classification_head(config: Config, params: ClassificationHead, x: Array):
-    logits = jnp.matmul(x[:1], params.w)
+    logits = jnp.matmul(x[0], params.w)
     return logits
 
 

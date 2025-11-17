@@ -79,8 +79,6 @@ def main(config: Config):
             )
             logits = logits.astype(config.model.compute_dtype.value)
             logprobs = jax.nn.log_softmax(logits, axis=-1)
-            print(logits.shape)
-            print(targets.shape)
             return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
         loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
