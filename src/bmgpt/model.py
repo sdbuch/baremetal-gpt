@@ -120,8 +120,11 @@ def _attn(
 
     # Attention computation
     t = k.shape[0]
-    mask = _make_causal_mask(s, t, cache_size)
-    mask = mask & _make_cache_mask(s, t, cache_size)  # need for static cache
+    if not config.model.is_causal:
+        mask = _make_causal_mask(s, t, cache_size)
+        mask = mask & _make_cache_mask(s, t, cache_size)  # need for static cache
+    else:
+        mask = _make_cache_mask(s, t, 0) # full attention
     mask = mask[None, ...]  # broadcast over heads
     if config.model.use_fa:
         attn_out = jax.nn.dot_product_attention(q, k, v, scale=None, mask=mask)
