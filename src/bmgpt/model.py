@@ -152,8 +152,8 @@ class EmbeddingDiscrete(NamedTuple):
     w: Array
 
 
-def _embedding_discrete(config: Config, params: EmbeddingDiscrete, token: jax.Array):
-    emb = params.w.at[token].get(out_sharding=jax.P(*config.sharding.res_stream))
+def _embedding_discrete(config: Config, params: EmbeddingDiscrete, tokens: jax.Array):
+    emb = params.w.at[tokens].get(out_sharding=jax.P(*config.sharding.res_stream))
     return emb
 
 
@@ -252,10 +252,7 @@ def _transformer(
     cache_size: int = 0,
 ):
     _, __, _embedding, _unembedding = transformer_variant_factory(config)
-    if config.model.transformer_type == TransformerType.DISCRETE:
-        x_seq = jax.vmap(partial(_embedding, config, params.emb))(tokens)
-    else:
-        x_seq = _embedding(config, params.emb, tokens)
+    x_seq = _embedding(config, params.emb, tokens)
 
     def _block_fun(x_seq: Array, params__cache_in: tuple[Block, jax.Array]):
         params, cache_in = params__cache_in
@@ -263,10 +260,7 @@ def _transformer(
 
     out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache_in))
 
-    if config.model.transformer_type == TransformerType.DISCRETE:
-        out = jax.vmap(partial(_unembedding, config, params.unemb))(out)
-    else:
-        out = _unembedding(config, params.unemb, out)
+    out = _unembedding(config, params.unemb, out)
 
     return out, cache_out
 
