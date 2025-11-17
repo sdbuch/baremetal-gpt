@@ -124,7 +124,7 @@ def _attn(
         mask = _make_causal_mask(s, t, cache_size)
         mask = mask & _make_cache_mask(s, t, cache_size)  # need for static cache
     else:
-        mask = _make_cache_mask(s, t, 0) # full attention
+        mask = _make_cache_mask(s, t, 0)  # full attention
     mask = mask[None, ...]  # broadcast over heads
     if config.model.use_fa:
         attn_out = jax.nn.dot_product_attention(q, k, v, scale=None, mask=mask)
@@ -252,7 +252,10 @@ def _transformer(
     cache_size: int = 0,
 ):
     _, __, _embedding, _unembedding = transformer_variant_factory(config)
-    x_seq = jax.vmap(partial(_embedding, config, params.emb))(tokens)
+    if config.model.transformer_type == TransformerType.DISCRETE:
+        x_seq = jax.vmap(partial(_embedding, config, params.emb))(tokens)
+    else:
+        x_seq = _embedding(config, params.emb, tokens)
 
     def _block_fun(x_seq: Array, params__cache_in: tuple[Block, jax.Array]):
         params, cache_in = params__cache_in
@@ -260,7 +263,10 @@ def _transformer(
 
     out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache_in))
 
-    out = jax.vmap(partial(_unembedding, config, params.unemb))(out)
+    if config.model.transformer_type == TransformerType.DISCRETE:
+        out = jax.vmap(partial(_unembedding, config, params.unemb))(out)
+    else:
+        out = _unembedding(config, params.unemb, out)
 
     return out, cache_out
 
@@ -457,7 +463,7 @@ def model_spec(model: Transformer) -> Any:
 
 
 def transformer_variant_factory(config: Config):
-    if config.model.transformer_type is TransformerType.DISCRETE:
+    if config.model.transformer_type == TransformerType.DISCRETE:
         init_embedding = init_embedding_discrete
         fun_embedding = _embedding_discrete
         init_unembedding = init_lm_head
