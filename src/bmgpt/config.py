@@ -55,6 +55,7 @@ class DatasetConfig:
     path: str = MISSING
     seq_len: int = MISSING
     num_vocab: int = MISSING
+    num_classes: int = MISSING
     global_batch_size: int = 128
 
 
@@ -87,6 +88,7 @@ class ModelConfig:
     param_std: float = 0.02
     rope_theta: float = 10000.0
     max_seq_len: int = 1024
+    num_registers: int = 1  # Currently only used for EmbeddingContinuous
 
     # Model dtypes
     param_dtype: DType = DType.BFLOAT16  # weights, activations
@@ -122,8 +124,8 @@ class ShardingConfig:
     wo: list[str | None] = field(default_factory=list)  # D x N x H
     wup: list[str | None] = field(default_factory=list)  # D x 4D
     wdown: list[str | None] = field(default_factory=list)  # 4D x D
-    mlp_hidden: list[str | None] = field(default_factory=list)  # S x 4D
-    res_stream: list[str | None] = field(default_factory=list)  # S x D
+    mlp_hidden: list[str | None] = field(default_factory=list)  # 4D
+    res_stream: list[str | None] = field(default_factory=list)  # D
     att_qkv: list[str | None] = field(default_factory=list)  # 3 x S x N x H
 
 

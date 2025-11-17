@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from bmgpt.config import Config
+from bmgpt.config import Config, TransformerType
 
 ################################
 # Architecture: building blocks
@@ -20,12 +20,14 @@ class Mlp(NamedTuple):
 
 
 def _mlp(config: Config, params: Mlp, x: Array):
-    preact = jnp.dot(x, params.w_up, out_sharding=jax.P(*config.sharding.mlp_hidden))
+    preact = jnp.matmul(x, params.w_up, out_sharding=jax.P(*config.sharding.mlp_hidden))
     if config.model.use_bias_mlp:
         # PERF: check that compiler fuses these
         preact += params.bias_up
     act = jax.nn.gelu(preact, approximate=True)
-    out = jnp.dot(act, params.w_down, out_sharding=jax.P(*config.sharding.res_stream))
+    out = jnp.matmul(
+        act, params.w_down, out_sharding=jax.P(*config.sharding.res_stream)
+    )
     if config.model.use_bias_mlp:
         out += params.bias_down
     return out
@@ -143,21 +145,44 @@ def _attn(
     return out, kv_cache_out
 
 
-class Embedding(NamedTuple):
+class EmbeddingDiscrete(NamedTuple):
     w: Array
 
 
-def _embedding(config: Config, params: Embedding, token: jax.Array):
+def _embedding_discrete(config: Config, params: EmbeddingDiscrete, token: jax.Array):
     emb = params.w.at[token].get(out_sharding=jax.P(*config.sharding.res_stream))
     return emb
 
 
-class Unembedding(NamedTuple):
+class EmbeddingContinuous(NamedTuple):
+    w_emb: Array
+    w_pos: Array
+    registers: Array
+
+
+def _embedding_continuous(config: Config, params: EmbeddingContinuous, seq: jax.Array):
+    # seq is s x d_in
+    emb_tokens = seq @ params.w_emb
+    emb_with_regs = jnp.concatenate((params.registers, emb_tokens), axis=0)
+    emb = emb_with_regs + params.w_pos
+    return emb
+
+
+class LMHead(NamedTuple):
     w: Array
 
 
-def _unembedding(config: Config, params: Unembedding, x: Array):
-    logits = jnp.dot(x, params.w, out_sharding=jax.P(*config.sharding.res_stream))
+def _lm_head(config: Config, params: LMHead, x: Array):
+    logits = jnp.matmul(x, params.w)
+    return logits
+
+
+class ClassificationHead(NamedTuple):
+    w: Array
+
+
+def _classification_head(config: Config, params: ClassificationHead, x: Array):
+    logits = jnp.matmul(x[:1], params.w)
     return logits
 
 
@@ -211,9 +236,9 @@ def _block(
 
 
 class Transformer(NamedTuple):
-    emb: Embedding
+    emb: EmbeddingDiscrete | EmbeddingContinuous
     blocks: Block  # vmapped at init
-    unemb: Unembedding
+    unemb: LMHead | ClassificationHead
 
 
 def _transformer(
@@ -223,6 +248,7 @@ def _transformer(
     cache_in: jax.Array,
     cache_size: int = 0,
 ):
+    _, __, _embedding, _unembedding = transformer_variant_factory(config)
     x_seq = jax.vmap(partial(_embedding, config, params.emb))(tokens)
 
     def _block_fun(x_seq: Array, params__cache_in: tuple[Block, jax.Array]):
@@ -241,24 +267,57 @@ def _transformer(
 #####################################
 
 
-def init_embedding(config: Config, key) -> Embedding:
+def init_embedding_discrete(config: Config, key) -> EmbeddingDiscrete:
     emb = config.model.param_std * jax.random.normal(
         key,
         (config.dataset.num_vocab, config.model.d_model),
         config.model.param_dtype.value,
-        out_sharding=jax.P(*config.sharding.res_stream),
+        out_sharding=jax.P(*([None] + config.sharding.res_stream)),
     )
-    return Embedding(w=emb)
+    return EmbeddingDiscrete(w=emb)
 
 
-def init_unembedding(config: Config, key) -> Unembedding:
+def init_embedding_continuous(config: Config, key) -> EmbeddingContinuous:
+    key_emb, key_pos, key_reg = jax.random.split(key, 3)
+    w_emb = config.model.param_std * jax.random.normal(
+        key_emb,
+        (config.dataset.num_vocab, config.model.d_model),
+        config.model.param_dtype.value,
+        out_sharding=jax.P(*([None] + config.sharding.res_stream)),
+    )
+    w_reg = config.model.param_std * jax.random.normal(
+        key_reg,
+        (config.model.num_registers, config.model.d_model),
+        config.model.param_dtype.value,
+        out_sharding=jax.P(*([None] + config.sharding.res_stream)),
+    )
+    w_pos = config.model.param_std * jax.random.normal(
+        key_pos,
+        (config.model.num_registers + config.dataset.seq_len, config.model.d_model),
+        config.model.param_dtype.value,
+        out_sharding=jax.P(*([None] + config.sharding.res_stream)),
+    )
+    return EmbeddingContinuous(w_emb=w_emb, w_pos=w_pos, registers=w_reg)
+
+
+def init_lm_head(config: Config, key) -> LMHead:
     unemb = config.model.param_std * jax.random.normal(
         key,
         (config.model.d_model, config.dataset.num_vocab),
         config.model.param_dtype.value,
         out_sharding=jax.P(*config.sharding.res_stream),
     )
-    return Unembedding(w=unemb)
+    return LMHead(w=unemb)
+
+
+def init_classification_head(config: Config, key) -> ClassificationHead:
+    unemb = config.model.param_std * jax.random.normal(
+        key,
+        (config.model.d_model, config.dataset.num_classes),
+        config.model.param_dtype.value,
+        out_sharding=jax.P(*config.sharding.res_stream),
+    )
+    return ClassificationHead(w=unemb)
 
 
 def init_mlp(config: Config, key) -> Mlp:
@@ -337,6 +396,7 @@ def init_model(key, config: Config) -> Transformer:
     # Make the full network
     key_emb, key_blocks, key_unemb = jax.random.split(key, 3)
     keys_blocks = jax.random.split(key_blocks, config.model.num_layers)
+    init_embedding, init_unembedding, _, __ = transformer_variant_factory(config)
     model = Transformer(
         emb=init_embedding(config, key_emb),
         blocks=jax.vmap(partial(init_block, config))(keys_blocks),
@@ -344,24 +404,6 @@ def init_model(key, config: Config) -> Transformer:
     )
 
     return model
-
-
-def model_spec(model: Transformer) -> Any:
-    # Make the spec (we need some way to pass metadata around)
-    # HACK: not great... disadvantage of bare metal without custom pytree
-    def _make_spec_from_str(path: str) -> tuple[int, int] | None:
-        param_str = path[-1].__str__()
-        matrix_axes_dict = {
-            ".w_qkv": (-4, -1),
-            ".w_o": (-3, -1),
-            ".w_up": (-2, -1),
-            ".w_down": (-2, -1),
-            ".w": (-2, -1),
-        }
-        return matrix_axes_dict.get(param_str, None)
-
-    spec = jax.tree.map_with_path(lambda p, x: _make_spec_from_str(p), model)
-    return spec
 
 
 # TODO: update sharding if attention sharding is modified
@@ -383,3 +425,44 @@ def init_kv_cache(config: Config):
         dtype=config.model.param_dtype.value,
         out_sharding=sharding,
     )
+
+
+#####################################
+# Auxiliary
+#####################################
+
+
+def model_spec(model: Transformer) -> Any:
+    # Make the spec (we need some way to pass metadata around)
+    # HACK: not great... disadvantage of bare metal without custom pytree
+    def _make_spec_from_str(path: str) -> tuple[int, int] | None:
+        param_str = path[-1].__str__()
+        matrix_axes_dict = {
+            ".w_qkv": (-4, -1),
+            ".w_o": (-3, -1),
+            ".w_up": (-2, -1),
+            ".w_down": (-2, -1),
+            ".w": (-2, -1),
+            ".w_emb": (-2, -1),
+            ".w_pos": (-2, -1),
+            ".w_reg": (-2, -1),
+        }
+        return matrix_axes_dict.get(param_str, None)
+
+    spec = jax.tree.map_with_path(lambda p, x: _make_spec_from_str(p), model)
+    return spec
+
+
+def transformer_variant_factory(config: Config):
+    if config.model.transformer_type is TransformerType.DISCRETE:
+        init_embedding = init_embedding_discrete
+        fun_embedding = _embedding_discrete
+        init_unembedding = init_lm_head
+        fun_unembedding = _lm_head
+    else:
+        init_embedding = init_embedding_continuous
+        fun_embedding = _embedding_continuous
+        init_unembedding = init_classification_head
+        fun_unembedding = _classification_head
+
+    return (init_embedding, init_unembedding, fun_embedding, fun_unembedding)
