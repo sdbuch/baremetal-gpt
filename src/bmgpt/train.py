@@ -122,6 +122,7 @@ def main(config: Config):
             metrics = evaluation_fn(
                 config, key_e, mesh, train_state.params, batch_iter_eval
             )
+            logger.log(metrics)
 
 
 if __name__ == "__main__":

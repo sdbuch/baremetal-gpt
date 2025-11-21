@@ -80,9 +80,11 @@ def calculate_metric_on_minibatches(
             else:
                 buffer += log_metric
         num_samples_processed += len(batch)
-    return buffer.sum() / num_samples_processed if buffer is not None else None
+    acc = buffer.sum() / num_samples_processed if buffer is not None else None
+    return {'accuracy': acc}
 
 
+@jax.jit
 def accuracy(config: Config, batch, params: Transformer, cache):
     inputs, targets = batch
     logits, _ = jax.vmap(partial(_transformer, config, params))(inputs, cache)
