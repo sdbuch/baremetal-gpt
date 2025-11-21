@@ -44,6 +44,10 @@ bmgpt = { path = ".", editable = true }
 [tool.ruff]
 # Basic configuration
 line-length = 88
+indent-width = 2
+
+[tool.ruff.format]
+indent-style = "space"
 
 [tool.ruff.lint]
 # Enable fix mode (equivalent to --fix flag)
