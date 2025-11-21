@@ -7,13 +7,7 @@ import jax
 import jax.numpy as jnp
 from jax.sharding import Mesh, NamedSharding
 
-from bmgpt.config import Config, DatasetConfig, DatasetName
-
-
-class SplitEnum(Enum):
-    TRAIN = "train"
-    TEST = "test"
-    VAL = "val"
+from bmgpt.config import Config, DatasetConfig, DatasetName, SplitType
 
 
 def dataset_dataloader_factory(config: DatasetConfig):
@@ -53,11 +47,11 @@ def make_number_staircase_data(config: DatasetConfig):
     data = jnp.array(seqs, dtype=jnp.int32)
     Xtr, Xdev, Xte = split_data(data, 0.8, 0.1)
     match config.split:
-        case SplitEnum.TRAIN:
+        case SplitType.TRAIN:
             return Xtr, jnp.array(0)
-        case SplitEnum.TEST:
+        case SplitType.TEST:
             return Xte, jnp.array(0)
-        case SplitEnum.VAL:
+        case SplitType.VAL:
             return Xdev, jnp.array(0)
 
 

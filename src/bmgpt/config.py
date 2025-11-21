@@ -6,8 +6,6 @@ import jax.numpy as jnp
 from hydra.core.config_store import ConfigStore
 from omegaconf import MISSING
 
-from bmgpt.data import SplitEnum
-
 
 class DType(Enum):
     """Different data types we can use. models.py"""
@@ -17,6 +15,14 @@ class DType(Enum):
     BFLOAT16 = jnp.bfloat16
     INT32 = jnp.int32
     INT16 = jnp.int16
+
+
+class SplitType(Enum):
+    """Different splits for datasets. data.py"""
+
+    TRAIN = "train"
+    TEST = "test"
+    VAL = "val"
 
 
 class OptType(Enum):
@@ -62,7 +68,7 @@ class DatasetConfig:
 
     name: DatasetName = MISSING
     path: str = MISSING
-    split: SplitEnum = SplitEnum.VAL
+    split: SplitType = SplitType.VAL
     seq_len: int = MISSING
     global_batch_size: int = MISSING
     epochs_to_loop: int = -1  # -1 means indefinite; otherwise, fixed num epochs
