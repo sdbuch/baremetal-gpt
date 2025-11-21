@@ -16,12 +16,8 @@ def autoregressive_rollouts(
     prompts: jax.Array,
 ):
     """prompts should have a leading batch axis"""
-    batch_size = prompts.shape[0]
     cache = init_kv_cache(config)
     cache_size = 0
-
-    print(prompts.shape)
-    print(cache.shape)
 
     @jax.vmap
     def batched_generate(prompt, cache):

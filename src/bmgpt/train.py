@@ -119,7 +119,7 @@ def main(config: Config):
         # Evaluate
         # TODO: currently just samples 1 rollout
         with jax.set_mesh(mesh):
-            prompt = jnp.array(((1,)))
+            prompt = jnp.array(((1,),))
             outputs = autoregressive_rollouts(
                 config_sampling, key_sampling, train_state.params, prompt
             )
