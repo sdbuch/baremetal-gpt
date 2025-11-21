@@ -15,6 +15,14 @@ eval_list:
       global_batch_size: 400
       epochs_to_loop: 1
     evaluator: ACCURACY
+  - dataset:
+      name: MNIST
+      path: "data/mnist/patch_4x4"
+      split: TRAIN
+      seq_len: 49  # 4x4 patches
+      global_batch_size: 400
+      epochs_to_loop: 1
+    evaluator: ACCURACY
 
 model:
   transformer_type: CONTINUOUS
