@@ -11,7 +11,7 @@ experiment:
     - dataset:
         name: NUMBER_STAIRCASE
         path: ""
-        split: TEST
+        split: TRAIN
         seq_len: 256
         global_batch_size: 128
       evaluator: AUTOREGRESSIVE_ROLLOUTS
