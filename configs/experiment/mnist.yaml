@@ -31,7 +31,7 @@ eval_list:
 model:
   transformer_type: CONTINUOUS
   is_causal: False  # use full attention
-  num_vocab: 49  # 2x2 patches
+  num_vocab: 4  # 2x2 patches
   num_classes: 10
   # use_bias_ln: True
   # use_bias_embeddings: True
