@@ -16,7 +16,7 @@ eval_list:
       path: "data/mnist/patch_7x7"
       split: TEST
       seq_len: 16
-      global_batch_size: 400
+      global_batch_size: 10000
       epochs_to_loop: 1
     evaluator: ACCURACY
   - dataset:
@@ -24,7 +24,7 @@ eval_list:
       path: "data/mnist/patch_7x7"
       split: TRAIN
       seq_len: 16
-      global_batch_size: 400
+      global_batch_size: 60000
       epochs_to_loop: 1
     evaluator: ACCURACY
 
