@@ -79,9 +79,9 @@ def calculate_metric_on_minibatches(
                 buffer = log_metric
             else:
                 buffer += log_metric
-        num_samples_processed += len(batch)
+        num_samples_processed += len(batch[0])
     acc = buffer.sum() / num_samples_processed if buffer is not None else None
-    return {'accuracy': acc}
+    return {"accuracy": acc}
 
 
 @jax.jit
