@@ -2,10 +2,12 @@
 
 defaults:
   - /dataset/staircase@training_dataset
-  - /dataset/staircase@eval_list.0.dataset
+  # - /dataset/staircase@eval_list.0.dataset
 
 eval_list:
   - dataset:
+      name: NUMBER_STAIRCASE
+      path: ""
       split: TEST
       seq_len: 1
       global_batch_size: 16
