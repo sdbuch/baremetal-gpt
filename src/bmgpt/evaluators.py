@@ -24,6 +24,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
                 calculate_metric_on_minibatches,
                 metric=accuracy,
                 global_batch_size=evaluation_config.dataset.global_batch_size,
+                metric_name_prefix=evaluation_config.dataset.split.value + "/",
             )
         case EvaluatorType.PERPLEXITY:
             return None
@@ -64,6 +65,7 @@ def calculate_metric_on_minibatches(
     batch_iter: DataloaderOutputType,
     metric,
     global_batch_size: int,
+    metric_name_prefix: str = "",
 ):
     prev_metric = None
     buffer = None
@@ -81,7 +83,7 @@ def calculate_metric_on_minibatches(
                 buffer += log_metric
         num_samples_processed += len(batch[0])
     acc = buffer.sum() / num_samples_processed if buffer is not None else None
-    return {"accuracy": acc}
+    return {metric_name_prefix + "accuracy": acc}
 
 
 @jax.jit
