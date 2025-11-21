@@ -5,25 +5,25 @@ defaults:
 
 train_dataset:
   epochs_to_loop: 15
-  path: "data/mnist/patch_2x2"
+  path: "data/mnist/patch_4x4"
   split: TRAIN
-  seq_len: 196  # 2x2 patches
+  seq_len: 49  # 4x4 patches
   global_batch_size: 128
 
 eval_list:
   - dataset:
       name: MNIST
-      path: "data/mnist/patch_2x2"
+      path: "data/mnist/patch_4x4"
       split: TEST
-      seq_len: 196
+      seq_len: 49
       global_batch_size: 400
       epochs_to_loop: 1
     evaluator: ACCURACY
   - dataset:
       name: MNIST
-      path: "data/mnist/patch_2x2"
+      path: "data/mnist/patch_4x4"
       split: TRAIN
-      seq_len: 196
+      seq_len: 49
       global_batch_size: 400
       epochs_to_loop: 1
     evaluator: ACCURACY
@@ -31,11 +31,11 @@ eval_list:
 model:
   transformer_type: CONTINUOUS
   is_causal: False  # use full attention
-  num_vocab: 4  # 2x2 patches
+  num_vocab: 16  # 4x4 patches
   num_classes: 10
-  # use_bias_ln: True
-  # use_bias_embeddings: True
-  # use_bias_mlp: True
+  use_bias_embeddings: True
+  use_bias_ln: True
+  use_bias_mlp: True
   # num_layers: 3
   # num_heads: 8
   # d_model: 64
