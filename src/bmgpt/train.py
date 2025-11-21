@@ -101,7 +101,7 @@ def main(config: Config):
     # Simple training loop
     prev_metrics = None
     with Logger(config) as logger:
-        for step in range(config.optimizer.num_steps):
+        for step, batch in enumerate(batch_iter):
             batch = next(batch_iter)
             with jax.set_mesh(mesh):
                 cur_metrics, train_state = train_step(config, batch, train_state)
@@ -109,6 +109,8 @@ def main(config: Config):
             if log_metrics:
                 log_metrics |= {"step": step}
                 logger.log(log_metrics)
+            if step == config.optimizer.num_steps - 1:
+                break
 
         # Run evals
         for evaluation in config.eval_list:

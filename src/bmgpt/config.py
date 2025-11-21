@@ -86,7 +86,7 @@ class EvaluationConfig:
 class OptimizerConfig:
     """Optimizer params"""
 
-    num_steps: int = 10**3
+    num_steps: int = 10**3  # if 0 or less, will train until dataloader exhausted
     type: OptType = OptType.ADAMW
     lr: float = 3e-4
     beta1: float = 0.9
@@ -203,10 +203,7 @@ def config_post_init(config: Config):
     assert config.model.d_head % 2 == 0, (
         "Head dimension needs to be divisible by 2 for RoPE"
     )
-    assert (
-        config.training_dataset.global_batch_size % jax.process_count() == 0
-        and all(
-            eval.dataset.global_batch_size % jax.process_count() == 0
-            for eval in config.eval_list
-        )
+    assert config.training_dataset.global_batch_size % jax.process_count() == 0 and all(
+        eval.dataset.global_batch_size % jax.process_count() == 0
+        for eval in config.eval_list
     ), "Number of hosts needs to divide the global batch size for all data"

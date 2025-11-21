@@ -49,3 +49,13 @@ def autoregressive_rollouts(
     print(f"Prompt: {prompts.addressable_shards[0].data}")
     print(f"Generated text: {outputs.addressable_shards[0].data}")
     return outputs
+
+
+def accuracy(
+    config: Config,
+    key,
+    mesh,
+    params: Transformer,
+    batch_iter: DataloaderOutputType,
+):
+    pass
