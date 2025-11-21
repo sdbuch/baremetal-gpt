@@ -12,6 +12,7 @@ from bmgpt.data import (
     dataset_dataloader_factory,
     get_dataset_on_device,
 )
+from bmgpt.evaluators import autoregressive_rollouts
 from bmgpt.loggers import logger_factory
 from bmgpt.model import Transformer, _transformer, init_kv_cache, init_model, model_spec
 from bmgpt.optimizers import (
@@ -118,21 +119,10 @@ def main(config: Config):
         # Evaluate
         # TODO: currently just samples 1 rollout
         with jax.set_mesh(mesh):
-            prompt = jnp.array((1,))
-            cache = init_kv_cache(config_sampling)[0]
-            cache_size = 0
-
-            output, cache, cache_size = generate(
-                config_sampling,
-                key_sampling,
-                train_state.params,
-                prompt,
-                cache,
-                cache_size,
+            prompt = jnp.array(((1,)))
+            outputs = autoregressive_rollouts(
+                config_sampling, key_sampling, train_state.params, prompt
             )
-            print(f"Prompt: {prompt}")
-            print(f"Cache size: {cache_size}")
-            print(f"Generated text: {output}")
 
 
 if __name__ == "__main__":

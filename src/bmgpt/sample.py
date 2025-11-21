@@ -6,8 +6,6 @@ import jax.numpy as jnp
 from bmgpt.config import Config
 from bmgpt.model import Transformer, _transformer
 
-# TODO: These functions are for bs1. Create a packing/masking wrapper for bs>1
-
 
 @partial(jax.jit, donate_argnums=(4,))
 def sample_one_token(
