@@ -46,7 +46,7 @@ def autoregressive_rollouts(
         cache_size = 0
         outputs, cache, cache_size = batched_generate(prompts, cache)
 
-    print(f"Prompt: {prompts.addressable_data(0)}")
+    print(f"Prompt: {prompts.addressable_shards[0].data}")
     print(f"Cache size: {cache_size}")
-    print(f"Generated text: {outputs.addressable_data(0)}")
+    print(f"Generated text: {outputs.addressable_shards[0].data}")
     return outputs
