@@ -29,6 +29,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
 def autoregressive_rollouts(
     config: Config,
     key,
+    mesh,
     params: Transformer,
     batch_iter: DataloaderOutputType,
     global_batch_size: int,
@@ -43,7 +44,9 @@ def autoregressive_rollouts(
     def batched_generate(prompt: jax.Array, cache):
         return generate(config, key, params, prompt, cache, cache_size)
 
-    outputs, cache, cache_size = batched_generate(prompts, cache)
+    with jax.set_mesh(mesh):
+        outputs, cache, cache_size = batched_generate(prompts, cache)
+
     print(f"Prompt: {prompts[0]}")
     print(f"Cache size: {cache_size}")
     print(f"Generated text: {outputs[0]}")
