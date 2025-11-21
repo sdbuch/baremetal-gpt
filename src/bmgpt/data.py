@@ -1,13 +1,18 @@
 import itertools as it
 from enum import Enum
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Callable, Iterator
 
 import jax
 import jax.numpy as jnp
+from jax import Array
 from jax.sharding import Mesh, NamedSharding
 
 from bmgpt.config import Config, DatasetConfig, DatasetName, SplitType
+
+##################################
+##           Helpers
+##################################
 
 
 def dataset_dataloader_factory(config: DatasetConfig):
@@ -23,6 +28,14 @@ def dataset_dataloader_factory(config: DatasetConfig):
 
 def get_range_iterable(config: DatasetConfig):
     return range(config.epochs_to_loop) if config.epochs_to_loop >= 0 else it.count()
+
+
+##################################
+##           APIs/Types
+##################################
+
+DataloaderOutputType = Iterator[tuple[Array, Array]]
+DataloaderType = Callable[[Any, DatasetConfig, Array], DataloaderOutputType]
 
 
 ##################################
@@ -55,7 +68,7 @@ def make_number_staircase_data(config: DatasetConfig):
             return Xdev, jnp.array(0)
 
 
-def split_data(data: jax.Array, train_fraction: float, dev_fraction: float):
+def split_data(data: Array, train_fraction: float, dev_fraction: float):
     num_data = len(data)
     Xtr = data[: int(train_fraction * num_data)]
     Xdev = data[
@@ -75,8 +88,8 @@ def split_data(data: jax.Array, train_fraction: float, dev_fraction: float):
 # - Random sampling without replacement to draw batches (consumes key)
 # - Targets are the next token (expect data to be num_data x (T+1))
 def dataloader_with_replacement(
-    key, config: DatasetConfig, data: tuple[jax.Array, jax.Array]
-) -> Iterator[tuple[jax.Array, jax.Array]]:
+    key, config: DatasetConfig, data: tuple[Array, Array]
+) -> DataloaderOutputType:
     inputs, _ = data
     num_data = len(inputs)
     key = jax.random.fold_in(key, jax.process_index())
@@ -93,8 +106,8 @@ def dataloader_with_replacement(
 # - Random sampling without replacement to draw batches (consumes key)
 # - "drop_last" behavior (batches are always the same size, even last batch of epoch)
 def dataloader_without_replacement(
-    key, config: DatasetConfig, data: tuple[jax.Array, jax.Array]
-) -> Iterator[tuple[jax.Array, jax.Array]]:
+    key, config: DatasetConfig, data: tuple[Array, Array]
+) -> DataloaderOutputType:
     inputs, labels = data
     inputs = inputs[
         : (len(inputs) // config.global_batch_size) * config.global_batch_size
@@ -122,8 +135,8 @@ def dataloader_without_replacement(
 
 # Helper to map a dataloader with make_array_from_process_local_data
 def get_dataset_on_device(
-    config: Config, dataloader: Iterator[tuple[jax.Array, jax.Array]], mesh: Mesh
-) -> Iterator[tuple[jax.Array, jax.Array]]:
+    config: Config, dataloader: DataloaderOutputType, mesh: Mesh
+) -> DataloaderOutputType:
     return map(
         lambda batch: jax.make_array_from_process_local_data(
             NamedSharding(mesh, jax.P(*config.sharding.data)), batch

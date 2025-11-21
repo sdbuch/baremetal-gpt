@@ -12,8 +12,8 @@ experiment:
         name: NUMBER_STAIRCASE
         path: ""
         split: TRAIN
-        seq_len: 256
-        global_batch_size: 128
+        seq_len: 1
+        global_batch_size: 16
       evaluator: AUTOREGRESSIVE_ROLLOUTS
 
 model:
