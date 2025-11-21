@@ -102,7 +102,6 @@ def main(config: Config):
     prev_metrics = None
     with Logger(config) as logger:
         for step, batch in enumerate(batch_iter):
-            batch = next(batch_iter)
             with jax.set_mesh(mesh):
                 cur_metrics, train_state = train_step(config, batch, train_state)
             log_metrics, prev_metrics = prev_metrics, cur_metrics
