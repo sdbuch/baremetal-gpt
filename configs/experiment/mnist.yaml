@@ -3,7 +3,8 @@
 defaults:
   - /dataset/mnist@training_dataset
 
-epochs_to_loop: 10
+training_dataset:
+  epochs_to_loop: 10
 
 eval_list:
   - dataset:
