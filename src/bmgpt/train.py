@@ -40,7 +40,7 @@ def init_train_state(key, config: Config) -> TrainState:
 @hydra.main(
     version_base=None,
     config_path=str(Path("configs").absolute().resolve()),
-    config_name="config",
+    config_name="base_config",
 )
 def main(config: Config):
     # Config
