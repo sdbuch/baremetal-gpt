@@ -176,7 +176,6 @@ class Config:
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     inference: InferenceConfig = field(default_factory=InferenceConfig)
-    evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
     sharding: ShardingConfig = field(default_factory=ShardingConfig)
 
 
