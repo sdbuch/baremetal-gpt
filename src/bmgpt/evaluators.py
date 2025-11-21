@@ -20,6 +20,9 @@ def autoregressive_rollouts(
     cache = init_kv_cache(config)
     cache_size = 0
 
+    print(prompts.shape)
+    print(cache.shape)
+
     @jax.vmap
     def batched_generate(prompt, cache):
         return generate(config, key, params, prompt, cache, cache_size)
