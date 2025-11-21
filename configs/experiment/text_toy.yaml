@@ -1,7 +1,7 @@
 # @package _global_
 
 defaults:
-  - /dataset/staircase@training_dataset
+  - /dataset/staircase@train_dataset
   # - /dataset/staircase@eval_list.0.dataset # https://github.com/facebookresearch/hydra/issues/1389
 
 eval_list:

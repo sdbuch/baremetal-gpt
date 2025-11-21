@@ -1,25 +1,28 @@
 # @package _global_
 
 defaults:
-  - /dataset/mnist@training_dataset
+  - /dataset/mnist@train_dataset
 
-training_dataset:
+train_dataset:
   epochs_to_loop: 10
+  path: "data/mnist/patch_2x2"
+  split: TRAIN
+  seq_len: 196  # 2x2 patches
 
 eval_list:
   - dataset:
       name: MNIST
-      path: "data/mnist/patch_4x4"
+      path: "data/mnist/patch_2x2"
       split: TEST
-      seq_len: 49  # 4x4 patches
+      seq_len: 196
       global_batch_size: 400
       epochs_to_loop: 1
     evaluator: ACCURACY
   - dataset:
       name: MNIST
-      path: "data/mnist/patch_4x4"
+      path: "data/mnist/patch_2x2"
       split: TRAIN
-      seq_len: 49  # 4x4 patches
+      seq_len: 196
       global_batch_size: 400
       epochs_to_loop: 1
     evaluator: ACCURACY
@@ -27,7 +30,7 @@ eval_list:
 model:
   transformer_type: CONTINUOUS
   is_causal: False  # use full attention
-  num_vocab: 16  # 4x4 patches
+  num_vocab: 4  # 2x2 patches
   num_classes: 10
 
 optimizer:

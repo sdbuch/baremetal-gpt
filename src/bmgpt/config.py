@@ -167,7 +167,7 @@ class Config:
     project_name: str = "bmgpt-debug"
     run_name: str = ""
 
-    training_dataset: DatasetConfig = MISSING
+    train_dataset: DatasetConfig = MISSING
     eval_list: list[EvaluationConfig] = MISSING
 
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
@@ -203,7 +203,7 @@ def config_post_init(config: Config):
     assert config.model.d_head % 2 == 0, (
         "Head dimension needs to be divisible by 2 for RoPE"
     )
-    assert config.training_dataset.global_batch_size % jax.process_count() == 0 and all(
+    assert config.train_dataset.global_batch_size % jax.process_count() == 0 and all(
         eval.dataset.global_batch_size % jax.process_count() == 0
         for eval in config.eval_list
     ), "Number of hosts needs to divide the global batch size for all data"
