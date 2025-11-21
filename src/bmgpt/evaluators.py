@@ -75,8 +75,8 @@ def calculate_metric_on_minibatches(
         with jax.set_mesh(mesh):
             batch_metric = metric(config, batch, params, cache)
         log_metric, prev_metric = prev_metric, batch_metric
-        if log_metric:
-            if not buffer:
+        if log_metric is not None:
+            if buffer is not None:
                 buffer = log_metric
             else:
                 buffer += log_metric
