@@ -3,10 +3,11 @@
 from functools import partial
 
 import jax
+import jax.numpy as jnp
 
 from bmgpt.config import Config, EvaluationConfig, EvaluatorType
 from bmgpt.data import DataloaderOutputType
-from bmgpt.model import Transformer, init_kv_cache
+from bmgpt.model import Transformer, _transformer, init_kv_cache
 from bmgpt.sample import generate
 
 
@@ -19,7 +20,11 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
                 global_batch_size=evaluation_config.dataset.global_batch_size,
             )
         case EvaluatorType.ACCURACY:
-            return None
+            return partial(
+                calculate_metric_on_minibatches,
+                metric=accuracy,
+                global_batch_size=evaluation_config.dataset.global_batch_size,
+            )
         case EvaluatorType.PERPLEXITY:
             return None
         case EvaluatorType.NLL:
@@ -51,11 +56,36 @@ def autoregressive_rollouts(
     return outputs
 
 
-def accuracy(
+def calculate_metric_on_minibatches(
     config: Config,
     key,
     mesh,
     params: Transformer,
     batch_iter: DataloaderOutputType,
+    metric,
+    global_batch_size: int,
 ):
-    pass
+    prev_metric = None
+    buffer = None
+    num_samples_processed = 0
+    with jax.set_mesh(mesh):
+        cache = init_kv_cache(config, global_batch_size)
+    for batch in batch_iter:
+        batch = next(batch_iter)
+        with jax.set_mesh(mesh):
+            batch_metric = metric(config, batch, params, cache)
+        log_metric, prev_metric = prev_metric, batch_metric
+        if log_metric:
+            if not buffer:
+                buffer = log_metric
+            else:
+                buffer += log_metric
+        num_samples_processed += len(batch)
+    return buffer.sum() / num_samples_processed if buffer else None
+
+
+def accuracy(config: Config, batch, params: Transformer, cache):
+    inputs, targets = batch
+    logits, _ = jax.vmap(partial(_transformer, config, params))(inputs, cache)
+    preds = logits.argmax(axis=-1)
+    return (preds == targets).astype(jnp.int32)
