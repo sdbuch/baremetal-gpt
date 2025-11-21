@@ -167,7 +167,8 @@ def _embedding_continuous(config: Config, params: EmbeddingContinuous, seq: jax.
     # seq is s x d_in
     emb_tokens = seq @ params.w_emb
     emb_with_regs = jnp.concatenate((params.registers, emb_tokens), axis=0)
-    emb = emb_with_regs + params.w_pos
+    effective_seq_len = emb_with_regs.shape[0]
+    emb = emb_with_regs + params.w_pos[:effective_seq_len]
     return emb
 
 
@@ -273,7 +274,7 @@ def _transformer(
 def init_embedding_discrete(config: Config, key) -> EmbeddingDiscrete:
     emb = config.model.param_std * jax.random.normal(
         key,
-        (config.dataset.num_vocab, config.model.d_model),
+        (config.model.num_vocab, config.model.d_model),
         config.model.param_dtype.value,
         out_sharding=jax.P(*([None] + config.sharding.res_stream)),
     )
@@ -284,7 +285,7 @@ def init_embedding_continuous(config: Config, key) -> EmbeddingContinuous:
     key_emb, key_pos, key_reg = jax.random.split(key, 3)
     w_emb = config.model.param_std * jax.random.normal(
         key_emb,
-        (config.dataset.num_vocab, config.model.d_model),
+        (config.model.num_vocab, config.model.d_model),
         config.model.param_dtype.value,
         out_sharding=jax.P(*([None] + config.sharding.res_stream)),
     )
@@ -296,7 +297,7 @@ def init_embedding_continuous(config: Config, key) -> EmbeddingContinuous:
     )
     w_pos = config.model.param_std * jax.random.normal(
         key_pos,
-        (config.model.num_registers + config.dataset.seq_len, config.model.d_model),
+        (config.model.num_registers + config.model.max_seq_len, config.model.d_model),
         config.model.param_dtype.value,
         out_sharding=jax.P(*([None] + config.sharding.res_stream)),
     )
@@ -306,7 +307,7 @@ def init_embedding_continuous(config: Config, key) -> EmbeddingContinuous:
 def init_lm_head(config: Config, key) -> LMHead:
     unemb = config.model.param_std * jax.random.normal(
         key,
-        (config.model.d_model, config.dataset.num_vocab),
+        (config.model.d_model, config.model.num_vocab),
         config.model.param_dtype.value,
         out_sharding=jax.P(*config.sharding.res_stream),
     )
@@ -316,7 +317,7 @@ def init_lm_head(config: Config, key) -> LMHead:
 def init_classification_head(config: Config, key) -> ClassificationHead:
     unemb = config.model.param_std * jax.random.normal(
         key,
-        (config.model.d_model, config.dataset.num_classes),
+        (config.model.d_model, config.model.num_classes),
         config.model.param_dtype.value,
         out_sharding=jax.P(*config.sharding.res_stream),
     )
@@ -410,7 +411,7 @@ def init_model(key, config: Config) -> Transformer:
 
 
 # TODO: update sharding if attention sharding is modified
-def init_kv_cache(config: Config):
+def init_kv_cache(config: Config, batch_size: int):
     if not config.sharding.data:
         sharding_batch_layer = [None, None]
     else:
@@ -418,7 +419,7 @@ def init_kv_cache(config: Config):
     sharding = jax.P(*(sharding_batch_layer + config.sharding.att_qkv))
     return jnp.zeros(
         (
-            config.dataset.global_batch_size,
+            batch_size,
             config.model.num_layers,
             2,
             config.model.max_seq_len,

@@ -1,4 +1,5 @@
 import copy
+import math
 from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -9,10 +10,12 @@ import jax.numpy as jnp
 
 from bmgpt.config import Config, config_post_init, mesh_from_config, register_configs
 from bmgpt.data import (
+    SplitEnum,
     dataset_dataloader_factory,
     get_dataset_on_device,
+    get_distributed_batch_iter,
 )
-from bmgpt.evaluators import autoregressive_rollouts
+from bmgpt.evaluators import evaluator_factory
 from bmgpt.loggers import logger_factory
 from bmgpt.model import Transformer, _transformer, init_kv_cache, init_model, model_spec
 from bmgpt.optimizers import (
@@ -20,7 +23,6 @@ from bmgpt.optimizers import (
     init_adam_state,
     opt_update_factory,
 )
-from bmgpt.sample import generate
 
 register_configs()
 
@@ -36,7 +38,7 @@ class TrainState(NamedTuple):
 def init_train_state(key, config: Config) -> TrainState:
     model_params = init_model(key, config)
     adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
-    cache = init_kv_cache(config)
+    cache = init_kv_cache(config, config.experiment.training_dataset.global_batch_size)
     return TrainState(params=model_params, opt_state=adam_state, kv_cache=cache)
 
 
@@ -51,22 +53,27 @@ def main(config: Config):
     config_post_init(config)
     mesh = mesh_from_config(config)
     Logger = logger_factory(config.experiment.logger_type)
-    # TODO: Expose these somehow, parameter groups?
-    config_sampling = copy.deepcopy(config)
-    config_sampling.dataset.global_batch_size = 1
-    config_sampling.sharding.data = []
 
     # Randomness
     key = jax.random.key(config.experiment.seed)
-    key_params, key_data, key_sampling = jax.random.split(key, 3)
+    key_model, key_training, key_eval = jax.random.split(key, 3)
 
     # Data
-    data, dataloader = dataset_dataloader_factory(config)
-    batch_iter = get_dataset_on_device(config, dataloader(key_data, config, data), mesh)
+    batch_iter = get_distributed_batch_iter(
+        config, config.experiment.training_dataset, key_training, mesh
+    )
+
+    # config_sampling = copy.deepcopy(config)
+    # config_sampling.dataset.global_batch_size = math.prod(config.sharding.mesh_shape)
+    # config_sampling.dataset.seq_len = 1
+    # prompts, dataloader_prompts = dataset_dataloader_factory(config, SplitEnum.TRAIN)
+    # batch_iter_rollouts = get_dataset_on_device(
+    #     config, dataloader_prompts(key_training, config_sampling, prompts), mesh
+    # )
 
     # Initialize state, configure optimization
     with jax.set_mesh(mesh):
-        train_state = init_train_state(key_params, config)
+        train_state = init_train_state(key_model, config)
     spec = model_spec(train_state.params)
     opt_update = opt_update_factory(config.optimizer.type)
     weight_decay_mask = jax.tree.map(lambda x, s: bool(s), train_state.params, spec)
@@ -116,13 +123,17 @@ def main(config: Config):
                 log_metrics |= {"step": step}
                 logger.log(log_metrics)
 
-        # Evaluate
-        # TODO: currently just samples 1 rollout
+        # Perform evaluation
         with jax.set_mesh(mesh):
-            prompt = jnp.array(((1,),))
-            outputs = autoregressive_rollouts(
-                config_sampling, key_sampling, train_state.params, prompt
-            )
+            for evaluation in config.experiment.eval_list:
+                key_eval, key_eval_d, key_eval_e = jax.random.split(key_eval, 3)
+                batch_iter_eval = get_distributed_batch_iter(
+                    config, evaluation.dataset, key_eval_d, mesh
+                )
+                evaluation_fn = evaluator_factory(evaluation)
+                metrics = evaluation_fn(
+                    config, key_eval_e, train_state.params, batch_iter_eval
+                )
 
 
 if __name__ == "__main__":

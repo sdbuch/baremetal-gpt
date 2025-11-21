@@ -4,20 +4,35 @@ from functools import partial
 
 import jax
 
-from bmgpt.config import Config
+from bmgpt.config import Config, EvaluationConfig, EvaluatorType
 from bmgpt.model import Transformer, init_kv_cache
 from bmgpt.sample import generate
 
 
+def evaluator_factory(evaluation_config: EvaluationConfig):
+    """Returns the function to call the eval, dataloader for the eval"""
+    match evaluation_config.evaluator:
+        case EvaluatorType.AUTOREGRESSIVE_ROLLOUTS:
+            return partial(
+                autoregressive_rollouts,
+                global_batch_size=evaluation_config.dataset.global_batch_size,
+            )
+        case EvaluatorType.ACCURACY:
+            return None
+        case EvaluatorType.PERPLEXITY:
+            return None
+        case EvaluatorType.NLL:
+            return None
+
+
 def autoregressive_rollouts(
-    config: Config,
-    key,
-    params: Transformer,
-    prompts: jax.Array,
+    config: Config, key, params: Transformer, batch_iter, global_batch_size: int
 ):
     """prompts should have a leading batch axis"""
-    cache = init_kv_cache(config)
+    cache = init_kv_cache(config, global_batch_size)
     cache_size = 0
+
+    prompts = next(batch_iter)
 
     @jax.vmap
     def batched_generate(prompt, cache):
