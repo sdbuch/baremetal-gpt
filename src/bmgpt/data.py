@@ -137,6 +137,6 @@ def get_distributed_batch_iter(
     config: Config, dataset_config: DatasetConfig, key, mesh
 ):
     data, dataloader = dataset_dataloader_factory(dataset_config)
-    print(data[0].sharding.is_fully_addressable)
-    print(data[0].sharding.is_fully_replicated)
+    print(jax.process_index(), data[0].sharding.is_fully_addressable)
+    print(jax.process_index(), data[0].sharding.is_fully_replicated)
     return get_dataset_on_device(config, dataloader(key, dataset_config, data), mesh)
