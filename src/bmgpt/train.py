@@ -85,8 +85,7 @@ def main(config: Config):
     )
     # Transpose the output tree to get update tree and state tree
     update, opt_state = map(
-      lambda i: jax.tree.map(lambda x, y: y[i], grad, update__opt_state),
-      range(2),
+      lambda i: jax.tree.map(lambda x, y: y[i], grad, update__opt_state), range(2)
     )
     params = jax.tree.map(lambda x, y: x + y, train_state.params, update)
     new_state = TrainState(
