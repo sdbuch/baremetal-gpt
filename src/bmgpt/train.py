@@ -119,7 +119,7 @@ def main(config: Config):
       evaluation_fn = evaluator_factory(evaluation)
       metrics = evaluation_fn(config, key_e, mesh, train_state.params, batch_iter_eval)
       logger.log(metrics)
-    jax.tree.map(lambda x: x.block_until_read(), metrics)
+    jax.tree.map(lambda x: x.block_until_ready(), metrics)
 
   jax.profiler.stop_trace()
 
