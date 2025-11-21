@@ -36,6 +36,7 @@ def autoregressive_rollouts(
 ):
     """prompts should have a leading batch axis"""
     prompts, _ = next(batch_iter)
+    cache_size = 0
 
     @jax.vmap
     def batched_generate(prompt: jax.Array, cache):
@@ -43,10 +44,8 @@ def autoregressive_rollouts(
 
     with jax.set_mesh(mesh):
         cache = init_kv_cache(config, global_batch_size)
-        cache_size = 0
         outputs, cache, cache_size = batched_generate(prompts, cache)
 
     print(f"Prompt: {prompts.addressable_shards[0].data}")
-    print(f"Cache size: {cache_size}")
     print(f"Generated text: {outputs.addressable_shards[0].data}")
     return outputs
