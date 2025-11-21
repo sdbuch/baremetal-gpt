@@ -9,7 +9,7 @@ eval_list:
       path: "data/mnist/patch_4x4"
       split: TEST
       seq_len: 49  # 4x4 patches
-      global_batch_size: 2500
+      global_batch_size: 400
       epochs_to_loop: 1
     evaluator: ACCURACY
 
