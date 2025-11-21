@@ -121,7 +121,7 @@ def dataloader_without_replacement(
         inputs, labels = inputs[perm], labels[perm]
         for step in range(num_data // config.global_batch_size):
             offset = jax.process_index() * num_data // jax.process_count()
-            index = step + offset
+            index = step * local_batch_size + offset
             yield (
                 inputs.at[index : index + local_batch_size].get(),
                 labels.at[index : index + local_batch_size].get(),
