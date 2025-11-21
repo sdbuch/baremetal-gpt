@@ -58,14 +58,6 @@ def main(config: Config):
         config, config.experiment.training_dataset, key_training, mesh
     )
 
-    # config_sampling = copy.deepcopy(config)
-    # config_sampling.dataset.global_batch_size = math.prod(config.sharding.mesh_shape)
-    # config_sampling.dataset.seq_len = 1
-    # prompts, dataloader_prompts = dataset_dataloader_factory(config, SplitEnum.TRAIN)
-    # batch_iter_rollouts = get_dataset_on_device(
-    #     config, dataloader_prompts(key_training, config_sampling, prompts), mesh
-    # )
-
     # Initialize state, configure optimization
     with jax.set_mesh(mesh):
         train_state = init_train_state(key_model, config)
