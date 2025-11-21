@@ -76,7 +76,7 @@ def calculate_metric_on_minibatches(
             batch_metric = metric(config, batch, params, cache)
         log_metric, prev_metric = prev_metric, batch_metric
         if log_metric is not None:
-            if buffer is not None:
+            if buffer is None:
                 buffer = log_metric
             else:
                 buffer += log_metric
