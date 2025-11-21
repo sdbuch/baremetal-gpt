@@ -83,18 +83,6 @@ class EvaluationConfig:
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
-class ExperimentConfig:
-    """Experiment orchestration params"""
-
-    seed: int = 1337
-    logger_type: LoggerType = LoggerType.WANDB
-    project_name: str = "bmgpt-debug"
-    run_name: str = ""
-    training_dataset: DatasetConfig = MISSING
-    eval_list: list[EvaluationConfig] = MISSING
-
-
-@dataclass(kw_only=True, unsafe_hash=True)
 class OptimizerConfig:
     """Optimizer params"""
 
@@ -172,7 +160,16 @@ class ShardingConfig:
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class Config:
-    experiment: ExperimentConfig = field(default_factory=ExperimentConfig)
+    """Overall config class, containing top-level orchestration parameters"""
+
+    seed: int = 1337
+    logger_type: LoggerType = LoggerType.WANDB
+    project_name: str = "bmgpt-debug"
+    run_name: str = ""
+
+    training_dataset: DatasetConfig = MISSING
+    eval_list: list[EvaluationConfig] = MISSING
+
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     inference: InferenceConfig = field(default_factory=InferenceConfig)
@@ -181,7 +178,6 @@ class Config:
 
 def register_configs():
     cs = ConfigStore.instance()
-    cs.store(group="experiment", name="base_experiment", node=ExperimentConfig)
     cs.store(group="optimizer", name="base_optimizer", node=OptimizerConfig)
     cs.store(group="model", name="base_model", node=ModelConfig)
     cs.store(group="inference", name="base_inference", node=InferenceConfig)
@@ -208,9 +204,9 @@ def config_post_init(config: Config):
         "Head dimension needs to be divisible by 2 for RoPE"
     )
     assert (
-        config.experiment.training_dataset.global_batch_size % jax.process_count() == 0
+        config.training_dataset.global_batch_size % jax.process_count() == 0
         and all(
             eval.dataset.global_batch_size % jax.process_count() == 0
-            for eval in config.experiment.eval_list
+            for eval in config.eval_list
         )
     ), "Number of hosts needs to divide the global batch size for all data"

@@ -411,7 +411,7 @@ def init_model(key, config: Config) -> Transformer:
 
 
 # TODO: update sharding if attention sharding is modified
-def init_kv_cache(config: Config, batch_size: int):
+def init_kv_cache(config: Config, global_batch_size: int):
     if not config.sharding.data:
         sharding_batch_layer = [None, None]
     else:
@@ -419,7 +419,7 @@ def init_kv_cache(config: Config, batch_size: int):
     sharding = jax.P(*(sharding_batch_layer + config.sharding.att_qkv))
     return jnp.zeros(
         (
-            batch_size,
+            global_batch_size,
             config.model.num_layers,
             2,
             config.model.max_seq_len,

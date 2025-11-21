@@ -25,8 +25,8 @@ def get_run_name(base: str) -> str:
 
 class Logger:
     def __init__(self, config: Config):
-        self.project_name = config.experiment.project_name
-        self.run_name = get_run_name(config.experiment.run_name)
+        self.project_name = config.project_name
+        self.run_name = get_run_name(config.run_name)
         if isinstance(config, DictConfig):
             config_dict = OmegaConf.to_container(config, resolve=True)
         else:

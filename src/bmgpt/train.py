@@ -33,7 +33,7 @@ class TrainState(NamedTuple):
 def init_train_state(key, config: Config) -> TrainState:
     model_params = init_model(key, config)
     adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
-    cache = init_kv_cache(config, config.experiment.training_dataset.global_batch_size)
+    cache = init_kv_cache(config, config.training_dataset.global_batch_size)
     return TrainState(params=model_params, opt_state=adam_state, kv_cache=cache)
 
 
@@ -47,15 +47,15 @@ def main(config: Config):
     jax.distributed.initialize()
     config_post_init(config)
     mesh = mesh_from_config(config)
-    Logger = logger_factory(config.experiment.logger_type)
+    Logger = logger_factory(config.logger_type)
 
     # Randomness
-    key = jax.random.key(config.experiment.seed)
+    key = jax.random.key(config.seed)
     key_model, key_training, key_eval = jax.random.split(key, 3)
 
     # Data
     batch_iter = get_distributed_batch_iter(
-        config, config.experiment.training_dataset, key_training, mesh
+        config, config.training_dataset, key_training, mesh
     )
 
     # Initialize state, configure optimization
@@ -111,7 +111,7 @@ def main(config: Config):
                 logger.log(log_metrics)
 
         # Run evals
-        for evaluation in config.experiment.eval_list:
+        for evaluation in config.eval_list:
             key_eval, key_d, key_e = jax.random.split(key_eval, 3)
             batch_iter_eval = get_distributed_batch_iter(
                 config, evaluation.dataset, key_d, mesh
