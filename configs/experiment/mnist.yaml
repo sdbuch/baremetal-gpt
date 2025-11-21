@@ -41,6 +41,7 @@ model:
   d_model: 64
   d_head: 8
   mlp_factor: 256
+  param_dtype: FLOAT32
 
 
 optimizer:
