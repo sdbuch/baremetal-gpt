@@ -10,6 +10,7 @@ eval_list:
       split: TEST
       seq_len: 49  # 4x4 patches
       global_batch_size: 2500
+      epochs_to_loop: 1
     evaluator: ACCURACY
 
 model:
