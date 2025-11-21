@@ -1,0 +1,5 @@
+name: NUMBER_STAIRCASE
+path: ""
+split: TRAIN
+seq_len: 256
+global_batch_size: 128

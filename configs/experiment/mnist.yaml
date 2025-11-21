@@ -1,0 +1,17 @@
+# @package _global_
+
+experiment:
+  training_dataset:
+    name: MNIST
+    path: "data/mnist/patch_4x4"
+    seq_len: 49  # 4x4 patches
+    global_batch_size: 128
+
+model:
+  transformer_type: CONTINUOUS
+  is_causal: False  # use full attention
+  num_vocab: 16  # 4x4 patches
+  num_classes: 10
+
+evaluation:
+  eval_list: [CLASSIFICATION_ACC]

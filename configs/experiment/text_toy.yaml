@@ -1,17 +1,13 @@
 # @package _global_
 
+defaults:
+  - /dataset/staircase@experiment.training_dataset
+  - /dataset/staircase@experiment.eval_list.0.dataset
+
 experiment:
-  training_dataset:
-    name: NUMBER_STAIRCASE
-    path: ""
-    split: TRAIN
-    seq_len: 256
-    global_batch_size: 128
   eval_list:
     - dataset:
-        name: NUMBER_STAIRCASE
-        path: ""
-        split: TRAIN
+        split: TEST
         seq_len: 1
         global_batch_size: 16
       evaluator: AUTOREGRESSIVE_ROLLOUTS
