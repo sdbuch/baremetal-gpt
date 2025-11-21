@@ -95,7 +95,7 @@ def main(config: Config):
             params=params, opt_state=opt_state, kv_cache=train_state.kv_cache
         )
 
-        metrics = {"loss": loss, "grad_norm": global_grad_norm}
+        metrics = {"batch_loss": loss, "grad_norm": global_grad_norm}
         return metrics, new_state
 
     # Simple training loop
