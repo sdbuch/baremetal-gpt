@@ -9,12 +9,7 @@ import jax
 import jax.numpy as jnp
 
 from bmgpt.config import Config, config_post_init, mesh_from_config, register_configs
-from bmgpt.data import (
-    SplitEnum,
-    dataset_dataloader_factory,
-    get_dataset_on_device,
-    get_distributed_batch_iter,
-)
+from bmgpt.data import get_distributed_batch_iter
 from bmgpt.evaluators import evaluator_factory
 from bmgpt.loggers import logger_factory
 from bmgpt.model import Transformer, _transformer, init_kv_cache, init_model, model_spec
