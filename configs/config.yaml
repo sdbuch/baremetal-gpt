@@ -8,4 +8,3 @@ hydra:
     cpus_per_task: 1
     gpus_per_node: 0
     tasks_per_node: 1
-    array_parallelism: 1
