@@ -150,15 +150,19 @@ def _attn(
 
 class EmbeddingDiscrete(NamedTuple):
     w: Array
+    bias: Array
 
 
 def _embedding_discrete(config: Config, params: EmbeddingDiscrete, tokens: jax.Array):
     emb = params.w.at[tokens].get(out_sharding=jax.P(*config.sharding.res_stream))
+    if config.model.use_bias_embeddings:
+        emb += params.bias
     return emb
 
 
 class EmbeddingContinuous(NamedTuple):
     w_emb: Array
+    bias: Array
     w_pos: Array
     registers: Array
 
@@ -166,6 +170,8 @@ class EmbeddingContinuous(NamedTuple):
 def _embedding_continuous(config: Config, params: EmbeddingContinuous, seq: jax.Array):
     # seq is s x d_in
     emb_tokens = seq @ params.w_emb
+    if config.model.use_bias_embeddings:
+        emb_tokens += params.bias
     emb_with_regs = jnp.concatenate((params.registers, emb_tokens), axis=0)
     effective_seq_len = emb_with_regs.shape[0]
     emb = emb_with_regs + params.w_pos[:effective_seq_len]
@@ -174,19 +180,25 @@ def _embedding_continuous(config: Config, params: EmbeddingContinuous, seq: jax.
 
 class LMHead(NamedTuple):
     w: Array
+    bias: Array
 
 
 def _lm_head(config: Config, params: LMHead, x: Array):
     logits = jnp.matmul(x, params.w)
+    if config.model.use_bias_embeddings:
+        logits += params.bias
     return logits
 
 
 class ClassificationHead(NamedTuple):
     w: Array
+    bias: Array
 
 
 def _classification_head(config: Config, params: ClassificationHead, x: Array):
     logits = jnp.matmul(x[0], params.w)
+    if config.model.use_bias_embeddings:
+        logits += params.bias
     return logits
 
 
@@ -278,7 +290,12 @@ def init_embedding_discrete(config: Config, key) -> EmbeddingDiscrete:
         config.model.param_dtype.value,
         out_sharding=jax.P(*([None] + config.sharding.res_stream)),
     )
-    return EmbeddingDiscrete(w=emb)
+    bias = jnp.zeros(
+        (config.model.d_model,),
+        config.model.param_dtype.value,
+        out_sharding=jax.P(*config.sharding.res_stream),
+    )
+    return EmbeddingDiscrete(w=emb, bias=bias)
 
 
 def init_embedding_continuous(config: Config, key) -> EmbeddingContinuous:
@@ -301,7 +318,12 @@ def init_embedding_continuous(config: Config, key) -> EmbeddingContinuous:
         config.model.param_dtype.value,
         out_sharding=jax.P(*([None] + config.sharding.res_stream)),
     )
-    return EmbeddingContinuous(w_emb=w_emb, w_pos=w_pos, registers=w_reg)
+    bias = jnp.zeros(
+        (config.model.d_model,),
+        config.model.param_dtype.value,
+        out_sharding=jax.P(*config.sharding.res_stream),
+    )
+    return EmbeddingContinuous(w_emb=w_emb, w_pos=w_pos, registers=w_reg, bias=bias)
 
 
 def init_lm_head(config: Config, key) -> LMHead:
@@ -311,7 +333,12 @@ def init_lm_head(config: Config, key) -> LMHead:
         config.model.param_dtype.value,
         out_sharding=jax.P(*config.sharding.res_stream),
     )
-    return LMHead(w=unemb)
+    bias = jnp.zeros(
+        (config.model.num_vocab,),
+        config.model.param_dtype.value,
+        out_sharding=jax.P(*config.sharding.res_stream),
+    )
+    return LMHead(w=unemb, bias=bias)
 
 
 def init_classification_head(config: Config, key) -> ClassificationHead:
@@ -321,7 +348,12 @@ def init_classification_head(config: Config, key) -> ClassificationHead:
         config.model.param_dtype.value,
         out_sharding=jax.P(*config.sharding.res_stream),
     )
-    return ClassificationHead(w=unemb)
+    bias = jnp.zeros(
+        (config.model.num_classes,),
+        config.model.param_dtype.value,
+        out_sharding=jax.P(*config.sharding.res_stream),
+    )
+    return ClassificationHead(w=unemb, bias=bias)
 
 
 def init_mlp(config: Config, key) -> Mlp:
