@@ -71,7 +71,6 @@ def calculate_metric_on_minibatches(
     with jax.set_mesh(mesh):
         cache = init_kv_cache(config, global_batch_size)
     for batch in batch_iter:
-        batch = next(batch_iter)
         with jax.set_mesh(mesh):
             batch_metric = metric(config, batch, params, cache)
         log_metric, prev_metric = prev_metric, batch_metric
