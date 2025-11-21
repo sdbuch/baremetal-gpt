@@ -182,7 +182,7 @@ def register_configs():
     cs.store(group="model", name="base_model", node=ModelConfig)
     cs.store(group="inference", name="base_inference", node=InferenceConfig)
     cs.store(group="sharding", name="base_sharding", node=ShardingConfig)
-    cs.store(name="config", node=Config)
+    cs.store(name="base_config", node=Config)
 
 
 def mesh_from_config(config: Config):
