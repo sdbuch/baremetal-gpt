@@ -186,7 +186,6 @@ def register_configs():
     cs.store(group="optimizer", name="base_optimizer", node=OptimizerConfig)
     cs.store(group="model", name="base_model", node=ModelConfig)
     cs.store(group="inference", name="base_inference", node=InferenceConfig)
-    cs.store(group="evaluation", name="base_evaluation", node=EvaluationConfig)
     cs.store(group="sharding", name="base_sharding", node=ShardingConfig)
     cs.store(name="config", node=Config)
 

@@ -119,13 +119,13 @@ def main(config: Config):
                 logger.log(log_metrics)
 
         # Perform evaluation
-        with jax.set_mesh(mesh):
-            for evaluation in config.experiment.eval_list:
-                key_eval, key_eval_d, key_eval_e = jax.random.split(key_eval, 3)
-                batch_iter_eval = get_distributed_batch_iter(
-                    config, evaluation.dataset, key_eval_d, mesh
-                )
-                evaluation_fn = evaluator_factory(evaluation)
+        for evaluation in config.experiment.eval_list:
+            key_eval, key_eval_d, key_eval_e = jax.random.split(key_eval, 3)
+            batch_iter_eval = get_distributed_batch_iter(
+                config, evaluation.dataset, key_eval_d, mesh
+            )
+            evaluation_fn = evaluator_factory(evaluation)
+            with jax.set_mesh(mesh):
                 metrics = evaluation_fn(
                     config, key_eval_e, train_state.params, batch_iter_eval
                 )
