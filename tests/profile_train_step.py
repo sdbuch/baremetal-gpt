@@ -73,8 +73,8 @@ def main(config: Config):
 
   # Simple training loop
   for step, batch in enumerate(batch_iter):
+    step_compiled = train_step.lower(config, batch, train_state).compile()
     with jax.set_mesh(mesh):
-      step_compiled = train_step.lower(config, batch, train_state).compile()
       jax.profiler.start_trace("/tmp/profile-train")
       cur_metrics, train_state = step_compiled(batch, train_state)
       cur_metrics['grad_norm'].block_until_ready()

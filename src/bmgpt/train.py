@@ -45,7 +45,7 @@ def init_train_state(key, config: Config) -> TrainState:
   config_name="base_config",
 )
 def main(config: Config):
-  # Launch distributed and profile
+  # Launch distributed
   jax.distributed.initialize()
   # Config
   config_post_init(config)
@@ -99,7 +99,6 @@ def main(config: Config):
     return metrics, new_state
 
   # Simple training loop
-  jax.profiler.start_trace("/tmp/profile-train")
   prev_metrics = None
   with Logger(config) as logger:
     for step, batch in enumerate(batch_iter):
@@ -111,8 +110,6 @@ def main(config: Config):
         logger.log(log_metrics)
       if step == config.optimizer.num_steps - 1:
         break
-    log_metrics["batch_loss"].block_until_ready()
-    jax.profiler.stop_trace()
 
     # Run evals
     for evaluation in config.eval_list:
