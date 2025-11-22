@@ -167,9 +167,11 @@ class Config:
   logger_type: LoggerType = LoggerType.WANDB
   project_name: str = "bmgpt-debug"
   run_name: str = ""
+  val_log_interval: int = 1000  # log validation metrics every <this many> batches
 
   train_dataset: DatasetConfig = MISSING
-  eval_list: list[EvaluationConfig] = MISSING
+  val_list: list[EvaluationConfig] = MISSING  # validation metrics
+  eval_list: list[EvaluationConfig] = MISSING  # post-training eval metrics
 
   optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
   model: ModelConfig = field(default_factory=ModelConfig)

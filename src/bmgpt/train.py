@@ -8,10 +8,16 @@ import hydra
 import jax
 import jax.numpy as jnp
 
-from bmgpt.config import Config, config_post_init, mesh_from_config, register_configs
+from bmgpt.config import (
+  Config,
+  EvaluationConfig,
+  config_post_init,
+  mesh_from_config,
+  register_configs,
+)
 from bmgpt.data import get_distributed_batch_iter
 from bmgpt.evaluators import evaluator_factory
-from bmgpt.loggers import logger_factory
+from bmgpt.loggers import Logger, logger_factory
 from bmgpt.model import (
   Transformer,
   _transformer,
@@ -60,7 +66,7 @@ def main(config: Config):
 
   # Randomness
   key = jax.random.key(config.seed)
-  key_model, key_train, key_eval = jax.random.split(key, 3)
+  key_model, key_train, key_val, key_eval = jax.random.split(key, 4)
 
   # Data
   batch_iter = get_distributed_batch_iter(config, config.train_dataset, key_train, mesh)
@@ -104,26 +110,43 @@ def main(config: Config):
     metrics = {"batch_loss": loss, "grad_norm": global_grad_norm}
     return metrics, new_state
 
-  # Simple training loop
+  # Training loop
   with Logger(config) as logger:
     for step, batch in enumerate(batch_iter):
       with jax.set_mesh(mesh):
         metrics, train_state = train_step(config, batch, train_state)
       logger.log(metrics)
+      if (step + 1) % config.val_log_interval == 0:
+        # Calculate val metrics
+        key_val = eval_loop(
+          config, key_val, config.val_list, train_state.params, logger, mesh
+        )
       if step == config.optimizer.num_steps - 1:
         break
 
-    # Run evals
+    # Run evals (testing)
     logger.flush_buffer()
-    for evaluation in config.eval_list:
-      key_eval, key_d, key_e = jax.random.split(key_eval, 3)
-      batch_iter_eval = get_distributed_batch_iter(
-        config, evaluation.dataset, key_d, mesh
-      )
-      evaluation_fn = evaluator_factory(evaluation)
-      metrics = evaluation_fn(config, key_e, mesh, train_state.params, batch_iter_eval)
-      logger.log(metrics)
+    key_eval = eval_loop(
+      config, key_eval, config.eval_list, train_state.params, logger, mesh
+    )
     logger.flush_buffer()
+
+
+def eval_loop(
+  config: Config,
+  key,
+  eval_list: list[EvaluationConfig],
+  params: Transformer,
+  logger: Logger,
+  mesh,
+):
+  for evaluation in eval_list:
+    key, key_d, key_e = jax.random.split(key, 3)
+    batch_iter = get_distributed_batch_iter(config, evaluation.dataset, key_d, mesh)
+    evaluation_fn = evaluator_factory(evaluation)
+    metrics = evaluation_fn(config, key_e, mesh, params, batch_iter)
+    logger.log(metrics)
+  return key
 
 
 if __name__ == "__main__":

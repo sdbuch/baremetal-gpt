@@ -1,5 +1,4 @@
 import itertools as it
-from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
@@ -45,8 +44,16 @@ DataloaderType = Callable[[Any, DatasetConfig, Array], DataloaderOutputType]
 
 def load_mnist(config: DatasetConfig):
   path = Path(config.path)
-  data = jnp.load(path / ("mnist_" + config.split.value + ".npz"))
-  return jnp.array(data["images"]).astype(jnp.bfloat16), jnp.array(data["labels"])
+  if config.split.value == SplitType.VAL:
+    load_str = "test"
+    label_start_idx = 0
+  else:
+    load_str = config.split.value
+    label_start_idx = 5000
+  data = jnp.load(path / ("mnist_" + load_str + ".npz"))
+  return jnp.array(data["images"]).astype(jnp.bfloat16), jnp.array(
+    data["labels"][label_start_idx : label_start_idx + 5000]  # split test in 1/2
+  )
 
 
 def make_number_staircase_data(config: DatasetConfig):
