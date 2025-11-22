@@ -4,6 +4,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from time import sleep
 import hydra
 import jax
 import jax.numpy as jnp
@@ -152,3 +153,4 @@ def eval_loop(
 
 if __name__ == "__main__":
   main()
+  sleep(5)
