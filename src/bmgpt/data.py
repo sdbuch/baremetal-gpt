@@ -44,7 +44,7 @@ DataloaderType = Callable[[Any, DatasetConfig, Array], DataloaderOutputType]
 
 def load_mnist(config: DatasetConfig):
   path = Path(config.path)
-  if config.split.value == SplitType.VAL:
+  if config.split == SplitType.VAL:
     load_str = "test"
     label_start_idx = 0
   else:

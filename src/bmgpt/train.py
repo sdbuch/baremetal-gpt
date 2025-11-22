@@ -115,11 +115,11 @@ def main(config: Config):
     for step, batch in enumerate(batch_iter):
       with jax.set_mesh(mesh):
         metrics, train_state = train_step(config, batch, train_state)
-      logger.log(metrics)
+      logger.log(metrics | {"step": step})
       if (step + 1) % config.val_log_interval == 0:
         # Calculate val metrics
         key_val = eval_loop(
-          config, key_val, config.val_list, train_state.params, logger, mesh
+          config, key_val, config.val_list, train_state.params, logger, mesh, step
         )
       if step == config.optimizer.num_steps - 1:
         break
@@ -139,13 +139,14 @@ def eval_loop(
   params: Transformer,
   logger: Logger,
   mesh,
+  step: int,
 ):
   for evaluation in eval_list:
     key, key_d, key_e = jax.random.split(key, 3)
     batch_iter = get_distributed_batch_iter(config, evaluation.dataset, key_d, mesh)
     evaluation_fn = evaluator_factory(evaluation)
     metrics = evaluation_fn(config, key_e, mesh, params, batch_iter)
-    logger.log(metrics)
+    logger.log(metrics | {"step": step})
   return key
 
 
