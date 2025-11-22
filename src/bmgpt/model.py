@@ -212,12 +212,9 @@ def _layernorm(config: Config, params: LayerNorm, x: Array):
   # )
   # out = params.gamma * x_std.astype(config.model.param_dtype.value)
   x_std = jax.nn.standardize(x, epsilon=config.model.eps_ln)
-  print(x_std.dtype)
   out = params.gamma * x_std
-  print(out.dtype)
   if config.model.use_bias_ln:
     out += params.beta
-  print(out.dtype)
   return out
 
 
