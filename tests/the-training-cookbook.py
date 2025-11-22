@@ -52,12 +52,12 @@ class Config:
   eps_root: float = 0.0
 
   param_seed: int = 12738
-  num_layers: int = 4
-  embed_dim: int = 512
-  mlp_dim: int = 512 * 4
+  num_layers: int = 12
+  embed_dim: int = 768
+  mlp_dim: int = 768 * 4
   vocab_size: int = 2**8  # uint8 ascii encoding
-  num_heads: int = 8
-  head_dim: int = 128
+  num_heads: int = 12
+  head_dim: int = 64
   dtype: str = "bfloat16"
 
   # fsdp
