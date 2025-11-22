@@ -493,7 +493,7 @@ def model_spec(model: Transformer) -> Any:
     }
     return matrix_axes_dict.get(param_str, None)
 
-  spec = jax.tree.map_with_path(lambda p, x: _make_spec_from_str(p), model)
+  spec = jax.tree.map_with_path(lambda p, _: _make_spec_from_str(p), model)
   return spec
 
 

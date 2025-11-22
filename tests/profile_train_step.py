@@ -1,42 +1,15 @@
-import copy
-import math
 from functools import partial
 from pathlib import Path
-from typing import Any, NamedTuple
 
 import hydra
 import jax
 import jax.numpy as jnp
 
-from bmgpt.config import Config, config_post_init, mesh_from_config, register_configs
+from bmgpt.config import Config, config_post_init, mesh_from_config
 from bmgpt.data import get_distributed_batch_iter
-from bmgpt.evaluators import evaluator_factory
-from bmgpt.loggers import logger_factory
-from bmgpt.model import Transformer, _transformer, init_kv_cache, init_model, model_spec
-from bmgpt.optimizers import (
-  grad_norm_and_clip,
-  init_adam_state,
-  opt_update_factory,
-)
-
-register_configs()
-
-
-# Setup for training loop
-class TrainState(NamedTuple):
-  params: Transformer
-  opt_state: Any
-  kv_cache: jax.Array
-
-
-@jax.jit
-def init_train_state(key, config: Config) -> TrainState:
-  model_params = init_model(key, config)
-  adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
-  cache = init_kv_cache(
-    config, config.train_dataset.global_batch_size, update_cache=False
-  )
-  return TrainState(params=model_params, opt_state=adam_state, kv_cache=cache)
+from bmgpt.model import Transformer, _transformer, model_spec
+from bmgpt.optimizers import grad_norm_and_clip, opt_update_factory
+from bmgpt.train import TrainState, init_train_state
 
 
 @hydra.main(
@@ -50,7 +23,6 @@ def main(config: Config):
   # Config
   config_post_init(config)
   mesh = mesh_from_config(config)
-  Logger = logger_factory(config.logger_type)
 
   # Randomness
   key = jax.random.key(config.seed)
@@ -99,30 +71,14 @@ def main(config: Config):
     return metrics, new_state
 
   # Simple training loop
-  jax.profiler.start_trace("/tmp/profile-train")
-  prev_metrics = None
-  with Logger(config) as logger:
-    for step, batch in enumerate(batch_iter):
-      with jax.set_mesh(mesh):
-        cur_metrics, train_state = train_step(config, batch, train_state)
-      log_metrics, prev_metrics = prev_metrics, cur_metrics
-      if log_metrics:
-        log_metrics |= {"step": step}
-        logger.log(log_metrics)
-      if step == config.optimizer.num_steps - 1:
-        break
-    log_metrics["batch_loss"].block_until_ready()
-    jax.profiler.stop_trace()
-
-    # Run evals
-    for evaluation in config.eval_list:
-      key_eval, key_d, key_e = jax.random.split(key_eval, 3)
-      batch_iter_eval = get_distributed_batch_iter(
-        config, evaluation.dataset, key_d, mesh
-      )
-      evaluation_fn = evaluator_factory(evaluation)
-      metrics = evaluation_fn(config, key_e, mesh, train_state.params, batch_iter_eval)
-      logger.log(metrics)
+  for step, batch in enumerate(batch_iter):
+    with jax.set_mesh(mesh):
+      jax.profiler.start_trace("/tmp/profile-train")
+      cur_metrics, train_state = train_step(config, batch, train_state)
+      cur_metrics['grad_norm'].block_until_ready()
+      jax.profiler.stop_trace()
+    if step == config.optimizer.num_steps - 1:
+      break
 
 
 if __name__ == "__main__":
