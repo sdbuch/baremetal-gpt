@@ -111,10 +111,13 @@ def _attn(
     q, k = _apply_rope_all_heads(q), _apply_rope_all_heads(k)
 
   # Read/update/concatenate the cache
-  k_cache, v_cache = kv_cache[0], kv_cache[1]
-  k = jax.lax.dynamic_update_slice(k_cache, k, (cache_size, 0, 0))
-  v = jax.lax.dynamic_update_slice(v_cache, v, (cache_size, 0, 0))
-  kv_cache_out = jnp.concatenate((k[None], v[None]), axis=0)
+  if cache_size >= 0:
+    k_cache, v_cache = kv_cache[0], kv_cache[1]
+    k = jax.lax.dynamic_update_slice(k_cache, k, (cache_size, 0, 0))
+    v = jax.lax.dynamic_update_slice(v_cache, v, (cache_size, 0, 0))
+    kv_cache_out = jnp.concatenate((k[None], v[None]), axis=0)
+  else:
+    kv_cache_out = kv_cache
 
   # Attention computation
   t = k.shape[0]
@@ -258,7 +261,7 @@ def _transformer(
   params: Transformer,
   tokens: Array,
   cache_in: jax.Array,
-  cache_size: int = 0,
+  cache_size: int,
 ):
   _, __, _embedding, _unembedding = transformer_variant_factory(config)
   x_seq = _embedding(config, params.emb, tokens)
@@ -439,7 +442,11 @@ def init_model(key, config: Config) -> Transformer:
 
 
 # TODO: update sharding if attention sharding is modified
-def init_kv_cache(config: Config, global_batch_size: int):
+def init_kv_cache(config: Config, global_batch_size: int, update_cache: bool):
+  if not update_cache:
+    # Save memory if we aren't using the cache
+    return jnp.array(0)
+
   if not config.sharding.data:
     sharding_batch_layer = [None, None]
   else:

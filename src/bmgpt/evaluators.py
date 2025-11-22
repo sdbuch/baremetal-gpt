@@ -49,7 +49,7 @@ def autoregressive_rollouts(
     return generate(config, key, params, prompt, cache, cache_size)
 
   with jax.set_mesh(mesh):
-    cache = init_kv_cache(config, global_batch_size)
+    cache = init_kv_cache(config, global_batch_size, update_cache=True)
     outputs, cache, cache_size = batched_generate(prompts, cache)
 
   print(f"Prompt: {prompts.addressable_shards[0].data}")
@@ -71,7 +71,7 @@ def calculate_metric_on_minibatches(
   buffer = None
   num_samples_processed = 0
   with jax.set_mesh(mesh):
-    cache = init_kv_cache(config, global_batch_size)
+    cache = init_kv_cache(config, global_batch_size, update_cache=False)
   for batch in batch_iter:
     with jax.set_mesh(mesh):
       batch_metric = metric(config, batch, params, cache)
@@ -89,6 +89,8 @@ def calculate_metric_on_minibatches(
 @jax.jit
 def accuracy(config: Config, batch, params: Transformer, cache):
   inputs, targets = batch
-  logits, _ = jax.vmap(partial(_transformer, config, params))(inputs, cache)
+  logits, _ = jax.vmap(partial(_transformer, config, params, cache_size=-1))(
+    inputs, cache
+  )
   preds = logits.argmax(axis=-1)
   return (preds == targets).astype(jnp.int32)

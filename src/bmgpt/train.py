@@ -33,7 +33,9 @@ class TrainState(NamedTuple):
 def init_train_state(key, config: Config) -> TrainState:
   model_params = init_model(key, config)
   adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
-  cache = init_kv_cache(config, config.train_dataset.global_batch_size)
+  cache = init_kv_cache(
+    config, config.train_dataset.global_batch_size, update_cache=False
+  )
   return TrainState(params=model_params, opt_state=adam_state, kv_cache=cache)
 
 
@@ -69,7 +71,7 @@ def main(config: Config):
   def train_step(config: Config, batch, train_state: TrainState):
     def loss_fn(params: Transformer):
       inputs, targets = batch
-      logits, _ = jax.vmap(partial(_transformer, config, params))(
+      logits, _ = jax.vmap(partial(_transformer, config, params, cache_size=-1))(
         inputs, train_state.kv_cache
       )
       logits = logits.astype(config.model.compute_dtype.value)
