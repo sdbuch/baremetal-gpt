@@ -59,7 +59,7 @@ def load_mnist(config: DatasetConfig):
   data = jnp.load(path / ("mnist_" + load_str + ".npz"))
   inputs = jnp.array(data["images"][start : start + size]).astype(jnp.bfloat16)
   labels = jnp.array(data["labels"][start : start + size])
-  return inputs, labels
+  return inputs, labels[:, None]
 
 
 def make_number_staircase_data(config: DatasetConfig):

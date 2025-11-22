@@ -316,7 +316,7 @@ def init_classification_head(config: Config, key) -> ClassificationHead:
 
 
 def _classification_head(config: Config, params: ClassificationHead, x: Array):
-  logits = jnp.matmul(x[0], params.w)
+  logits = jnp.matmul(x[:0], params.w)
   if config.model.use_bias_embeddings:
     logits += params.bias
   return logits
