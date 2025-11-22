@@ -59,7 +59,12 @@ def init_train_state(key, config: Config) -> TrainState:
 )
 def main(config: Config):
   # Launch distributed
-  jax.distributed.initialize()
+  try:
+    jax.distributed.initialize()
+  except RuntimeError:
+    # suppress this, for use with hydra multirun
+    # see https://github.com/jax-ml/jax/issues/18237
+    pass
   # Config
   config_post_init(config)
   mesh = mesh_from_config(config)
@@ -130,8 +135,6 @@ def main(config: Config):
       config, key_eval, config.eval_list, train_state.params, logger, mesh, step
     )
 
-  jax.block_until_ready(key_eval)
-
 
 def eval_loop(
   config: Config,
@@ -155,4 +158,3 @@ def eval_loop(
 
 if __name__ == "__main__":
   main()
-  sleep(5)
