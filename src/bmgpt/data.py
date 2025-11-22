@@ -46,13 +46,15 @@ def load_mnist(config: DatasetConfig):
   path = Path(config.path)
   if config.split == SplitType.VAL:
     load_str = "test"
-    label_start_idx = 0
+    start = 0
+    size = 4000
   else:
     load_str = config.split.value
-    label_start_idx = 5000
+    start = 4000
+    size = 6000
   data = jnp.load(path / ("mnist_" + load_str + ".npz"))
   return jnp.array(data["images"]).astype(jnp.bfloat16), jnp.array(
-    data["labels"][label_start_idx : label_start_idx + 5000]  # split test in 1/2
+    data["labels"][start : start + size]  # split test in 1/2
   )
 
 
