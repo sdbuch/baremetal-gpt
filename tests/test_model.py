@@ -14,7 +14,7 @@ from bmgpt.model import (
   _precompute_rope_cossin,
   _transformer,
   init_kv_cache,
-  init_model,
+  init_transformer,
 )
 
 
@@ -34,7 +34,7 @@ def test_manual_attn_matches_jax_no_kv():
   seq = jnp.arange(256)
   with jax.set_mesh(mesh):
     null_cache = init_kv_cache(config)[0]
-    model = init_model(key, config)
+    model = init_transformer(key, config)
     out, _ = _transformer(config, model, seq, null_cache, 0)
     out_no_fa, _ = _transformer(config_no_fa, model, seq, null_cache, 0)
   # print(jnp.max(jnp.abs(out - out_no_fa)))
@@ -142,7 +142,7 @@ def test_cache_correct_predictions():
   seq = jnp.arange(seq_len)
   prefix, suffix = seq[: seq_len // 2], seq[seq_len // 2 :]
   with jax.set_mesh(mesh):
-    model = init_model(key, config)
+    model = init_transformer(key, config)
     null_cache = init_kv_cache(config)[0]
     out, _ = _transformer(config, model, seq, null_cache, 0)
 
