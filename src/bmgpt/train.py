@@ -12,7 +12,13 @@ from bmgpt.config import Config, config_post_init, mesh_from_config, register_co
 from bmgpt.data import get_distributed_batch_iter
 from bmgpt.evaluators import evaluator_factory
 from bmgpt.loggers import logger_factory
-from bmgpt.model import Transformer, _transformer, init_kv_cache, init_transformer, model_spec
+from bmgpt.model import (
+  Transformer,
+  _transformer,
+  init_kv_cache,
+  init_transformer,
+  model_spec,
+)
 from bmgpt.optimizers import (
   grad_norm_and_clip,
   init_adam_state,
@@ -99,19 +105,16 @@ def main(config: Config):
     return metrics, new_state
 
   # Simple training loop
-  prev_metrics = None
   with Logger(config) as logger:
     for step, batch in enumerate(batch_iter):
       with jax.set_mesh(mesh):
-        cur_metrics, train_state = train_step(config, batch, train_state)
-      log_metrics, prev_metrics = prev_metrics, cur_metrics
-      if log_metrics:
-        log_metrics |= {"step": step}
-        logger.log(log_metrics)
+        metrics, train_state = train_step(config, batch, train_state)
+      logger.log(metrics)
       if step == config.optimizer.num_steps - 1:
         break
 
     # Run evals
+    logger.flush_buffer()
     for evaluation in config.eval_list:
       key_eval, key_d, key_e = jax.random.split(key_eval, 3)
       batch_iter_eval = get_distributed_batch_iter(
@@ -120,6 +123,7 @@ def main(config: Config):
       evaluation_fn = evaluator_factory(evaluation)
       metrics = evaluation_fn(config, key_e, mesh, train_state.params, batch_iter_eval)
       logger.log(metrics)
+    logger.flush_buffer()
 
 
 if __name__ == "__main__":

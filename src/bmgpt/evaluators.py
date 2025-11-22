@@ -73,13 +73,14 @@ def calculate_metric_on_minibatches(
   with jax.set_mesh(mesh):
     cache = init_kv_cache(config, global_batch_size, update_cache=False)
 
-  # Process first batch
+  # Process first batch (to get on-device buffer shape)
   batch = next(batch_iter)
   with jax.set_mesh(mesh):
     batch_metric = metric(config, batch, params, cache)
   buffer = batch_metric
   num_samples_processed += len(batch[0])
 
+  # Process remaining batches
   for batch in batch_iter:
     with jax.set_mesh(mesh):
       batch_metric = metric(config, batch, params, cache)

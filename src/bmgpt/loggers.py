@@ -24,6 +24,8 @@ def get_run_name(base: str) -> str:
 
 
 class Logger:
+  """Logger base class. Implements a depth-1 buffer for device-host pipelining"""
+
   def __init__(self, config: Config):
     self.project_name = config.project_name
     self.run_name = get_run_name(config.run_name)
@@ -32,6 +34,7 @@ class Logger:
     else:
       config_dict = asdict(config)
     self.config = config_dict
+    self.prev_log_data = None
 
   def __enter__(self):
     return self
@@ -41,6 +44,15 @@ class Logger:
 
   def log(self, log_dict: dict):
     pass
+
+  def buffer(self, log_dict: dict) -> dict | None:
+    self.prev_log_data, buffered_metrics = log_dict, self.prev_log_data
+    return buffered_metrics
+
+  def flush_buffer(self):
+    if self.prev_log_data is not None:
+      self.log({})
+    self.prev_log_data = None
 
 
 class PrintLogger(Logger):
@@ -53,7 +65,10 @@ class PrintLogger(Logger):
     return super().__enter__()
 
   def log(self, log_dict: dict):
-    print(*[f"{metric}: {val}" for metric, val in log_dict.items()], sep="\t")
+    buffered_dict = self.buffer(log_dict)
+    if buffered_dict is None:
+      return
+    print(*[f"{metric}: {val}" for metric, val in buffered_dict.items()], sep="\t")
 
 
 class WandbLogger(Logger):
@@ -73,4 +88,7 @@ class WandbLogger(Logger):
 
   def log(self, log_dict: dict):
     if self.is_master:
-      wandb.log(log_dict)
+      buffered_dict = self.buffer(log_dict)
+      if buffered_dict is None:
+        return
+      wandb.log(buffered_dict)
