@@ -32,9 +32,8 @@ def main(config: Config):
   batch_iter = get_distributed_batch_iter(config, config.train_dataset, key_train, mesh)
 
   # Initialize state, configure optimization
-  init_compiled = init_train_state.lower(key_model, config).compile()
   with jax.set_mesh(mesh):
-    train_state = init_compiled(key_model)
+    train_state = init_train_state(key_model, config)
   spec = model_spec(train_state.params)
   opt_update = opt_update_factory(config.optimizer.type)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
@@ -73,10 +72,9 @@ def main(config: Config):
 
   # Simple training loop
   for step, batch in enumerate(batch_iter):
-    step_compiled = train_step.lower(config, batch, train_state).compile()
     with jax.set_mesh(mesh):
       jax.profiler.start_trace("/tmp/profile-train")
-      cur_metrics, train_state = step_compiled(batch, train_state)
+      cur_metrics, train_state = train_step(config, batch, train_state)
       cur_metrics['grad_norm'].block_until_ready()
       jax.profiler.stop_trace()
     if step == config.optimizer.num_steps - 1:
