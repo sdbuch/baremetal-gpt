@@ -126,7 +126,7 @@ def main(config: Config):
 
     # Run evals (testing)
     key_eval = eval_loop(
-      config, key_eval, config.eval_list, train_state.params, logger, mesh, 0
+      config, key_eval, config.eval_list, train_state.params, logger, mesh, step
     )
 
 
