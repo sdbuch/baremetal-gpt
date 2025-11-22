@@ -67,7 +67,7 @@ class Config:
   att_out: jax.P = jax.P(None, None, "fsdp")
   mlp_in: jax.P = jax.P("fsdp", None)
   mlp_out: jax.P = jax.P(None, "fsdp")
-  ln: jax.P = jax.P("fsdp")
+  ln: jax.P = jax.P(None)
   in_kernel: jax.P = jax.P(None, None)
   in_bias: jax.P = jax.P(None)
   out_kernel: jax.P = jax.P("fsdp", None)
