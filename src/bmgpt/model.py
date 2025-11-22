@@ -207,10 +207,12 @@ class LayerNorm(NamedTuple):
 
 
 def _layernorm(config: Config, params: LayerNorm, x: Array):
-  x_std = jax.nn.standardize(
-    x.astype(config.model.compute_dtype.value), epsilon=config.model.eps_ln
-  )
-  out = params.gamma * x_std.astype(config.model.param_dtype.value)
+  # x_std = jax.nn.standardize(
+  #   x.astype(config.model.compute_dtype.value), epsilon=config.model.eps_ln
+  # )
+  # out = params.gamma * x_std.astype(config.model.param_dtype.value)
+  x_std = jax.nn.standardize(x, epsilon=config.model.eps_ln)
+  out = params.gamma * x_std
   if config.model.use_bias_ln:
     out += params.beta
   return out
