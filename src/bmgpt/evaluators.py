@@ -72,17 +72,20 @@ def calculate_metric_on_minibatches(
   num_samples_processed = 0
   with jax.set_mesh(mesh):
     cache = init_kv_cache(config, global_batch_size, update_cache=False)
+
+  # Process first batch
+  batch = next(batch_iter)
+  with jax.set_mesh(mesh):
+    batch_metric = metric(config, batch, params, cache)
+  buffer = batch_metric
+  num_samples_processed += len(batch[0])
+
   for batch in batch_iter:
     with jax.set_mesh(mesh):
       batch_metric = metric(config, batch, params, cache)
-    log_metric, prev_metric = prev_metric, batch_metric
-    if log_metric is not None:
-      if buffer is None:
-        buffer = log_metric
-      else:
-        buffer += log_metric
+      buffer += batch_metric
     num_samples_processed += len(batch[0])
-  acc = buffer.sum() / num_samples_processed if buffer is not None else None
+  acc = buffer.sum() / num_samples_processed
   return {metric_name_prefix + "accuracy": acc}
 
 
