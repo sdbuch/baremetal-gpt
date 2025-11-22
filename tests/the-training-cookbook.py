@@ -60,15 +60,28 @@ class Config:
   head_dim: int = 128
   dtype: str = "bfloat16"
 
+  # fsdp
+  # embed: jax.P = jax.P(None, None)
+  # pos_embed: jax.P = jax.P(None, None)
+  # att_qkv: jax.P = jax.P(None, "fsdp", None, None)
+  # att_out: jax.P = jax.P(None, None, "fsdp")
+  # mlp_in: jax.P = jax.P("fsdp", None)
+  # mlp_out: jax.P = jax.P(None, "fsdp")
+  # in_kernel: jax.P = jax.P(None, None)
+  # in_bias: jax.P = jax.P(None)
+  # out_kernel: jax.P = jax.P("fsdp", None)
+  # out_bias: jax.P = jax.P(None)
+  # data parallel
   embed: jax.P = jax.P(None, None)
   pos_embed: jax.P = jax.P(None, None)
-  att_qkv: jax.P = jax.P(None, "fsdp", None, None)
-  att_out: jax.P = jax.P(None, None, "fsdp")
-  mlp_in: jax.P = jax.P("fsdp", None)
-  mlp_out: jax.P = jax.P(None, "fsdp")
+  att_qkv: jax.P = jax.P(None, None, None, None)
+  att_out: jax.P = jax.P(None, None, None)
+  mlp_in: jax.P = jax.P(None, None)
+  mlp_out: jax.P = jax.P(None, None)
+  ln: jax.P = jax.P(None)
   in_kernel: jax.P = jax.P(None, None)
   in_bias: jax.P = jax.P(None)
-  out_kernel: jax.P = jax.P("fsdp", None)
+  out_kernel: jax.P = jax.P(None, None)
   out_bias: jax.P = jax.P(None)
 
   act_ids: jax.P = jax.P("fsdp")
@@ -104,6 +117,7 @@ def init_param_state(config: Config) -> dot_dict:
   root_key = jax.random.key(config.param_seed)
   key = map(ft.partial(jax.random.fold_in, root_key), it.count())
   zero_init = jax.nn.initializers.constant(0.0)
+  one_init = jax.nn.initializers.constant(1.0)
   he_init = jax.nn.initializers.he_normal(1, 1)
   dtype = config.dtype
 
@@ -133,6 +147,9 @@ def init_param_state(config: Config) -> dot_dict:
         qkv=he_init(next(key), qkv_shape, dtype, config.att_qkv),
         out=he_init(next(key), out_shape, dtype, config.att_out),
       ),
+      ln_attention=dot_dict(
+        gamma=one_init(next(key), (config.embed_dim,), dtype, config.ln)
+      ),
       mlp=dot_dict(
         in_kernel=he_init(
           next(key), (config.embed_dim, config.mlp_dim), dtype, config.mlp_in
@@ -141,6 +158,7 @@ def init_param_state(config: Config) -> dot_dict:
           next(key), (config.mlp_dim, config.embed_dim), dtype, config.mlp_out
         ),
       ),
+      ln_mlp=dot_dict(gamma=one_init(next(key), (config.embed_dim,), dtype, config.ln)),
     )
   return params  # tag: get-param-state
 
@@ -165,6 +183,7 @@ def model_apply(config: Config, params: dot_dict, tokens: jax.Array) -> jax.Arra
     )
     out += att_skip
     out *= jax.lax.rsqrt(jnp.linalg.norm(out, axis=-1, keepdims=True) + 1e-6)
+    out *= block.ln_attention.gamma
 
     mlp_skip = out  # machine learning circa 1986
     out = jnp.einsum(
@@ -176,6 +195,7 @@ def model_apply(config: Config, params: dot_dict, tokens: jax.Array) -> jax.Arra
     )
     out += mlp_skip
     out *= jax.lax.rsqrt(jnp.linalg.norm(out, axis=-1, keepdims=True) + 1e-6)
+    out *= block.ln_mlp.gamma
 
   logits = jnp.einsum(
     "bsd,dl->bsl", out, params.linear_out.kernel, out_sharding=config.act_seq
@@ -276,12 +296,12 @@ def train_loop(config: Config):
   train_state = init_train_state(config)
   train_state = jax.tree.map(jax.ref.new_ref, train_state)
   batch = iter(get_dataset_on_device(config))
-  jax.profiler.start_trace('/tmp/profile-cookbook')
+  jax.profiler.start_trace("/tmp/profile-cookbook")
   for step in range(config.num_train_steps):
     metrics = train_step(config, train_state, next(batch))
     record_writer({"step": step} | metrics)
   jax.profiler.stop_trace()
-  metrics['train_loss'].block_until_ready()
+  metrics["train_loss"].block_until_ready()
 
   # tag: train-loop
 
