@@ -50,12 +50,16 @@ def load_mnist(config: DatasetConfig):
     size = 4000
   else:
     load_str = config.split.value
-    start = 4000
-    size = 6000
+    if config.split == SplitType.TEST:
+      start = 4000
+      size = 6000
+    else:
+      start = 0
+      size = 60000
   data = jnp.load(path / ("mnist_" + load_str + ".npz"))
-  return jnp.array(data["images"]).astype(jnp.bfloat16), jnp.array(
-    data["labels"][start : start + size]  # split test in 1/2
-  )
+  inputs = jnp.array(data["images"][start : start + size]).astype(jnp.bfloat16)
+  labels = jnp.array(data["labels"][start : start + size])
+  return inputs, labels
 
 
 def make_number_staircase_data(config: DatasetConfig):
