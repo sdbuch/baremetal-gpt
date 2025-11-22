@@ -43,7 +43,7 @@ class Config:
   mesh_shape: tuple[int, ...] = (16,)
   seq_length: int = 128
 
-  num_train_steps: int = 10**6
+  num_train_steps: int = 10
   host_batch_size: int = 16
   learning_rate: float = 1e-4
   beta_1: float = 0.9
@@ -276,9 +276,13 @@ def train_loop(config: Config):
   train_state = init_train_state(config)
   train_state = jax.tree.map(jax.ref.new_ref, train_state)
   batch = iter(get_dataset_on_device(config))
+  jax.profiler.start_trace('/tmp/profile-cookbook')
   for step in range(config.num_train_steps):
     metrics = train_step(config, train_state, next(batch))
     record_writer({"step": step} | metrics)
+  jax.profiler.stop_trace()
+  metrics['train_loss'].block_until_ready()
+
   # tag: train-loop
 
 
