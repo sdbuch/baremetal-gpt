@@ -24,21 +24,21 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
         calculate_metric_on_minibatches,
         metric=accuracy,
         global_batch_size=evaluation_config.dataset.global_batch_size,
-        metric_name_prefix=evaluation_config.dataset.split.value + "/",
+        metric_name=evaluation_config.dataset.split.value + "/accuracy",
       )
     case EvaluatorType.NLL:
       return partial(
         calculate_metric_on_minibatches,
         metric=nll,
         global_batch_size=evaluation_config.dataset.global_batch_size,
-        metric_name_prefix=evaluation_config.dataset.split.value + "/",
+        metric_name=evaluation_config.dataset.split.value + "/nll",
       )
     case EvaluatorType.PERPLEXITY:
       return partial(
         calculate_metric_on_minibatches,
         metric=nll,
         global_batch_size=evaluation_config.dataset.global_batch_size,
-        metric_name_prefix=evaluation_config.dataset.split.value + "/",
+        metric_name=evaluation_config.dataset.split.value + "/perplexity",
         perplexity_flag=True,
       )
 
@@ -74,13 +74,11 @@ def calculate_metric_on_minibatches(
   mesh,
   params: Transformer,
   batch_iter: DataloaderOutputType,
-  metric,
   global_batch_size: int,
-  metric_name_prefix: str = "",
+  metric,
+  metric_name: str = "",
   perplexity_flag: bool = False,
 ):
-  prev_metric = None
-  buffer = None
   num_samples_processed = 0
   with jax.set_mesh(mesh):
     cache = init_kv_cache(config, global_batch_size, update_cache=False)
@@ -103,7 +101,7 @@ def calculate_metric_on_minibatches(
     # there is an online algorithm for perplexity with a product reduction
     # but it is not numerically stable... easier to just do this hack
     metric = jnp.exp(metric)
-  return {metric_name_prefix + "accuracy": metric}
+  return {metric_name: metric}
 
 
 @jax.jit
