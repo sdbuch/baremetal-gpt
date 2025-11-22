@@ -452,7 +452,7 @@ def init_kv_cache(config: Config, global_batch_size: int, update_cache: bool):
   if not update_cache:
     # Save memory if we aren't updating the cache
     dummy_cache = jnp.zeros(
-      (global_batch_size, 1, 2, 1, 1, 1),
+      (global_batch_size, config.model.num_layers, 2, 1, 1, 1),
       dtype=config.model.param_dtype.value,
       out_sharding=sharding,
     )
