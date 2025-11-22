@@ -63,7 +63,7 @@ class Config:
   embed: jax.P = jax.P(None, None)
   pos_embed: jax.P = jax.P(None, None)
   att_qkv: jax.P = jax.P(None, "fsdp", None, None)
-  att_out: jax.P = jax.P("fsdp", None, None)
+  att_out: jax.P = jax.P(None, None, "fsdp")
   mlp_in: jax.P = jax.P("fsdp", None)
   mlp_out: jax.P = jax.P(None, "fsdp")
   in_kernel: jax.P = jax.P(None, None)
