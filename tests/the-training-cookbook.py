@@ -173,6 +173,8 @@ def model_apply(config: Config, params: dot_dict, tokens: jax.Array) -> jax.Arra
   for layer in range(config.num_layers):
     block = params.layers[layer]
     att_skip = out  # 1 billion dollars in venture capital funding please
+    out *= jax.lax.rsqrt(jnp.linalg.norm(out, axis=-1, keepdims=True) + 1e-6)
+    out *= block.ln_attention.gamma
     qkv = jnp.einsum(
       "bsd,3dkh->bs3kh", out, block.attention.qkv, out_sharding=config.act_att
     )
@@ -183,10 +185,10 @@ def model_apply(config: Config, params: dot_dict, tokens: jax.Array) -> jax.Arra
       "bskh,khd->bsd", out, block.attention.out, out_sharding=config.act_seq
     )
     out += att_skip
-    out *= jax.lax.rsqrt(jnp.linalg.norm(out, axis=-1, keepdims=True) + 1e-6)
-    out *= block.ln_attention.gamma
 
     mlp_skip = out  # machine learning circa 1986
+    out *= jax.lax.rsqrt(jnp.linalg.norm(out, axis=-1, keepdims=True) + 1e-6)
+    out *= block.ln_mlp.gamma
     out = jnp.einsum(
       "bsd,dh->bsh", out, block.mlp.in_kernel, out_sharding=config.act_hidden
     )
@@ -195,8 +197,6 @@ def model_apply(config: Config, params: dot_dict, tokens: jax.Array) -> jax.Arra
       "bsh,hd->bsd", out, block.mlp.out_kernel, out_sharding=config.act_seq
     )
     out += mlp_skip
-    out *= jax.lax.rsqrt(jnp.linalg.norm(out, axis=-1, keepdims=True) + 1e-6)
-    out *= block.ln_mlp.gamma
 
   logits = jnp.einsum(
     "bsd,dl->bsl", out, params.linear_out.kernel, out_sharding=config.act_seq
