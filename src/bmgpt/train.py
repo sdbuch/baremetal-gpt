@@ -2,9 +2,9 @@ import copy
 import math
 from functools import partial
 from pathlib import Path
+from time import sleep
 from typing import Any, NamedTuple
 
-from time import sleep
 import hydra
 import jax
 import jax.numpy as jnp
@@ -129,6 +129,8 @@ def main(config: Config):
     key_eval = eval_loop(
       config, key_eval, config.eval_list, train_state.params, logger, mesh, step
     )
+
+  jax.block_until_ready(key_eval)
 
 
 def eval_loop(
