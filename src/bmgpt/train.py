@@ -111,7 +111,7 @@ def main(config: Config):
         logger.log(log_metrics)
       if step == config.optimizer.num_steps - 1:
         break
-    jax.tree.map(lambda x: x.block_until_ready(), log_metrics)
+    log_metrics['batch_loss'].block_until_ready()
     jax.profiler.stop_trace()
 
     # Run evals
