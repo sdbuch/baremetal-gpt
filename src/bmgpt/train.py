@@ -127,7 +127,7 @@ def main(config: Config):
     # Run evals (testing)
     logger.flush_buffer()
     key_eval = eval_loop(
-      config, key_eval, config.eval_list, train_state.params, logger, mesh
+      config, key_eval, config.eval_list, train_state.params, logger, mesh, 0
     )
     logger.flush_buffer()
 
