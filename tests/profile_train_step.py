@@ -76,7 +76,8 @@ def main(config: Config):
     with jax.set_mesh(mesh):
       jax.profiler.start_trace("/tmp/profile-train")
       cur_metrics, train_state = train_step(config, batch, train_state)
-      cur_metrics['grad_norm'].block_until_ready()
+      cur_metrics['batch_loss'].block_until_ready()
+      # cur_metrics['grad_norm'].block_until_ready()
       jax.profiler.stop_trace()
     if step == config.optimizer.num_steps - 1:
       break
