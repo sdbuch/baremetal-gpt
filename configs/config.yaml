@@ -1,10 +1,9 @@
 defaults:
   - _self_
-  - override hydra/launcher: submitit_local
+  - override hydra/launcher: joblib
 
 hydra:
   launcher:
-    timeout_min: 180
-    cpus_per_task: 1
-    gpus_per_node: 0
-    tasks_per_node: 1
+    timeout: null
+    n_jobs: 1
+    verbose: 50
