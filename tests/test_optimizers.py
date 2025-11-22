@@ -13,7 +13,7 @@ from bmgpt.model import (
   _precompute_rope_cossin,
   _transformer,
   init_kv_cache,
-  init_model,
+  init_transformer,
   model_spec,
 )
 from bmgpt.optimizers import (

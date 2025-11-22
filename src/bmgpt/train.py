@@ -12,7 +12,7 @@ from bmgpt.config import Config, config_post_init, mesh_from_config, register_co
 from bmgpt.data import get_distributed_batch_iter
 from bmgpt.evaluators import evaluator_factory
 from bmgpt.loggers import logger_factory
-from bmgpt.model import Transformer, _transformer, init_kv_cache, init_model, model_spec
+from bmgpt.model import Transformer, _transformer, init_kv_cache, init_transformer, model_spec
 from bmgpt.optimizers import (
   grad_norm_and_clip,
   init_adam_state,
@@ -31,7 +31,7 @@ class TrainState(NamedTuple):
 
 @jax.jit
 def init_train_state(key, config: Config) -> TrainState:
-  model_params = init_model(key, config)
+  model_params = init_transformer(key, config)
   adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
   cache = init_kv_cache(
     config, config.train_dataset.global_batch_size, update_cache=False
