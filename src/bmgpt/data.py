@@ -46,7 +46,7 @@ DataloaderType = Callable[[Any, DatasetConfig, Array], DataloaderOutputType]
 def load_mnist(config: DatasetConfig):
   path = Path(config.path)
   data = jnp.load(path / ("mnist_" + config.split.value + ".npz"))
-  return jnp.array(data["images"]), jnp.array(data["labels"])
+  return jnp.array(data["images"]).astype(jnp.bfloat16), jnp.array(data["labels"])
 
 
 def make_number_staircase_data(config: DatasetConfig):

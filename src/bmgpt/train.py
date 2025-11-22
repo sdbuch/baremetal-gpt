@@ -12,7 +12,7 @@ from bmgpt.config import Config, config_post_init, mesh_from_config, register_co
 from bmgpt.data import get_distributed_batch_iter
 from bmgpt.evaluators import evaluator_factory
 from bmgpt.loggers import logger_factory
-from bmgpt.model import Transformer, _transformer, init_kv_cache, init_model, model_spec
+from bmgpt.model import Transformer, _transformer, init_kv_cache, init_transformer, model_spec
 from bmgpt.optimizers import (
   grad_norm_and_clip,
   init_adam_state,
@@ -31,9 +31,11 @@ class TrainState(NamedTuple):
 
 @jax.jit
 def init_train_state(key, config: Config) -> TrainState:
-  model_params = init_model(key, config)
+  model_params = init_transformer(key, config)
   adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
-  cache = init_kv_cache(config, config.train_dataset.global_batch_size)
+  cache = init_kv_cache(
+    config, config.train_dataset.global_batch_size, update_cache=False
+  )
   return TrainState(params=model_params, opt_state=adam_state, kv_cache=cache)
 
 
@@ -43,8 +45,9 @@ def init_train_state(key, config: Config) -> TrainState:
   config_name="base_config",
 )
 def main(config: Config):
-  # Config
+  # Launch distributed
   jax.distributed.initialize()
+  # Config
   config_post_init(config)
   mesh = mesh_from_config(config)
   Logger = logger_factory(config.logger_type)
@@ -61,13 +64,13 @@ def main(config: Config):
     train_state = init_train_state(key_model, config)
   spec = model_spec(train_state.params)
   opt_update = opt_update_factory(config.optimizer.type)
-  weight_decay_mask = jax.tree.map(lambda x, s: bool(s), train_state.params, spec)
+  weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
 
   @partial(jax.jit, donate_argnums=2)
   def train_step(config: Config, batch, train_state: TrainState):
     def loss_fn(params: Transformer):
       inputs, targets = batch
-      logits, _ = jax.vmap(partial(_transformer, config, params))(
+      logits, _ = jax.vmap(partial(_transformer, config, params, cache_size=-1))(
         inputs, train_state.kv_cache
       )
       logits = logits.astype(config.model.compute_dtype.value)
