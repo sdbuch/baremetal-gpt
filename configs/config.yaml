@@ -1,0 +1,10 @@
+defaults:
+  - _self_
+  - override hydra/launcher: joblib
+
+hydra:
+  launcher:
+    timeout: null
+    n_jobs: 1
+    verbose: 50
+    pre_dispatch: 0

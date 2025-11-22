@@ -1,0 +1,19 @@
+# @package _global_
+
+defaults:
+  - /dataset/staircase@train_dataset
+  # - /dataset/staircase@eval_list.0.dataset # https://github.com/facebookresearch/hydra/issues/1389
+
+eval_list:
+  - dataset:
+      name: NUMBER_STAIRCASE
+      path: ""
+      split: TEST
+      seq_len: 1
+      global_batch_size: 16
+    evaluator: AUTOREGRESSIVE_ROLLOUTS
+
+model:
+  transformer_type: DISCRETE
+  is_causal: True
+  num_vocab: 10

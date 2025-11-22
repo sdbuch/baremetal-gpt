@@ -1,0 +1,78 @@
+# @package _global_
+
+defaults:
+  - /dataset/mnist@train_dataset
+
+
+val_log_interval: 468 # every epoch
+
+train_dataset:
+  epochs_to_loop: 15
+  path: "data/mnist/patch_7x7"
+  split: TRAIN
+  seq_len: 16  # 7x7 patches
+  global_batch_size: 128
+
+val_list:
+  - dataset:
+      name: MNIST
+      path: "data/mnist/patch_7x7"
+      split: VAL
+      seq_len: 16
+      global_batch_size: 4000
+      epochs_to_loop: 1
+    evaluator: ACCURACY
+  - dataset:
+      name: MNIST
+      path: "data/mnist/patch_7x7"
+      split: VAL
+      seq_len: 16
+      global_batch_size: 4000
+      epochs_to_loop: 1
+    evaluator: NLL
+  - dataset:
+      name: MNIST
+      path: "data/mnist/patch_7x7"
+      split: VAL
+      seq_len: 16
+      global_batch_size: 4000
+      epochs_to_loop: 1
+    evaluator: PERPLEXITY
+
+eval_list:
+  - dataset:
+      name: MNIST
+      path: "data/mnist/patch_7x7"
+      split: TEST
+      seq_len: 16
+      global_batch_size: 6000
+      epochs_to_loop: 1
+    evaluator: ACCURACY
+  - dataset:
+      name: MNIST
+      path: "data/mnist/patch_7x7"
+      split: TRAIN
+      seq_len: 16
+      global_batch_size: 60000
+      epochs_to_loop: 1
+    evaluator: ACCURACY
+
+model:
+  transformer_type: CONTINUOUS
+  is_causal: False  # use full attention
+  num_vocab: 49  # 7x7 patches
+  num_classes: 10
+  use_bias_embeddings: True
+  use_bias_ln: False
+  use_bias_mlp: False
+  # num_layers: 3
+  # num_heads: 8
+  # d_model: 64
+  # d_head: 8
+  # mlp_factor: 256
+
+
+optimizer:
+  num_steps: 0
+  weight_decay: 1e-4
+  lr: 3e-4

@@ -1,0 +1,6 @@
+name: MNIST
+path: "data/mnist/patch_4x4"
+split: TRAIN
+seq_len: 49  # 4x4 patches
+global_batch_size: 128
+epochs_to_loop: 5
