@@ -1,4 +1,4 @@
-"""Code for evaluating different types of models."""
+"""Code for evaluating different types of models. Online algorithms."""
 
 from functools import partial
 
@@ -26,10 +26,21 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
         global_batch_size=evaluation_config.dataset.global_batch_size,
         metric_name_prefix=evaluation_config.dataset.split.value + "/",
       )
-    case EvaluatorType.PERPLEXITY:
-      return None
     case EvaluatorType.NLL:
-      return None
+      return partial(
+        calculate_metric_on_minibatches,
+        metric=nll,
+        global_batch_size=evaluation_config.dataset.global_batch_size,
+        metric_name_prefix=evaluation_config.dataset.split.value + "/",
+      )
+    case EvaluatorType.PERPLEXITY:
+      return partial(
+        calculate_metric_on_minibatches,
+        metric=nll,
+        global_batch_size=evaluation_config.dataset.global_batch_size,
+        metric_name_prefix=evaluation_config.dataset.split.value + "/",
+        perplexity_flag=True,
+      )
 
 
 def autoregressive_rollouts(
@@ -66,6 +77,7 @@ def calculate_metric_on_minibatches(
   metric,
   global_batch_size: int,
   metric_name_prefix: str = "",
+  perplexity_flag: bool = False,
 ):
   prev_metric = None
   buffer = None
@@ -86,8 +98,12 @@ def calculate_metric_on_minibatches(
       batch_metric = metric(config, batch, params, cache)
       buffer += batch_metric
     num_samples_processed += len(batch[0])
-  acc = buffer.sum() / num_samples_processed
-  return {metric_name_prefix + "accuracy": acc}
+  metric = buffer.sum() / num_samples_processed
+  if perplexity_flag:
+    # there is an online algorithm for perplexity with a product reduction
+    # but it is not numerically stable... easier to just do this hack
+    metric = jnp.exp(metric)
+  return {metric_name_prefix + "accuracy": metric}
 
 
 @jax.jit
@@ -98,3 +114,15 @@ def accuracy(config: Config, batch, params: Transformer, cache):
   )
   preds = logits.argmax(axis=-1)
   return (preds == targets).astype(jnp.int32)
+
+
+@jax.jit
+def nll(config: Config, batch, params: Transformer, cache):
+  """Negative log likelihood, calculated in nats."""
+  inputs, targets = batch
+  logits, _ = jax.vmap(partial(_transformer, config, params, cache_size=-1))(
+    inputs, cache
+  )
+  logits = logits.astype(config.model.compute_dtype.value)
+  logprobs = jax.nn.log_softmax(logits, axis=-1)
+  return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).squeeze(-1)

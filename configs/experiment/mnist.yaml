@@ -22,6 +22,22 @@ val_list:
       global_batch_size: 4000
       epochs_to_loop: 1
     evaluator: ACCURACY
+  - dataset:
+      name: MNIST
+      path: "data/mnist/patch_7x7"
+      split: VAL
+      seq_len: 16
+      global_batch_size: 4000
+      epochs_to_loop: 1
+    evaluator: NLL
+  - dataset:
+      name: MNIST
+      path: "data/mnist/patch_7x7"
+      split: VAL
+      seq_len: 16
+      global_batch_size: 4000
+      epochs_to_loop: 1
+    evaluator: PERPLEXITY
 
 eval_list:
   - dataset:
