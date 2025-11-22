@@ -125,11 +125,9 @@ def main(config: Config):
         break
 
     # Run evals (testing)
-    logger.flush_buffer()
     key_eval = eval_loop(
       config, key_eval, config.eval_list, train_state.params, logger, mesh, 0
     )
-    logger.flush_buffer()
 
 
 def eval_loop(
@@ -141,12 +139,14 @@ def eval_loop(
   mesh,
   step: int,
 ):
+  logger.flush_buffer()
   for evaluation in eval_list:
     key, key_d, key_e = jax.random.split(key, 3)
     batch_iter = get_distributed_batch_iter(config, evaluation.dataset, key_d, mesh)
     evaluation_fn = evaluator_factory(evaluation)
     metrics = evaluation_fn(config, key_e, mesh, params, batch_iter)
     logger.log(metrics | {"step": step})
+  logger.flush_buffer()
   return key
 
 
