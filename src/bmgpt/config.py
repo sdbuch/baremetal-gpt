@@ -198,10 +198,7 @@ def mesh_from_config(config: Config):
 
 
 def config_post_init(config: Config):
-  """Call after jax.distributed.initialize()"""
-  # Register the argument's type as static (since hydra wraps Config)
-  # We make everything above unsafe_hash=True to allow this!
-  jax.tree_util.register_static(type(config))
+  """Input validation."""
   # Check arguments
   assert config.model.d_head % 2 == 0, (
     "Head dimension needs to be divisible by 2 for RoPE"

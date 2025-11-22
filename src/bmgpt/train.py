@@ -58,14 +58,14 @@ def init_train_state(key, config: Config) -> TrainState:
   config_name="base_config",
 )
 def main(config: Config):
-  # Launch distributed and register configs
   try:
+    # Launch distributed and register configs
     jax.distributed.initialize()
-    config_post_init(config)
+    jax.tree_util.register_static(type(config))
   except RuntimeError:
-    # suppress this, for use with hydra multirun
-    # see https://github.com/jax-ml/jax/issues/18237
+    # This implies the distributed backend has already been initialized
     pass
+  config_post_init(config)
   mesh = mesh_from_config(config)
   Logger = logger_factory(config.logger_type)
 
