@@ -47,7 +47,6 @@ def init_train_state(key, config: Config) -> TrainState:
 def main(config: Config):
   # Launch distributed and profile
   jax.distributed.initialize()
-  jax.profiler.start_trace("/tmp/profile-train-and-test")
   # Config
   config_post_init(config)
   mesh = mesh_from_config(config)
@@ -100,6 +99,7 @@ def main(config: Config):
     return metrics, new_state
 
   # Simple training loop
+  jax.profiler.start_trace("/tmp/profile-train")
   prev_metrics = None
   with Logger(config) as logger:
     for step, batch in enumerate(batch_iter):
@@ -111,6 +111,8 @@ def main(config: Config):
         logger.log(log_metrics)
       if step == config.optimizer.num_steps - 1:
         break
+    jax.tree.map(lambda x: x.block_until_ready(), log_metrics)
+    jax.profiler.stop_trace()
 
     # Run evals
     for evaluation in config.eval_list:
@@ -121,9 +123,7 @@ def main(config: Config):
       evaluation_fn = evaluator_factory(evaluation)
       metrics = evaluation_fn(config, key_e, mesh, train_state.params, batch_iter_eval)
       logger.log(metrics)
-    jax.tree.map(lambda x: x.block_until_ready(), metrics)
 
-  jax.profiler.stop_trace()
 
 
 if __name__ == "__main__":
