@@ -50,11 +50,11 @@ def main(config: Config):
       return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
     loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
-    grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
+    # grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
     update__opt_state = jax.tree.map(
       partial(opt_update, config),
       train_state.params,
-      grad_clipped,
+      grad,
       train_state.opt_state,
       weight_decay_mask,
     )
@@ -67,7 +67,8 @@ def main(config: Config):
       params=params, opt_state=opt_state, kv_cache=train_state.kv_cache
     )
 
-    metrics = {"batch_loss": loss, "grad_norm": global_grad_norm}
+    # metrics = {"batch_loss": loss, "grad_norm": global_grad_norm}
+    metrics = {"batch_loss": loss}
     return metrics, new_state
 
   # Simple training loop
