@@ -81,8 +81,9 @@ def main(config: Config):
   # Initialize state, configure forward pass and optimization
   with jax.set_mesh(mesh):
     train_state = init_train_state(key_model, config)
-    kernel = make_splash_kernel(config, config.train_dataset.seq_len, mesh)
   cache_params = CacheParams(enabled=False, size=0)
+  # kernel = make_splash_kernel(config, config.train_dataset.seq_len, mesh)
+  kernel = None
   val_kernels = []
   eval_kernels = []
   for eval in config.val_list:
