@@ -7,7 +7,7 @@ import jax.numpy as jnp
 
 from bmgpt.config import Config, EvaluationConfig, EvaluatorType
 from bmgpt.data import DataloaderOutputType
-from bmgpt.model import Transformer, _transformer, init_kv_cache
+from bmgpt.model import CacheParams, Transformer, _transformer, init_kv_cache
 from bmgpt.sample import generate
 
 
@@ -54,15 +54,15 @@ def autoregressive_rollouts(
 ):
   """prompts should have a leading batch axis"""
   prompts, _ = next(batch_iter)
-  cache_size = 0
+  cache_params = CacheParams(enabled=True, size=0)
 
   @jax.vmap
   def batched_generate(prompt: jax.Array, cache):
-    return generate(config, key, kernel, params, prompt, cache, cache_size)
+    return generate(config, key, kernel, params, prompt, cache, cache_params)
 
   with jax.set_mesh(mesh):
     cache = init_kv_cache(config, global_batch_size, update_cache=True)
-    outputs, cache, cache_size = batched_generate(prompts, cache)
+    outputs, cache, cache_params = batched_generate(prompts, cache)
 
   print(f"Prompt: {prompts.addressable_shards[0].data}")
   print(f"Generated text: {outputs.addressable_shards[0].data}")
@@ -109,9 +109,15 @@ def calculate_metric_on_minibatches(
 @jax.jit
 def accuracy(config: Config, kernel, batch, params: Transformer, cache):
   inputs, targets = batch
-  logits, _ = jax.vmap(partial(_transformer, config, kernel, params, cache_size=-1))(
-    inputs, cache
-  )
+  logits, _ = jax.vmap(
+    partial(
+      _transformer,
+      config,
+      kernel,
+      params,
+      cache_params=CacheParams(enabled=False, size=0),
+    )
+  )(inputs, cache)
   preds = logits.argmax(axis=-1)
   return (preds == targets).astype(jnp.int32)
 
@@ -120,9 +126,15 @@ def accuracy(config: Config, kernel, batch, params: Transformer, cache):
 def nll(config: Config, kernel, batch, params: Transformer, cache):
   """Negative log likelihood, calculated in nats."""
   inputs, targets = batch
-  logits, _ = jax.vmap(partial(_transformer, config, kernel, params, cache_size=-1))(
-    inputs, cache
-  )
+  logits, _ = jax.vmap(
+    partial(
+      _transformer,
+      config,
+      kernel,
+      params,
+      cache_params=CacheParams(enabled=False, size=0),
+    )
+  )(inputs, cache)
   logits = logits.astype(config.model.compute_dtype.value)
   logprobs = jax.nn.log_softmax(logits, axis=-1)
   return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).squeeze(-1)

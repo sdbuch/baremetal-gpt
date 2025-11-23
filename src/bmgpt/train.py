@@ -26,6 +26,7 @@ from bmgpt.model import (
   init_transformer,
   make_splash_kernel,
   model_spec,
+  CacheParams,
 )
 from bmgpt.optimizers import (
   grad_norm_and_clip,
@@ -80,6 +81,7 @@ def main(config: Config):
   # Initialize state, configure forward pass and optimization
   with jax.set_mesh(mesh):
     train_state = init_train_state(key_model, config)
+  cache_params = CacheParams(enabled=False, size=0)
   kernel = make_splash_kernel(config, config.train_dataset.seq_len, mesh)
   val_kernels = []
   eval_kernels = []
@@ -102,7 +104,7 @@ def main(config: Config):
     def loss_fn(params: Transformer):
       inputs, targets = batch
       logits, _ = jax.vmap(
-        partial(_transformer, config, kernel, params, cache_size=-1)
+        partial(_transformer, config, kernel, params, cache_params=cache_params)
       )(inputs, train_state.kv_cache)
       logits = logits.astype(config.model.compute_dtype.value)
       logprobs = jax.nn.log_softmax(logits, axis=-1)

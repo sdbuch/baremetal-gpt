@@ -73,6 +73,11 @@ class Attn(NamedTuple):
   w_o: Array
 
 
+class CacheParams(NamedTuple):
+  enabled: bool
+  size: int
+
+
 def init_attn(config: Config, key) -> Attn:
   k_qkv, k_o = jax.random.split(key, 2)
   w_qkv = config.model.param_std * jax.random.normal(
@@ -139,7 +144,7 @@ def _attn(
   params: Attn,
   x_seq: jax.Array,
   kv_cache: jax.Array,  # 2 x config.max_seq_len x n x h (see below)
-  cache_size: int,
+  cache_params: CacheParams,
 ):
   # s: sequence length
   # d: embedding dim (config.d_model)
@@ -162,17 +167,17 @@ def _attn(
       rope_cos, rope_sin = _precompute_rope_cossin(config)
       positions = jnp.arange(s, out_sharding=jax.P())
     _apply_rope_one_head = partial(
-      _apply_rope, config, rope_cos, rope_sin, positions + cache_size
+      _apply_rope, config, rope_cos, rope_sin, positions + cache_params.size
     )
     _apply_rope_all_heads = jax.vmap(_apply_rope_one_head)
     q, k = _apply_rope_all_heads(q), _apply_rope_all_heads(k)
 
   # Cache read scheme: to enable same mask for the same s value (Q seq len),
   #  we concatenate the full cache to K, and mask empty entries with splash attn
-  if cache_size >= 0:
+  if cache_params.enabled:
     k_cache, v_cache = kv_cache[0], kv_cache[1]
-    k_cache_out = jax.lax.dynamic_update_slice(k_cache, k, (0, cache_size, 0))
-    v_cache_out = jax.lax.dynamic_update_slice(v_cache, v, (0, cache_size, 0))
+    k_cache_out = jax.lax.dynamic_update_slice(k_cache, k, (0, cache_params.size, 0))
+    v_cache_out = jax.lax.dynamic_update_slice(v_cache, v, (0, cache_params.size, 0))
     k = jnp.concatenate((k_cache, k), axis=1)
     v = jnp.concatenate((v_cache, v), axis=1)
     kv_cache_out = jnp.concatenate((k_cache_out[None], v_cache_out[None]), axis=0)
@@ -184,7 +189,9 @@ def _attn(
   if kernel:
     q_segment_ids = jnp.zeros((s,))
     kv_segment_ids = jnp.zeros((t,))
-    kv_segment_ids = kv_segment_ids.at[cache_size : config.model.max_seq_len].set(1)
+    kv_segment_ids = kv_segment_ids.at[
+      cache_params.size : config.model.max_seq_len
+    ].set(1)
     segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
 
     splash_sharded, kernel = kernel
@@ -198,8 +205,8 @@ def _attn(
   else:
     # Make mask
     if config.model.is_causal:
-      mask = _make_causal_mask(s, t, cache_size)
-      mask = mask & _make_cache_mask(s, t, cache_size)  # need for static cache
+      mask = _make_causal_mask(s, t, cache_params.size)
+      mask = mask & _make_cache_mask(s, t, cache_params.size)  # need for static cache
     else:
       mask = _make_cache_mask(s, t, 0)  # full attention
     mask = mask[None, ...]  # broadcast over heads
@@ -403,13 +410,13 @@ def _block(
   kernel,
   params: Block,
   x_seq: Array,
-  cache_in: jax.Array,
-  cache_size: int,
+  cache: jax.Array,
+  cache_params: CacheParams,
 ):
   att_skip = x_seq
   out = jax.vmap(partial(_layernorm, config, params.norm_attn))(x_seq)
   out, cache_out = _attn(
-    config, kernel, params.attn, out, kv_cache=cache_in, cache_size=cache_size
+    config, kernel, params.attn, out, kv_cache=cache, cache_params=cache_params
   )
   out += att_skip
 
@@ -446,17 +453,17 @@ def _transformer(
   kernel,
   params: Transformer,
   tokens: Array,
-  cache_in: jax.Array,
-  cache_size: int,
+  cache: jax.Array,
+  cache_params: CacheParams,
 ):
   _, __, _embedding, _unembedding = transformer_variant_factory(config)
   x_seq = _embedding(config, params.emb, tokens)
 
   def _block_fun(x_seq: Array, params__cache_in: tuple[Block, jax.Array]):
     params, cache_in = params__cache_in
-    return _block(config, kernel, params, x_seq, cache_in, cache_size)
+    return _block(config, kernel, params, x_seq, cache_in, cache_params)
 
-  out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache_in))
+  out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache))
 
   out = _unembedding(config, params.unemb, out)
 
