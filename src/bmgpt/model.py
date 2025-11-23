@@ -135,6 +135,7 @@ def _make_cache_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
 
 def _attn(
   config: Config,
+  kernel,
   params: Attn,
   x_seq: jax.Array,
   kv_cache: jax.Array,  # 2 x config.max_seq_len x n x h (see below)
@@ -181,35 +182,12 @@ def _attn(
   # Attention
   t = k.shape[1]  # t = s + config.model.max_seq_len
   if config.model.use_splash:
-    if not config.model.is_causal:
-      raise NotImplementedError
-    mask = MultiHeadMask(
-      [
-        CausalMask(shape=(s, t), offset=config.model.max_seq_len)
-        for _ in range(config.model.num_heads)
-      ]
-    )
-    splash_spec = jax.P(None, None)
-    splash_sharding = jax.sharding.NamedSharding(mesh, splash_spec)
-    kernel = make_splash_mha(mask, head_shards=1, q_seq_shards=1)
-    kernel_spec = kernel.manual_sharding_spec(splash_sharding)
-
     q_segment_ids = jnp.zeros((s,))
     kv_segment_ids = jnp.zeros((t,))
     kv_segment_ids = kv_segment_ids.at[cache_size : config.model.max_seq_len].set(1)
     segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
 
-    @partial(
-      jax.shard_map,
-      mesh=mesh,
-      in_specs=(kernel_spec, splash_spec, splash_spec, splash_spec, jax.P()),
-      out_specs=splash_spec,
-      check_vma=False,
-    )
-    def splash_sharded(kernel, q, k, v, segment_ids):
-      return kernel(q, k, v, segment_ids=segment_ids)
-
-    attn_out = splash_sharded(
+    attn_out = kernel(
       kernel,
       q / config.model.d_head**0.25,
       k / config.model.d_head**0.25,
@@ -421,6 +399,7 @@ def init_block(config: Config, key) -> Block:
 
 def _block(
   config: Config,
+  kernel,
   params: Block,
   x_seq: Array,
   cache_in: jax.Array,
@@ -429,7 +408,7 @@ def _block(
   att_skip = x_seq
   out = jax.vmap(partial(_layernorm, config, params.norm_attn))(x_seq)
   out, cache_out = _attn(
-    config, params.attn, out, kv_cache=cache_in, cache_size=cache_size
+    config, kernel, params.attn, out, kv_cache=cache_in, cache_size=cache_size
   )
   out += att_skip
 
@@ -463,6 +442,7 @@ def init_transformer(key, config: Config) -> Transformer:
 
 def _transformer(
   config: Config,
+  kernel,
   params: Transformer,
   tokens: Array,
   cache_in: jax.Array,
@@ -473,7 +453,7 @@ def _transformer(
 
   def _block_fun(x_seq: Array, params__cache_in: tuple[Block, jax.Array]):
     params, cache_in = params__cache_in
-    return _block(config, params, x_seq, cache_in, cache_size)
+    return _block(config, kernel, params, x_seq, cache_in, cache_size)
 
   out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache_in))
 
@@ -556,3 +536,40 @@ def transformer_variant_factory(config: Config):
     fun_unembedding = _classification_head
 
   return (init_embedding, init_unembedding, fun_embedding, fun_unembedding)
+
+
+def make_splash_kernel(
+  config: Config, q_seq_len: int, mesh, head_shards: int = 1, q_seq_shards: int = 1
+):
+  # s is Q len (seq_len @ train; variable/1 at prefill/decode)
+  # t is K len (s + config.model.max_seq_len)
+  if not config.model.use_splash:
+    return
+
+  s = q_seq_len
+  t = s + config.model.max_seq_len
+
+  if not config.model.is_causal:
+    raise NotImplementedError  # TODO: manually write a _ComputableMask FullMask
+  mask = MultiHeadMask(
+    [
+      CausalMask(shape=(s, t), offset=config.model.max_seq_len)
+      for _ in range(config.model.num_heads)
+    ]
+  )
+  splash_spec = jax.P(None, None)
+  splash_sharding = jax.sharding.NamedSharding(mesh, splash_spec)
+  kernel = make_splash_mha(mask, head_shards=head_shards, q_seq_shards=q_seq_shards)
+  kernel_spec = kernel.manual_sharding_spec(splash_sharding)
+
+  @partial(
+    jax.shard_map,
+    mesh=mesh,
+    in_specs=(kernel_spec, splash_spec, splash_spec, splash_spec, jax.P()),
+    out_specs=splash_spec,
+    check_vma=False,
+  )
+  def splash_sharded(kernel, q, k, v, segment_ids):
+    return kernel(q, k, v, segment_ids=segment_ids)
+
+  return splash_sharded

@@ -24,6 +24,7 @@ from bmgpt.model import (
   _transformer,
   init_kv_cache,
   init_transformer,
+  make_splash_kernel,
   model_spec,
 )
 from bmgpt.optimizers import (
@@ -76,9 +77,16 @@ def main(config: Config):
   # Data
   batch_iter = get_distributed_batch_iter(config, config.train_dataset, key_train, mesh)
 
-  # Initialize state, configure optimization
+  # Initialize state, configure forward pass and optimization
   with jax.set_mesh(mesh):
     train_state = init_train_state(key_model, config)
+  kernel = make_splash_kernel(config, config.train_dataset.seq_len, mesh)
+  val_kernels = []
+  eval_kernels = []
+  for eval in config.val_list:
+    val_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, mesh))
+  for eval in config.eval_list:
+    eval_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, mesh))
   spec = model_spec(train_state.params)
   opt_update = opt_update_factory(config.optimizer.type)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
@@ -87,9 +95,9 @@ def main(config: Config):
   def train_step(config: Config, batch, train_state: TrainState):
     def loss_fn(params: Transformer):
       inputs, targets = batch
-      logits, _ = jax.vmap(partial(_transformer, config, params, cache_size=-1))(
-        inputs, train_state.kv_cache
-      )
+      logits, _ = jax.vmap(
+        partial(_transformer, config, kernel, params, cache_size=-1)
+      )(inputs, train_state.kv_cache)
       logits = logits.astype(config.model.compute_dtype.value)
       logprobs = jax.nn.log_softmax(logits, axis=-1)
       return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
@@ -117,27 +125,29 @@ def main(config: Config):
 
   # Training loop
   with Logger(config) as logger:
+    do_evals = partial(eval_loop, config=config, mesh=mesh, logger=logger)
     for step, batch in enumerate(batch_iter):
       with jax.set_mesh(mesh):
         metrics, train_state = train_step(config, batch, train_state)
       logger.log(metrics | {"step": step})
       if (step + 1) % config.val_log_interval == 0:
         # Calculate val metrics
-        key_val = eval_loop(
-          config, key_val, config.val_list, train_state.params, logger, mesh, step
+        key_val = do_evals(
+          key_val, val_kernels, config.val_list, train_state.params, step
         )
       if step == config.optimizer.num_steps - 1:
         break
 
     # Run evals (testing)
-    key_eval = eval_loop(
-      config, key_eval, config.eval_list, train_state.params, logger, mesh, step
+    key_eval = do_evals(
+      key_eval, eval_kernels, config.eval_list, train_state.params, step
     )
 
 
 def eval_loop(
   config: Config,
   key,
+  kernels: list[Any],
   eval_list: list[EvaluationConfig],
   params: Transformer,
   logger: Logger,
@@ -145,11 +155,11 @@ def eval_loop(
   step: int,
 ):
   logger.flush_buffer()
-  for evaluation in eval_list:
+  for evaluation, kernel in zip(eval_list, kernels):
     key, key_d, key_e = jax.random.split(key, 3)
     batch_iter = get_distributed_batch_iter(config, evaluation.dataset, key_d, mesh)
     evaluation_fn = evaluator_factory(evaluation)
-    metrics = evaluation_fn(config, key_e, mesh, params, batch_iter)
+    metrics = evaluation_fn(config, key_e, kernel, mesh, params, batch_iter)
     logger.log(metrics | {"step": step})
   logger.flush_buffer()
   return key

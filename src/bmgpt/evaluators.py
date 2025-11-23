@@ -46,6 +46,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
 def autoregressive_rollouts(
   config: Config,
   key,
+  kernel,
   mesh,
   params: Transformer,
   batch_iter: DataloaderOutputType,
@@ -57,7 +58,7 @@ def autoregressive_rollouts(
 
   @jax.vmap
   def batched_generate(prompt: jax.Array, cache):
-    return generate(config, key, params, prompt, cache, cache_size)
+    return generate(config, key, kernel, params, prompt, cache, cache_size)
 
   with jax.set_mesh(mesh):
     cache = init_kv_cache(config, global_batch_size, update_cache=True)
@@ -71,6 +72,7 @@ def autoregressive_rollouts(
 def calculate_metric_on_minibatches(
   config: Config,
   key,
+  kernel,
   mesh,
   params: Transformer,
   batch_iter: DataloaderOutputType,
@@ -86,7 +88,7 @@ def calculate_metric_on_minibatches(
   # Process first batch (to get on-device buffer shape)
   batch = next(batch_iter)
   with jax.set_mesh(mesh):
-    batch_metric = metric(config, batch, params, cache)
+    batch_metric = metric(config, kernel, batch, params, cache)
   buffer = batch_metric
   num_samples_processed += len(batch[0])
 
@@ -105,9 +107,9 @@ def calculate_metric_on_minibatches(
 
 
 @jax.jit
-def accuracy(config: Config, batch, params: Transformer, cache):
+def accuracy(config: Config, kernel, batch, params: Transformer, cache):
   inputs, targets = batch
-  logits, _ = jax.vmap(partial(_transformer, config, params, cache_size=-1))(
+  logits, _ = jax.vmap(partial(_transformer, config, kernel, params, cache_size=-1))(
     inputs, cache
   )
   preds = logits.argmax(axis=-1)
@@ -115,10 +117,10 @@ def accuracy(config: Config, batch, params: Transformer, cache):
 
 
 @jax.jit
-def nll(config: Config, batch, params: Transformer, cache):
+def nll(config: Config, kernel, batch, params: Transformer, cache):
   """Negative log likelihood, calculated in nats."""
   inputs, targets = batch
-  logits, _ = jax.vmap(partial(_transformer, config, params, cache_size=-1))(
+  logits, _ = jax.vmap(partial(_transformer, config, kernel, params, cache_size=-1))(
     inputs, cache
   )
   logits = logits.astype(config.model.compute_dtype.value)

@@ -7,10 +7,11 @@ from bmgpt.config import Config
 from bmgpt.model import Transformer, _transformer
 
 
-@partial(jax.jit, donate_argnums=(4,))
+@partial(jax.jit, static_argnums=(2,), donate_argnums=(5,))
 def sample_one_token(
   config: Config,
   key,
+  kernel,
   params: Transformer,
   seq: jax.Array,
   cache_in: jax.Array,
@@ -18,17 +19,18 @@ def sample_one_token(
   temperature: float,
 ):
   """Expects seq and cache_in to have no batch axis."""
-  y, cache_out = _transformer(config, params, seq, cache_in, cache_size)
+  y, cache_out = _transformer(config, kernel, params, seq, cache_in, cache_size)
   logits = y.astype(config.model.compute_dtype.value)
   cache_size = cache_size + seq.shape[-1]
   next_token = jnp.array((jax.random.categorical(key, logits[-1] / temperature),))
   return next_token, cache_out, cache_size
 
 
-@jax.jit
+@partial(jax.jit, static_argnums=(2,), donate_argnums=(5,))
 def generate(
   config: Config,
   key,
+  kernel,
   params: Transformer,
   prompt: jax.Array,
   cache: jax.Array,
@@ -39,7 +41,7 @@ def generate(
   # Prefill
   key, sk = jax.random.split(key)
   next_token, cache, cache_size = sample_one_token(
-    config, sk, params, prompt, cache, cache_size, config.inference.temperature
+    config, sk, kernel, params, prompt, cache, cache_size, config.inference.temperature
   )
   prefill = jnp.concatenate((prompt, next_token))
 
