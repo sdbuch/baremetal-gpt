@@ -105,7 +105,7 @@ def main(config: Config):
     def loss_fn(params: Transformer):
       inputs, targets = batch
       logits, _ = jax.vmap(
-        partial(_transformer, config, kernel, params, cache_params=cache_params)
+        partial(_transformer, config, None, params, cache_params=cache_params)
       )(inputs, train_state.kv_cache)
       logits = logits.astype(config.model.compute_dtype.value)
       logprobs = jax.nn.log_softmax(logits, axis=-1)
