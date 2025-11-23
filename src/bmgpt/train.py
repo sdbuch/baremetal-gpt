@@ -131,7 +131,7 @@ def main(config: Config):
 
   # Training loop
   with Logger(config) as logger:
-    do_evals = partial(eval_loop, config=config, mesh=mesh, logger=logger)
+    do_evals = partial(eval_loop, config, mesh=mesh, logger=logger)
     for step, batch in enumerate(batch_iter):
       with jax.set_mesh(mesh):
         metrics, train_state = train_step(config, batch, train_state)
@@ -156,9 +156,9 @@ def eval_loop(
   kernels: list[Any],
   eval_list: list[EvaluationConfig],
   params: Transformer,
+  step: int,
   logger: Logger,
   mesh,
-  step: int,
 ):
   logger.flush_buffer()
   for evaluation, kernel in zip(eval_list, kernels):
