@@ -187,7 +187,8 @@ def _attn(
     kv_segment_ids = kv_segment_ids.at[cache_size : config.model.max_seq_len].set(1)
     segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
 
-    attn_out = kernel(
+    splash_sharded, kernel = kernel
+    attn_out = splash_sharded(
       kernel,
       q / config.model.d_head**0.25,
       k / config.model.d_head**0.25,
@@ -569,4 +570,4 @@ def make_splash_kernel(
   def splash_sharded(kernel, q, k, v, segment_ids):
     return kernel(q, k, v, segment_ids=segment_ids)
 
-  return splash_sharded
+  return (splash_sharded, kernel)
