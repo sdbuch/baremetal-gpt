@@ -65,7 +65,7 @@ def autoregressive_rollouts(
 
   print(f"Prompt: {prompts.addressable_shards[0].data}")
   print(f"Generated text: {outputs.addressable_shards[0].data}")
-  return outputs
+  return {}
 
 
 def calculate_metric_on_minibatches(
