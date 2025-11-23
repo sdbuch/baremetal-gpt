@@ -170,8 +170,8 @@ class Config:
   val_log_interval: int = 1000  # log validation metrics every <this many> batches
 
   train_dataset: DatasetConfig = MISSING
-  val_list: list[EvaluationConfig] = MISSING  # validation metrics
-  eval_list: list[EvaluationConfig] = MISSING  # post-training eval metrics
+  val_list: list[EvaluationConfig] = field(default_factory=list)  # validation metrics
+  eval_list: list[EvaluationConfig] = field(default_factory=list)
 
   optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
   model: ModelConfig = field(default_factory=ModelConfig)
