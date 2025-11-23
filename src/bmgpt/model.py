@@ -152,13 +152,12 @@ def _attn(
   # h: head dim (config.d_head)
   # x_seq: s x d
 
-  qkv = jnp.einsum(
+  q, k, v = jnp.einsum(
     "sd,d3nh->3nsh",
     x_seq,
     params.w_qkv,
     out_sharding=jax.P(*config.sharding.att_qkv),
   )
-  q, k, v = [qkv[i] for i in range(3)]
   s = q.shape[1]
 
   # Cache + RoPE scheme: we update the cache after applying RoPE to K,
@@ -206,10 +205,13 @@ def _attn(
   else:
     # Make mask
     if config.model.is_causal:
-      mask = _make_causal_mask(s, t, cache_params.size)
-      mask = mask & _make_cache_mask(s, t, cache_params.size)  # need for static cache
+      mask = _make_causal_mask(s, t, config.model.max_seq_len)
+      cache_mask = _make_cache_mask(s, t, cache_params.size) | (
+        ~_make_cache_mask(s, t, config.model.max_seq_len)
+      )
+      mask = mask & cache_mask
     else:
-      mask = _make_cache_mask(s, t, 0)  # full attention
+      mask = ~_make_cache_mask(s, t, 0)  # full attention
     mask = mask[None, ...]  # broadcast over heads
     # Scale and causal mask
     logits = jnp.einsum("nsh,nth->nst", q, k).astype(config.model.compute_dtype.value)
