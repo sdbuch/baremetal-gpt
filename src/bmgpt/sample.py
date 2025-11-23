@@ -55,6 +55,7 @@ def generate(
       *next_token__cache__cache_params,
       config.inference.temperature,
     )
+    cache_params = CacheParams(enabled=True, size=cache_params.size)
     return (next_token, cache, cache_params), next_token[0]
 
   keys = jax.random.split(key, config.inference.max_tokens_to_generate)
