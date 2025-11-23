@@ -126,7 +126,6 @@ class ModelConfig:
   use_bias_embeddings: bool = False  # bias in emb / unemb
   eps_ln: float = 1e-6  # epsilon for layer norm
   use_bias_ln: bool = False  # layer norm or RMS norm
-  use_splash: bool = True  # use JAX's dot_product_attention or not
   use_bias_mlp: bool = False  # bias in MLPs
   use_rope: bool = True  # RoPE or not
 

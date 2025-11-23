@@ -181,7 +181,7 @@ def _attn(
 
   # Attention
   t = k.shape[1]  # t = s + config.model.max_seq_len
-  if config.model.use_splash:
+  if kernel:
     q_segment_ids = jnp.zeros((s,))
     kv_segment_ids = jnp.zeros((t,))
     kv_segment_ids = kv_segment_ids.at[cache_size : config.model.max_seq_len].set(1)
@@ -543,9 +543,6 @@ def make_splash_kernel(
 ):
   # s is Q len (seq_len @ train; variable/1 at prefill/decode)
   # t is K len (s + config.model.max_seq_len)
-  if not config.model.use_splash:
-    return
-
   s = q_seq_len
   t = s + config.model.max_seq_len
 

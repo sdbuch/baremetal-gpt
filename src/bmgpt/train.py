@@ -86,7 +86,13 @@ def main(config: Config):
   for eval in config.val_list:
     val_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, mesh))
   for eval in config.eval_list:
-    eval_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, mesh))
+    # HACK: in small-seq settings (e.g., autoregressive q_seq_len=1), fallback to
+    # manual XLA attention
+    # TODO: should configure this more robustly (e.g. for small-seq-len training)
+    if eval.dataset.seq_len < 128:
+      eval_kernels.append(None)
+    else:
+      eval_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, mesh))
   spec = model_spec(train_state.params)
   opt_update = opt_update_factory(config.optimizer.type)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
