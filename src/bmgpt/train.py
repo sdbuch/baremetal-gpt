@@ -136,7 +136,6 @@ def main(config: Config):
   with Logger(config) as logger:
     do_evals = partial(eval_loop, config, mesh=mesh, logger=logger)
     for step, batch in enumerate(batch_iter):
-      print(batch)
       with jax.set_mesh(mesh):
         metrics, train_state = train_step(config, batch, train_state)
       logger.log(metrics | {"step": step})
