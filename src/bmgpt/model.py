@@ -152,12 +152,13 @@ def _attn(
   # h: head dim (config.d_head)
   # x_seq: s x d
 
-  q, k, v = jnp.einsum(
+  qkv = jnp.einsum(
     "sd,d3nh->3nsh",
     x_seq,
     params.w_qkv,
     out_sharding=jax.P(*config.sharding.att_qkv),
   )
+  q, k, v = [qkv[i] for i in range(3)]
   s = q.shape[1]
 
   # Cache + RoPE scheme: we update the cache after applying RoPE to K,
