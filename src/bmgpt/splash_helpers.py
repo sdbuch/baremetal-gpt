@@ -138,6 +138,13 @@ def make_flash_kernel(
     check_vma=False,
   )
   def flash_sharded(q, k, v, segment_ids):
-    return flash_attention(q, k, v, segment_ids=segment_ids)
+    return flash_attention(
+      q,
+      k,
+      v,
+      segment_ids=segment_ids,
+      causal=True,
+      sm_scale=1.0 / config.model.d_head**0.5,
+    )
 
   return (flash_sharded, flash_attention)
