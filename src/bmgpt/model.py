@@ -563,6 +563,7 @@ def _transformer(
   out, cache_out = jax.lax.scan(
     _block_fun, x_seq, (params.blocks, jnp.moveaxis(cache, 1, 0))
   )
+  cache_out = jnp.moveaxis(cache_out, 1, 0)
 
   out = jax.vmap(partial(_unembedding, config, params.unemb))(out)
 
