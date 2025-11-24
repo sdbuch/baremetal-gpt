@@ -313,7 +313,7 @@ def _attn_batched(
     logits = jnp.where(mask, logits, -jnp.inf)
     probs = jax.nn.softmax(logits, axis=-1)  # type: ignore[reportArgumentType]
     probs = probs.astype(config.model.param_dtype.value)
-    attn_out = jnp.einsum("bnst,bnth->nsh", probs, v)
+    attn_out = jnp.einsum("bnst,bnth->bnsh", probs, v)
   out = jnp.einsum(
     "bnsh,hnd->bsd",
     attn_out,

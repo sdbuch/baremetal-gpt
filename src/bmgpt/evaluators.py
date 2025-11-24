@@ -64,7 +64,7 @@ def autoregressive_rollouts(
 
   with jax.set_mesh(mesh):
     cache = init_kv_cache(config, global_batch_size, config.model.max_seq_len - 1)
-    outputs, cache, cache_size = generate(config, key, kernel, params, prompts, cache, 0)
+    outputs, cache, _ = generate(config, key, kernel, params, prompts, cache, 0)
 
   prompts, outputs = process_allgather((prompts, outputs))
   tokenizer = get_tokenizer_factory(config.inference)
