@@ -138,7 +138,6 @@ def main(config: Config):
     do_evals = partial(eval_loop, config, mesh=mesh, logger=logger)
     for step, batch in enumerate(batch_iter):
       with jax.set_mesh(mesh):
-        print(jax.make_jaxpr(train_step)(config, batch, train_state))
         metrics, train_state = train_step(config, batch, train_state)
       logger.log(metrics | {"step": step})
       if (step + 1) % config.val_log_interval == 0:
