@@ -7,10 +7,11 @@ SSH_FLAGS='-A -o ForwardAgent=yes'
 COMMANDS="if [ ! -d \"baremetal-gpt\" ]; then git clone git@github.com:sdbuch/baremetal-gpt; fi \
     && export HF_TOKEN='$HF_TOKEN' \
     && cd baremetal-gpt \
+    && git fetch \
+    && git checkout text-data \
     && git pull \
-    && git checkout main \
     && uv sync --extra tpu \
-    && uv run data/mnist/download_and_preprocess_mnist.py $@"
+    && uv run data/tiny-shakespeare/download_and_tokenize_tiny_shakespeare.py $@"
 
 gcloud compute tpus tpu-vm ssh "$TPU_NAME" \
   --ssh-flag="$SSH_FLAGS" \
