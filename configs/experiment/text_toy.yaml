@@ -6,7 +6,19 @@ defaults:
 train_dataset:
   num_steps: 100
 
+eval_list:
+  - dataset:
+      name: NUMBER_STAIRCASE
+      path: ""
+      split: TEST
+      seq_len: 1  # At inference time, this functions like prompt size
+      global_batch_size: 16
+    evaluator: AUTOREGRESSIVE_ROLLOUTS
+
 model:
   transformer_type: DISCRETE
   is_causal: True
   num_vocab: 10
+
+optimizer:
+  num_steps: 100
