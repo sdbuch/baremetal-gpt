@@ -66,7 +66,7 @@ def autoregressive_rollouts(
     cache = init_kv_cache(config, global_batch_size, config.model.max_seq_len - 1)
     outputs, cache, _ = generate(config, key, kernel, params, prompts, cache, 0)
 
-  prompts, outputs = process_allgather((prompts, outputs))
+  prompts, outputs = process_allgather((prompts, outputs), tiled=True)
   tokenizer = get_tokenizer_factory(config.inference)
   str_prompts = [tokenizer.decode(ids[:prompt_size]) for ids in outputs]
   str_outputs = [tokenizer.decode(ids[prompt_size:]) for ids in outputs]
