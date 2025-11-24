@@ -70,19 +70,26 @@ class TokenizerType(Enum):
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class DatasetConfig:
-  """Params for a single dataset"""
+  """Params for a single dataset. data.py"""
 
   name: DatasetName = MISSING
   path: str = MISSING
   split: SplitType = SplitType.VAL
   seq_len: int = MISSING
   global_batch_size: int = MISSING
+
+  ## Duration parameters
+  # For some datasets, epochs makes sense; others are too large.
+  # We can run for a specified number of epochs, or a specified number of batches
+  #  (or both.)
+  # But the dataloader being used might limit some possibilities; see data.py
   epochs_to_loop: int = -1  # -1 means indefinite; otherwise, fixed num epochs
+  num_steps: int = 10**3  # if 0 or less, will train until dataloader exhausted
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class EvaluationConfig:
-  """Params for a single evaluation"""
+  """Params for a single evaluation. evaluators.py"""
 
   dataset: DatasetConfig = MISSING
   evaluator: EvaluatorType = MISSING
@@ -90,9 +97,8 @@ class EvaluationConfig:
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class OptimizerConfig:
-  """Optimizer params"""
+  """Optimizer params. optimizers.py"""
 
-  num_steps: int = 10**3  # if 0 or less, will train until dataloader exhausted
   type: OptType = OptType.ADAMW
   lr: float = 3e-4
   beta1: float = 0.9
@@ -104,7 +110,7 @@ class OptimizerConfig:
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class ModelConfig:
-  """Model architecture params"""
+  """Model architecture params. model.py"""
 
   # Overarching
   transformer_type: TransformerType = MISSING
@@ -142,7 +148,7 @@ class ModelConfig:
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class InferenceConfig:
-  """Autoregressive inference params"""
+  """Autoregressive inference params. sample.py"""
 
   max_tokens_to_generate: int = 64
   temperature: float = 0.7

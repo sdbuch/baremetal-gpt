@@ -1,0 +1,5 @@
+name: SHAKESPEARE
+path: "data/tiny-shakespeare"
+split: TRAIN
+seq_len: 256
+global_batch_size: 128

@@ -1,0 +1,37 @@
+# @package _global_
+
+defaults:
+  - /dataset/staircase@train_dataset
+
+val_log_interval: 25
+
+train_dataset:
+  num_steps: 100
+
+val_list:
+  - dataset:
+      name: SHAKESPEARE
+      path: ${train_dataset.path}
+      split: VAL
+      seq_len: ${train_dataset.seq_len}  # At inference time, this functions like prompt size
+      global_batch_size: ${train_dataset.global_batch_size}
+      num_steps: 200
+    evaluator: NLL
+
+eval_list:
+  - dataset:
+      name: SHAKESPEARE
+      path: ${train_dataset.path}
+      split: TEST
+      seq_len: 128  # At inference time, this functions like prompt size
+      global_batch_size: 16
+    evaluator: AUTOREGRESSIVE_ROLLOUTS
+
+model:
+  transformer_type: DISCRETE
+  max_seq_len: ${train_dataset.seq_len}  # no longer than train
+  is_causal: True
+  num_vocab: 50257  # gpt2 tokenizer
+
+optimizer:
+  weight_decay: 1e-1

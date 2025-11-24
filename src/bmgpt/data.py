@@ -107,7 +107,7 @@ def split_data(data: Array, train_fraction: float, dev_fraction: float):
 # Simple next-token prediction dataloader for text training:
 # - Each host has the whole dataset (data input)
 # - Random sampling without replacement to draw batches (consumes key)
-# - Targets are the next token (expect data to be num_data x (T+1))
+# - Targets are the next token (expect data to be (num_data,) shape)
 def dataloader_with_replacement(
   key, config: DatasetConfig, data: tuple[Array, Array]
 ) -> DataloaderOutputType:

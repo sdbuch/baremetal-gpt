@@ -141,7 +141,7 @@ def main(config: Config):
         key_val = do_evals(
           key_val, val_kernels, config.val_list, train_state.params, step
         )
-      if step == config.optimizer.num_steps - 1:
+      if step == config.train_dataset.num_steps - 1:
         break
 
     # Run evals (testing)

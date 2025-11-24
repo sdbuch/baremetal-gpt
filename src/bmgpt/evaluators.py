@@ -27,6 +27,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
         metric=accuracy,
         global_batch_size=evaluation_config.dataset.global_batch_size,
         metric_name=evaluation_config.dataset.split.value + "/accuracy",
+        num_steps=evaluation_config.dataset.num_steps,
       )
     case EvaluatorType.NLL:
       return partial(
@@ -34,6 +35,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
         metric=nll,
         global_batch_size=evaluation_config.dataset.global_batch_size,
         metric_name=evaluation_config.dataset.split.value + "/nll",
+        num_steps=evaluation_config.dataset.num_steps,
       )
     case EvaluatorType.PERPLEXITY:
       return partial(
@@ -42,6 +44,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
         global_batch_size=evaluation_config.dataset.global_batch_size,
         metric_name=evaluation_config.dataset.split.value + "/perplexity",
         perplexity_flag=True,
+        num_steps=evaluation_config.dataset.num_steps,
       )
 
 
@@ -84,6 +87,7 @@ def calculate_metric_on_minibatches(
   metric,
   metric_name: str = "",
   perplexity_flag: bool = False,
+  num_steps: int = 0,
 ):
   num_samples_processed = 0
   with jax.set_mesh(mesh):
@@ -97,11 +101,13 @@ def calculate_metric_on_minibatches(
   num_samples_processed += len(batch[0])
 
   # Process remaining batches
-  for batch in batch_iter:
+  for step, batch in enumerate(batch_iter):
     with jax.set_mesh(mesh):
       batch_metric = metric(config, batch, params, cache)
       buffer += batch_metric
     num_samples_processed += len(batch[0])
+    if step == num_steps - 1:
+      break
   metric = buffer.sum() / num_samples_processed
   if perplexity_flag:
     # there is an online algorithm for perplexity with a product reduction
