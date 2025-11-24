@@ -3,10 +3,10 @@
 defaults:
   - /dataset/shakespeare@train_dataset
 
-val_log_interval: 25
+val_log_interval: 250
 
 train_dataset:
-  num_steps: 100
+  num_steps: 3000
 
 val_list:
   - dataset:
@@ -17,6 +17,13 @@ val_list:
       global_batch_size: ${train_dataset.global_batch_size}
       num_steps: 200
     evaluator: NLL
+  - dataset:
+      name: SHAKESPEARE
+      path: ${train_dataset.path}
+      split: VAL
+      seq_len: 128  # At inference time, this functions like prompt size
+      global_batch_size: 16
+    evaluator: AUTOREGRESSIVE_ROLLOUTS
 
 eval_list:
   - dataset:
