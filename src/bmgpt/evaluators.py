@@ -65,9 +65,10 @@ def autoregressive_rollouts(
     outputs, cache, cache_size = batched_generate(prompts, cache)
 
   tokenizer = get_tokenizer_factory(config.inference)
+  outputs = jax.sharding.reshard(outputs, out_shardings=jax.P())
   str_outputs = [tokenizer.decode(ids) for ids in outputs]
-  print(f"Prompt: {prompts.addressable_shards[0].data}")
-  print(f"Generated text: {outputs.addressable_shards[0].data}")
+  print(f"Prompt: {prompts[jax.process_index()]}")
+  print(f"Generated text: {str_outputs[jax.process_index()]}")
   return {}
 
 
