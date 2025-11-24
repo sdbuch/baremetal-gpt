@@ -205,7 +205,7 @@ def mesh_from_config(config: Config):
   mesh = jax.make_mesh(
     config.sharding.mesh_shape,
     config.sharding.mesh_axis_names,
-    len(config.sharding.mesh_shape) * (jax.sharding.AxisType.Explicit,),
+    len(config.sharding.mesh_shape) * (jax.sharding.AxisType.Manual,),
   )
   return mesh
 
