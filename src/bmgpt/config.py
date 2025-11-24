@@ -126,7 +126,6 @@ class ModelConfig:
   use_bias_embeddings: bool = False  # bias in emb / unemb
   eps_ln: float = 1e-6  # epsilon for layer norm
   use_bias_ln: bool = False  # layer norm or RMS norm
-  use_fa: bool = True  # use JAX's dot_product_attention or not
   use_bias_mlp: bool = False  # bias in MLPs
   use_rope: bool = True  # RoPE or not
 
@@ -170,8 +169,8 @@ class Config:
   val_log_interval: int = 1000  # log validation metrics every <this many> batches
 
   train_dataset: DatasetConfig = MISSING
-  val_list: list[EvaluationConfig] = MISSING  # validation metrics
-  eval_list: list[EvaluationConfig] = MISSING  # post-training eval metrics
+  val_list: list[EvaluationConfig] = field(default_factory=list)  # validation metrics
+  eval_list: list[EvaluationConfig] = field(default_factory=list)
 
   optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
   model: ModelConfig = field(default_factory=ModelConfig)
