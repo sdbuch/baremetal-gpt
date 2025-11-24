@@ -138,9 +138,10 @@ def log_sharding(tag, x):
   def _host_log(arr):
     print(f"{tag}: shape={arr.shape}, sharding={getattr(arr, 'sharding', None)}")
 
-  # marks axis 0 as the mapped axis, so shard_map/vmap don’t slice an explicit dim
-  jax.debug.callback(_host_log, x, ordered=True, in_dims=(0,) + (None,) * (x.ndim - 1))
+  # jax.debug.callback(_host_log, x)
+  _host_log(x)
   return x
+
 
 
 # DEBUG
@@ -160,24 +161,27 @@ def _attn(
   # h: head dim (config.d_head)
   # x_seq: s x d
 
+
   # DEBUG
   @jax.custom_vjp
   def proj(x_seq, w_qkv):
-    x_seq = log_sharding("proj fwd x_seq", x_seq)
-    w_qkv = log_sharding("proj fwd w_qkv", w_qkv)
+    print("proj fwd x_seq", x_seq.sharding)
+    print("proj fwd w_qkv", w_qkv.sharding)
     return jnp.einsum(
       "sd,d3nh->3nsh", x_seq, w_qkv, out_sharding=jax.P(*config.sharding.att_qkv)
     )
+
 
   def proj_fwd(x_seq, w_qkv):
     out = proj.call_wrapped(x_seq, w_qkv)
     return out, (x_seq, w_qkv)
 
+
   def proj_bwd(res, dout):
     x_seq, w_qkv = res
-    log_sharding("proj bwd dout", dout)
-    log_sharding("proj bwd saved x_seq", x_seq)
-    log_sharding("proj bwd saved w_qkv", w_qkv)
+    print("proj bwd dout", dout.sharding)
+    print("proj bwd saved x_seq", x_seq.sharding)
+    print("proj bwd saved w_qkv", w_qkv.sharding)
     dx = jnp.einsum("3nsh,d3nh->sd", dout, w_qkv.conj())
     dw = jnp.einsum("sd,3nsh->d3nh", x_seq.conj(), dout)
     return dx, dw

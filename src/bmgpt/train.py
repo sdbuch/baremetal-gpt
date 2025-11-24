@@ -34,6 +34,8 @@ from bmgpt.splash_helpers import make_splash_kernel
 
 register_configs()
 
+jax.config.update("jax_disable_jit", True)
+
 
 # Setup for training loop
 class TrainState(NamedTuple):
