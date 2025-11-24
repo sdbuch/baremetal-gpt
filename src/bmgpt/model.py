@@ -188,7 +188,7 @@ def _attn(
     kv_mask = _make_cache_mask(s, t, cache_params.size) | (
       ~_make_cache_mask(s, t, cache_capacity)
     )
-    kv_mask = kv_mask[0]
+    kv_mask = ~kv_mask[0]
     kv_segment_ids = kv_mask.astype(jnp.int32)
     segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
 
