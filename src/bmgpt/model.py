@@ -235,7 +235,16 @@ def _attn(
     segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
 
     splash_sharded, kernel = kernel
-    attn_out = splash_sharded(
+
+    def call_splash(kernel, q, k, v, segment_ids):
+      prev = jax.config.read("jax_disable_jit")
+      try:
+        jax.config.update("jax_disable_jit", False)
+        return splash_sharded(kernel, q, k, v, segment_ids)
+      finally:
+        jax.config.update("jax_disable_jit", prev)
+
+    attn_out = call_splash(
       kernel,
       q / config.model.d_head**0.25,
       k / config.model.d_head**0.25,
