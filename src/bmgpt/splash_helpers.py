@@ -128,8 +128,7 @@ def make_flash_kernel(
   head_shards: int = 1,
   q_seq_shards: int = 1,
 ):
-  flash_spec = (jax.P(*(config.sharding.data + config.sharding.att_qkv)),)
-  flash_sharding = jax.sharding.NamedSharding(mesh, flash_spec)
+  flash_spec = jax.P(*(config.sharding.data + config.sharding.att_qkv))
 
   @partial(
     jax.shard_map,
