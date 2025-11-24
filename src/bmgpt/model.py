@@ -516,15 +516,15 @@ def _block(
   cache_params: CacheParams,
 ):
   att_skip = x_seq
-  out = jax.vmap(partial(_layernorm, config, params.norm_attn))(x_seq)
-  out, cache_out = _attn(
+  out = jax.vmap(jax.vmap(partial(_layernorm, config, params.norm_attn)))(x_seq)
+  out, cache_out = _attn_batched(
     config, kernel, params.attn, out, kv_cache=cache, cache_params=cache_params
   )
   out += att_skip
 
   mlp_skip = out
-  out = jax.vmap(partial(_layernorm, config, params.norm_mlp))(out)
-  out = jax.vmap(partial(_mlp, config, params.mlp))(out)
+  out = jax.vmap(jax.vmap(partial(_layernorm, config, params.norm_mlp)))(out)
+  out = jax.vmap(jax.vmap(partial(_mlp, config, params.mlp)))(out)
   out += mlp_skip
 
   return out, cache_out
@@ -559,7 +559,7 @@ def _transformer(
   cache_params: CacheParams,
 ):
   _, __, _embedding, _unembedding = transformer_variant_factory(config)
-  x_seq = _embedding(config, params.emb, tokens)
+  x_seq = jax.vmap(partial(_embedding, config, params.emb))(tokens)
 
   def _block_fun(x_seq: Array, params__cache_in: tuple[Block, jax.Array]):
     params, cache_in = params__cache_in
@@ -567,7 +567,7 @@ def _transformer(
 
   out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache))
 
-  out = _unembedding(config, params.unemb, out)
+  out = jax.vmap(partial(_unembedding, config, params.unemb))(out)
 
   return out, cache_out
 
