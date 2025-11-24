@@ -62,13 +62,9 @@ def autoregressive_rollouts(
   """prompts should have a leading batch axis"""
   prompts, _ = next(batch_iter)
 
-  @jax.vmap
-  def batched_generate(prompt: jax.Array, cache):
-    return generate(config, key, kernel, params, prompt, cache, 0)
-
   with jax.set_mesh(mesh):
     cache = init_kv_cache(config, global_batch_size, config.model.max_seq_len - 1)
-    outputs, cache, cache_size = batched_generate(prompts, cache)
+    outputs, cache, cache_size = generate(config, key, kernel, params, prompts, cache, 0)
 
   prompts, outputs = process_allgather((prompts, outputs))
   tokenizer = get_tokenizer_factory(config.inference)
