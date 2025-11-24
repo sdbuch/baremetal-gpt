@@ -81,8 +81,7 @@ def main(config: Config):
   with jax.set_mesh(mesh):
     train_state = init_train_state(key_model, config)
   cache_params = CacheParams(enabled=False, size=0)
-  # kernel = make_splash_kernel(config, config.train_dataset.seq_len, 0, mesh)
-  kernel = None
+  kernel = make_splash_kernel(config, config.train_dataset.seq_len, 0, mesh)
   val_kernels = []
   eval_kernels = []
   for eval in config.val_list:
