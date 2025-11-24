@@ -138,9 +138,9 @@ def log_sharding(tag, x):
   def _host_log(arr):
     print(f"{tag}: shape={arr.shape}, sharding={getattr(arr, 'sharding', None)}")
 
-  jax.debug.callback(_host_log, x)
+  # marks axis 0 as the mapped axis, so shard_map/vmap don’t slice an explicit dim
+  jax.debug.callback(_host_log, x, ordered=True, in_dims=(0,) + (None,) * (x.ndim - 1))
   return x
-
 
 
 # DEBUG
@@ -160,7 +160,6 @@ def _attn(
   # h: head dim (config.d_head)
   # x_seq: s x d
 
-
   # DEBUG
   @jax.custom_vjp
   def proj(x_seq, w_qkv):
@@ -170,11 +169,9 @@ def _attn(
       "sd,d3nh->3nsh", x_seq, w_qkv, out_sharding=jax.P(*config.sharding.att_qkv)
     )
 
-
   def proj_fwd(x_seq, w_qkv):
     out = proj.call_wrapped(x_seq, w_qkv)
     return out, (x_seq, w_qkv)
-
 
   def proj_bwd(res, dout):
     x_seq, w_qkv = res
