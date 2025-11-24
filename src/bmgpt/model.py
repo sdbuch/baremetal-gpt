@@ -4,9 +4,7 @@ from typing import Any, NamedTuple
 import jax
 import jax.numpy as jnp
 from jax import Array
-from jax.experimental.pallas.ops.tpu.splash_attention import (
-  SegmentIds,
-)
+from jax.experimental.pallas.ops.tpu.flash_attention import SegmentIds, flash_attention
 
 from bmgpt.config import Config, TransformerType
 
@@ -199,6 +197,108 @@ def _attn(
       k / config.model.d_head**0.25,
       v,
       segment_ids,
+    )
+  else:
+    # Make mask
+    if config.model.is_causal:
+      mask = _make_causal_mask(s, t, cache_capacity)
+      cache_mask = _make_cache_mask(s, t, cache_params.size) | (
+        ~_make_cache_mask(s, t, cache_capacity)
+      )
+      mask = mask & cache_mask
+    else:
+      mask = ~_make_cache_mask(s, t, 0)  # full attention
+    mask = mask[None, ...]  # broadcast over heads
+    # Scale and causal mask
+    logits = jnp.einsum("nsh,nth->nst", q, k).astype(config.model.compute_dtype.value)
+    logits *= 1.0 / config.model.d_head**0.5
+    logits = jnp.where(mask, logits, -jnp.inf)
+    probs = jax.nn.softmax(logits, axis=2)  # type: ignore[reportArgumentType]
+    probs = probs.astype(config.model.param_dtype.value)
+    attn_out = jnp.einsum("nst,nth->nsh", probs, v)
+  out = jnp.einsum(
+    "nsh,hnd->sd",
+    attn_out,
+    params.w_o,
+    out_sharding=jax.P(*config.sharding.res_stream),
+  )
+
+  return out, kv_cache_out
+
+
+def _attn_batched(
+  config: Config,
+  kernel,
+  params: Attn,
+  x_seq: jax.Array,  # b x s x d
+  kv_cache: jax.Array,  # b x 2 x n x cache_capacity x h
+  cache_params: CacheParams,
+):
+  # b: batch size
+  # s: sequence length
+  # d: embedding dim (config.d_model)
+  # n: attention heads (config.num_heads)
+  # h: head dim (config.d_head)
+  # x_seq: s x d
+
+  qkv = jnp.einsum(
+    "bsd,bd3nh->b3nsh",
+    x_seq,
+    params.w_qkv,
+    out_sharding=jax.P(*config.sharding.att_qkv),
+  )
+  q, k, v = jnp.moveaxis(qkv, 1, 0)
+  s = q.shape[2]
+  b = q.shape[0]
+
+  # Cache + RoPE scheme: we update the cache after applying RoPE to K,
+  #  so new Q/K just needs to RoPE with positions + cache_size!
+  if config.model.use_rope:
+    with jax.ensure_compile_time_eval():
+      rope_cos, rope_sin = _precompute_rope_cossin(config)
+      positions = jnp.arange(s, out_sharding=jax.P())
+    _apply_rope_one_head = partial(
+      _apply_rope, config, rope_cos, rope_sin, positions + cache_params.size
+    )
+    _apply_rope_all_heads = jax.vmap(_apply_rope_one_head, in_axes=1, out_axes=1)
+    q, k = _apply_rope_all_heads(q), _apply_rope_all_heads(k)
+
+  k_cache, v_cache = jnp.moveaxis(kv_cache, 1, 0)
+  if cache_params.enabled:
+    k_cache_out = jax.lax.dynamic_update_slice(k_cache, k, (0, 0, cache_params.size, 0))
+    v_cache_out = jax.lax.dynamic_update_slice(v_cache, v, (0, 0, cache_params.size, 0))
+    kv_cache_out = jnp.concatenate(
+      (k_cache_out[:, None, ...], v_cache_out[:, None, ...]), axis=1
+    )
+  else:
+    kv_cache_out = kv_cache
+  # Cache read scheme: to enable same mask for the same s value (Q seq len),
+  #  we concatenate the full cache to K, and mask empty entries
+  # For efficient training, set cache size zero + cache_params.enabled=False
+  cache_capacity = k_cache.shape[-2]
+  k = jnp.concatenate((k_cache, k), axis=2)
+  v = jnp.concatenate((v_cache, v), axis=2)
+
+  # Attention
+  t = k.shape[2]  # t = s + cache_capacity
+  if kernel:
+    q_segment_ids = jnp.zeros((s,))
+    kv_mask = _make_cache_mask(s, t, cache_params.size) | (
+      ~_make_cache_mask(s, t, cache_capacity)
+    )
+    kv_mask = ~kv_mask[0]
+    kv_segment_ids = kv_mask.astype(jnp.int32)
+    q_segment_ids = q_segment_ids[None].repeat(b, axis=0)
+    kv_segment_ids = q_segment_ids[None].repeat(b, axis=0)
+    segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
+
+    attn_out = flash_attention(
+      q,
+      k,
+      v,
+      segment_ids=segment_ids,
+      causal=True,
+      sm_scale=1.0 / config.model.d_head**0.5,
     )
   else:
     # Make mask
