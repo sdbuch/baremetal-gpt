@@ -62,6 +62,11 @@ class DatasetName(Enum):
   MNIST = "mnist"
 
 
+class TokenizerType(Enum):
+  IDENTITY = 0
+  GPT2 = 1
+
+
 @dataclass(kw_only=True, unsafe_hash=True)
 class DatasetConfig:
   """Params for a single dataset"""
@@ -128,6 +133,7 @@ class ModelConfig:
   use_bias_ln: bool = False  # layer norm or RMS norm
   use_bias_mlp: bool = False  # bias in MLPs
   use_rope: bool = True  # RoPE or not
+  use_splash: bool = True  # use splash attention pallas kernel or jax-xla attention
 
   # Discrete-specific model parameters
   # Continuous-specific model parameters
@@ -139,6 +145,7 @@ class InferenceConfig:
 
   max_tokens_to_generate: int = 64
   temperature: float = 0.7
+  tokenizer: TokenizerType = TokenizerType.IDENTITY
 
 
 @dataclass(kw_only=True, unsafe_hash=True)

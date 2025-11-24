@@ -9,6 +9,7 @@ from bmgpt.config import Config, EvaluationConfig, EvaluatorType
 from bmgpt.data import DataloaderOutputType
 from bmgpt.model import CacheParams, Transformer, _transformer, init_kv_cache
 from bmgpt.sample import generate
+from bmgpt.tokenizers import get_tokenizer_factory
 
 
 def evaluator_factory(evaluation_config: EvaluationConfig):
@@ -63,6 +64,8 @@ def autoregressive_rollouts(
     cache = init_kv_cache(config, global_batch_size, config.model.max_seq_len - 1)
     outputs, cache, cache_size = batched_generate(prompts, cache)
 
+  tokenizer = get_tokenizer_factory(config.inference)
+  str_outputs = [tokenizer.decode(ids) for ids in outputs]
   print(f"Prompt: {prompts.addressable_shards[0].data}")
   print(f"Generated text: {outputs.addressable_shards[0].data}")
   return {}
