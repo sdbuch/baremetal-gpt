@@ -4,6 +4,7 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+from jax.experimental.multihost_utils import process_allgather
 
 from bmgpt.config import Config, EvaluationConfig, EvaluatorType
 from bmgpt.data import DataloaderOutputType
@@ -63,8 +64,8 @@ def autoregressive_rollouts(
   with jax.set_mesh(mesh):
     cache = init_kv_cache(config, global_batch_size, config.model.max_seq_len - 1)
     outputs, cache, cache_size = batched_generate(prompts, cache)
-    outputs = jax.lax.all_gather(outputs, config.sharding.mesh_axis_names[0])
 
+  outputs = process_allgather(outputs)
   tokenizer = get_tokenizer_factory(config.inference)
   str_outputs = [tokenizer.decode(ids) for ids in outputs]
   print(f"Prompt: {prompts[jax.process_index()]}")
