@@ -116,7 +116,7 @@ def calculate_metric_on_minibatches(
   return {metric_name: metric}
 
 
-@jax.jit
+@partial(jax.jit, static_argnums=(1,))
 def accuracy(config: Config, kernel, batch, params: Transformer, cache):
   inputs, targets = batch
   logits, _ = jax.vmap(
@@ -132,7 +132,7 @@ def accuracy(config: Config, kernel, batch, params: Transformer, cache):
   return (preds == targets).astype(jnp.int32)
 
 
-@jax.jit
+@partial(jax.jit, static_argnums=(1,))
 def nll(config: Config, kernel, batch, params: Transformer, cache):
   """Negative log likelihood, calculated in nats."""
   inputs, targets = batch
