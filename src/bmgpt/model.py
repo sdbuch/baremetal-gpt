@@ -565,7 +565,9 @@ def _transformer(
     params, cache_in = params__cache_in
     return _block(config, kernel, params, x_seq, cache_in, cache_params)
 
-  out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache))
+  out, cache_out = jax.lax.scan(
+    _block_fun, x_seq, (params.blocks, jnp.moveaxis(cache, 1, 0))
+  )
 
   out = jax.vmap(partial(_unembedding, config, params.unemb))(out)
 
