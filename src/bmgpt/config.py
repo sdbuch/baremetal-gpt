@@ -60,6 +60,7 @@ class DatasetName(Enum):
 
   NUMBER_STAIRCASE = "number_staircase"
   MNIST = "mnist"
+  SHAKESPEARE = "tiny-shakespeare"
 
 
 class TokenizerType(Enum):

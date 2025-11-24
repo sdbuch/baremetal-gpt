@@ -1,6 +1,6 @@
 import os
 
-import numpy as np
+import jax.numpy as jnp
 import requests
 import tiktoken
 
@@ -27,10 +27,10 @@ print(f"train has {len(train_ids):,} tokens")
 print(f"val has {len(val_ids):,} tokens")
 
 # export to bin files
-train_ids = np.array(train_ids, dtype=np.uint16)
-val_ids = np.array(val_ids, dtype=np.uint16)
-train_ids.tofile(os.path.join(os.path.dirname(__file__), "train.bin"))
-val_ids.tofile(os.path.join(os.path.dirname(__file__), "val.bin"))
+train_ids = jnp.array(train_ids, dtype=jnp.int32)
+val_ids = jnp.array(val_ids, dtype=jnp.int32)
+jnp.save(f"data/tiny-shakespeare/train.npy", train_ids)
+jnp.save(f"data/tiny-shakespeare/val.npy", val_ids)
 
 # train.bin has 301,966 tokens
 # val.bin has 36,059 tokens

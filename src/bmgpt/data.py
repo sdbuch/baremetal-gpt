@@ -23,6 +23,11 @@ def dataset_dataloader_factory(config: DatasetConfig):
         make_number_staircase_data(config),
         dataloader_with_replacement,
       )
+    case DatasetName.SHAKESPEARE:
+      return (
+        load_shakespeare(config),
+        dataloader_with_replacement,
+      )
 
 
 def get_range_iterable(config: DatasetConfig):
@@ -62,15 +67,18 @@ def load_mnist(config: DatasetConfig):
   return inputs, labels[:, None]
 
 
+def load_shakespeare(config: DatasetConfig):
+  path = Path(config.path)
+  data = jnp.load(path / (config.split.value + ".npy"))
+  return data, jnp.array(0)
+
+
 def make_number_staircase_data(config: DatasetConfig):
   # Simple data sequence!
   # Small, so mega replicate for ease
   text = "012345678987654321" * 1024
-  seqs = [
-    [int(c) for c in text[i : i + config.seq_len + 1]]
-    for i in range(len(text) - config.seq_len - 1)
-  ]
-  data = jnp.array(seqs, dtype=jnp.int32)
+  ids = [int(c) for c in text]
+  data = jnp.array(ids, dtype=jnp.int32)
   Xtr, Xdev, Xte = split_data(data, 0.8, 0.1)
   match config.split:
     case SplitType.TRAIN:
@@ -109,9 +117,14 @@ def dataloader_with_replacement(
   for step in it.count():
     key = jax.random.fold_in(key, step)
     offsets = jax.random.randint(
-      key, (config.global_batch_size // jax.process_count(),), 0, num_data
+      key,
+      (config.global_batch_size // jax.process_count(),),
+      0,
+      num_data - config.seq_len - 1,
     )
-    yield (inputs.at[offsets, :-1].get(), inputs.at[offsets, 1:].get())
+    seqs = inputs.at[offsets[:, None] + jnp.arange(config.seq_len)].get()
+    targets = inputs.at[1 + offsets[:, None] + jnp.arange(config.seq_len)].get()
+    yield seqs, targets
 
 
 # General "shuffle, drop last, sample without replacement" distributed dataloader
