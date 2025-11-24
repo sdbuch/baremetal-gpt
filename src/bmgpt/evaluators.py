@@ -20,6 +20,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
       return partial(
         autoregressive_rollouts,
         global_batch_size=evaluation_config.dataset.global_batch_size,
+        prompt_size=evaluation_config.dataset.seq_len,
       )
     case EvaluatorType.ACCURACY:
       return partial(
@@ -56,6 +57,7 @@ def autoregressive_rollouts(
   params: Transformer,
   batch_iter: DataloaderOutputType,
   global_batch_size: int,
+  prompt_size: int,
 ):
   """prompts should have a leading batch axis"""
   prompts, _ = next(batch_iter)
@@ -70,10 +72,10 @@ def autoregressive_rollouts(
 
   prompts, outputs = process_allgather((prompts, outputs))
   tokenizer = get_tokenizer_factory(config.inference)
-  str_prompts = [tokenizer.decode(ids) for ids in prompts]
-  str_outputs = [tokenizer.decode(ids) for ids in outputs]
-  # print("#" * 32 + "\nPrompt:\n" + "#" * 32)
-  # print(f"{str_prompts[jax.process_index()]}")
+  str_prompts = [tokenizer.decode(ids) for ids in outputs[:prompt_size]]
+  str_outputs = [tokenizer.decode(ids) for ids in outputs[prompt_size:]]
+  print("#" * 32 + "\nPrompt:\n" + "#" * 32)
+  print(f"{str_prompts[jax.process_index()]}")
   print("#" * 32 + "\nGenerated text:\n" + "#" * 32)
   print(f"{str_outputs[jax.process_index()]}")
   return {}
