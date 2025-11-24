@@ -65,7 +65,7 @@ def autoregressive_rollouts(
     cache = init_kv_cache(config, global_batch_size, config.model.max_seq_len - 1)
     outputs, cache, cache_size = batched_generate(prompts, cache)
 
-  outputs = process_allgather(outputs)
+  outputs = process_allgather((prompts, outputs))
   tokenizer = get_tokenizer_factory(config.inference)
   str_outputs = [tokenizer.decode(ids) for ids in outputs]
   print(f"Prompt: {prompts[jax.process_index()]}")
