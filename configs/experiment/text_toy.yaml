@@ -19,6 +19,3 @@ model:
   transformer_type: DISCRETE
   is_causal: True
   num_vocab: 10
-
-optimizer:
-  num_steps: 100
