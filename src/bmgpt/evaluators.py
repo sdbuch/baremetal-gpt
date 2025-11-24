@@ -101,13 +101,14 @@ def calculate_metric_on_minibatches(
   num_samples_processed += len(batch[0])
 
   # Process remaining batches
-  for step, batch in enumerate(batch_iter):
-    with jax.set_mesh(mesh):
-      batch_metric = metric(config, batch, params, cache)
-      buffer += batch_metric
-    num_samples_processed += len(batch[0])
-    if step == num_steps - 1:
-      break
+  if num_steps != 1:  # if num_steps=1, we want to skip this
+    for step, batch in enumerate(batch_iter):
+      with jax.set_mesh(mesh):
+        batch_metric = metric(config, kernel, batch, params, cache)
+        buffer += batch_metric
+      num_samples_processed += len(batch[0])
+      if step == num_steps - 1:
+        break
   metric = buffer.sum() / num_samples_processed
   if perplexity_flag:
     # there is an online algorithm for perplexity with a product reduction
