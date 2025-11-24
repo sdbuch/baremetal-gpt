@@ -306,7 +306,9 @@ def _attn_batched(
       mask = ~_make_cache_mask(s, t, 0)  # full attention
     mask = mask[None, None, ...]  # broadcast over batch and heads
     # Scale and causal mask
-    logits = jnp.einsum("bnsh,bnth->bnst", q, k).astype(config.model.compute_dtype.value)
+    logits = jnp.einsum("bnsh,bnth->bnst", q, k).astype(
+      config.model.compute_dtype.value
+    )
     logits *= 1.0 / config.model.d_head**0.5
     logits = jnp.where(mask, logits, -jnp.inf)
     probs = jax.nn.softmax(logits, axis=-1)  # type: ignore[reportArgumentType]
