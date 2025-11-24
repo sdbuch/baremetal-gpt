@@ -141,7 +141,10 @@ def main(config: Config):
     do_evals = partial(eval_loop, config, mesh=mesh, logger=logger)
     for step, batch in enumerate(batch_iter):
       with jax.set_mesh(mesh):
+        jax.profiler.start_trace('/tmp/profile-train/')
         metrics, train_state = train_step(config, batch, train_state)
+        metrics['batch_loss'].block_until_ready()
+        jax.profiler.stop_trace()
       logger.log(metrics | {"step": step})
       if (step + 1) % config.val_log_interval == 0:
         # Calculate val metrics
