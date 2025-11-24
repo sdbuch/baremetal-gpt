@@ -2,9 +2,8 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-import tiktoken
 
-from bmgpt.config import Config, InferenceConfig
+from bmgpt.config import Config
 from bmgpt.model import CacheParams, Transformer, _transformer
 
 
