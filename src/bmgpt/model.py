@@ -289,7 +289,7 @@ def _attn_batched(
     kv_mask = ~kv_mask[0]
     kv_segment_ids = kv_mask.astype(jnp.int32)
     q_segment_ids = q_segment_ids[None].repeat(b, axis=0)
-    kv_segment_ids = q_segment_ids[None].repeat(b, axis=0)
+    kv_segment_ids = kv_segment_ids[None].repeat(b, axis=0)
     segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
 
     attn_out = flash_attention(
