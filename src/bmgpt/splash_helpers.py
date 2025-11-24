@@ -2,6 +2,9 @@ from functools import partial
 
 import jax
 import numpy as np
+from jax.experimental.pallas.ops.tpu.flash_attention import (
+  flash_attention,
+)
 from jax.experimental.pallas.ops.tpu.splash_attention import (
   BlockSizes,
   CausalMask,
@@ -115,3 +118,27 @@ def make_splash_kernel(
     return kernel(q, k, v, segment_ids=segment_ids)
 
   return (splash_sharded, kernel)
+
+
+def make_flash_kernel(
+  config: Config,
+  q_seq_len: int,
+  cache_capacity: int,
+  mesh,
+  head_shards: int = 1,
+  q_seq_shards: int = 1,
+):
+  flash_spec = (jax.P(*(config.sharding.data + config.sharding.att_qkv)),)
+  flash_sharding = jax.sharding.NamedSharding(mesh, flash_spec)
+
+  @partial(
+    jax.shard_map,
+    mesh=mesh,
+    in_specs=(flash_spec, flash_spec, flash_spec, jax.P()),
+    out_specs=flash_spec,
+    check_vma=False,
+  )
+  def flash_sharded(q, k, v, segment_ids):
+    return flash_attention(q, k, v, segment_ids=segment_ids)
+
+  return (flash_sharded, flash_attention)

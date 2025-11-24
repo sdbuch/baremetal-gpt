@@ -30,7 +30,7 @@ from bmgpt.optimizers import (
   init_adam_state,
   opt_update_factory,
 )
-from bmgpt.splash_helpers import make_splash_kernel
+from bmgpt.splash_helpers import make_splash_kernel, make_flash_kernel
 
 register_configs()
 
@@ -78,7 +78,7 @@ def main(config: Config):
   with jax.set_mesh(mesh):
     train_state = init_train_state(key_model, config)
   cache_params = CacheParams(enabled=False, size=0)
-  kernel = make_splash_kernel(config, config.train_dataset.seq_len, 0, mesh)
+  kernel = make_flash_kernel(config, config.train_dataset.seq_len, 0, mesh)
   val_kernels = []
   eval_kernels = []
   for eval in config.val_list:
@@ -87,14 +87,14 @@ def main(config: Config):
       # TODO: configure block sizes to use flash for this... (needs adaptive/pad)
       val_kernels.append(None)
     else:
-      val_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, 0, mesh))
+      val_kernels.append(make_flash_kernel(config, eval.dataset.seq_len, 0, mesh))
   for eval in config.eval_list:
     if eval.evaluator == EvaluatorType.AUTOREGRESSIVE_ROLLOUTS:
       # HACK: fallback to XLA attention @ autoregressive
       # TODO: configure block sizes to use flash for this... (needs adaptive/pad)
       eval_kernels.append(None)
     else:
-      eval_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, 0, mesh))
+      eval_kernels.append(make_flash_kernel(config, eval.dataset.seq_len, 0, mesh))
   spec = model_spec(train_state.params)
   opt_update = opt_update_factory(config.optimizer.type)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)

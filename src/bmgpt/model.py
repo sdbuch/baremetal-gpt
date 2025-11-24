@@ -292,7 +292,8 @@ def _attn_batched(
     kv_segment_ids = kv_segment_ids[None].repeat(b, axis=0)
     segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
 
-    attn_out = flash_attention(
+    flash_sharded, kernel = kernel
+    attn_out = flash_sharded(
       q,
       k,
       v,
