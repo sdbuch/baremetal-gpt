@@ -293,7 +293,7 @@ def _attn_batched(
     segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
 
     flash_sharded, kernel = kernel
-    attn_out = flash_sharded(q, k, v, segment_ids=segment_ids)
+    attn_out = flash_sharded(q, k, v)
   else:
     # Make mask
     raise NotImplementedError
