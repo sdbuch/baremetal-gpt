@@ -110,26 +110,29 @@ def main(config: Config):
       logprobs = jax.nn.log_softmax(logits, axis=-1)
       return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
-    loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
-    grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
-    update__opt_state = jax.tree.map(
-      partial(opt_update, config),
-      train_state.params,
-      grad_clipped,
-      train_state.opt_state,
-      weight_decay_mask,
-    )
-    # Transpose the output tree to get update tree and state tree
-    update, opt_state = map(
-      lambda i: jax.tree.map(lambda x, y: y[i], grad, update__opt_state), range(2)
-    )
-    params = jax.tree.map(lambda x, y: x + y, train_state.params, update)
-    new_state = TrainState(
-      params=params, opt_state=opt_state, kv_cache=train_state.kv_cache
-    )
-
-    metrics = {"batch_loss": loss, "grad_norm": global_grad_norm}
-    return metrics, new_state
+    loss = loss_fn(train_state.params)
+    # loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
+    # grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
+    # update__opt_state = jax.tree.map(
+    #   partial(opt_update, config),
+    #   train_state.params,
+    #   grad_clipped,
+    #   train_state.opt_state,
+    #   weight_decay_mask,
+    # )
+    # # Transpose the output tree to get update tree and state tree
+    # update, opt_state = map(
+    #   lambda i: jax.tree.map(lambda x, y: y[i], grad, update__opt_state), range(2)
+    # )
+    # params = jax.tree.map(lambda x, y: x + y, train_state.params, update)
+    # new_state = TrainState(
+    #   params=params, opt_state=opt_state, kv_cache=train_state.kv_cache
+    # )
+    #
+    # metrics = {"batch_loss": loss, "grad_norm": global_grad_norm}
+    metrics = {"batch_loss": loss}
+    # return metrics, new_state
+    return metrics, train_state
 
   # Training loop
   with Logger(config) as logger:
