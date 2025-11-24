@@ -63,9 +63,9 @@ def autoregressive_rollouts(
   with jax.set_mesh(mesh):
     cache = init_kv_cache(config, global_batch_size, config.model.max_seq_len - 1)
     outputs, cache, cache_size = batched_generate(prompts, cache)
+    outputs = jax.sharding.reshard(outputs, out_shardings=jax.P())
 
   tokenizer = get_tokenizer_factory(config.inference)
-  outputs = jax.sharding.reshard(outputs, out_shardings=jax.P())
   str_outputs = [tokenizer.decode(ids) for ids in outputs]
   print(f"Prompt: {prompts[jax.process_index()]}")
   print(f"Generated text: {str_outputs[jax.process_index()]}")
