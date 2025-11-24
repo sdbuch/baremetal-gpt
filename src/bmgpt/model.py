@@ -172,19 +172,19 @@ def _attn(
     _apply_rope_all_heads = jax.vmap(_apply_rope_one_head)
     q, k = _apply_rope_all_heads(q), _apply_rope_all_heads(k)
 
-  # Cache read scheme: to enable same mask for the same s value (Q seq len),
-  #  we concatenate the full cache to K, and mask empty entries with splash attn
-  # For efficient training, set cache size zero + cache_params.enabled=False
   k_cache, v_cache = kv_cache[0], kv_cache[1]
-  cache_capacity = k_cache.shape[-2]
-  k = jnp.concatenate((k_cache, k), axis=1)
-  v = jnp.concatenate((v_cache, v), axis=1)
   if cache_params.enabled:
     k_cache_out = jax.lax.dynamic_update_slice(k_cache, k, (0, cache_params.size, 0))
     v_cache_out = jax.lax.dynamic_update_slice(v_cache, v, (0, cache_params.size, 0))
     kv_cache_out = jnp.concatenate((k_cache_out[None], v_cache_out[None]), axis=0)
   else:
     kv_cache_out = kv_cache
+  # Cache read scheme: to enable same mask for the same s value (Q seq len),
+  #  we concatenate the full cache to K, and mask empty entries
+  # For efficient training, set cache size zero + cache_params.enabled=False
+  cache_capacity = k_cache.shape[-2]
+  k = jnp.concatenate((k_cache, k), axis=1)
+  v = jnp.concatenate((v_cache, v), axis=1)
 
   # Attention
   t = k.shape[1]  # t = s + cache_capacity
