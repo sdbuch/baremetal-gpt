@@ -46,3 +46,4 @@ optimizer:
 
 inference:
   tokenizer: GPT2
+  max_tokens_to_generate: 128
