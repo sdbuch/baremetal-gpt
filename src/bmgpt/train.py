@@ -28,12 +28,12 @@ from bmgpt.model import (
   init_transformer,
   model_spec,
 )
-from bmgpt.splash_helpers import make_splash_kernel
 from bmgpt.optimizers import (
   grad_norm_and_clip,
   init_adam_state,
   opt_update_factory,
 )
+from bmgpt.splash_helpers import make_splash_kernel
 
 register_configs()
 
@@ -85,11 +85,16 @@ def main(config: Config):
   val_kernels = []
   eval_kernels = []
   for eval in config.val_list:
-    val_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, 0, mesh))
-  for eval in config.eval_list:
-    # HACK: fallback to XLA attention @ autoregressive
-    # TODO: configure block sizes to use flash for this... (needs adaptive...)
     if eval.evaluator == EvaluatorType.AUTOREGRESSIVE_ROLLOUTS:
+      # HACK: fallback to XLA attention @ autoregressive
+      # TODO: configure block sizes to use flash for this... (needs adaptive/pad)
+      val_kernels.append(None)
+    else:
+      val_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, 0, mesh))
+  for eval in config.eval_list:
+    if eval.evaluator == EvaluatorType.AUTOREGRESSIVE_ROLLOUTS:
+      # HACK: fallback to XLA attention @ autoregressive
+      # TODO: configure block sizes to use flash for this... (needs adaptive/pad)
       eval_kernels.append(None)
     else:
       eval_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, 0, mesh))
