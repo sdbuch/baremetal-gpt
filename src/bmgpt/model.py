@@ -133,19 +133,6 @@ def _make_cache_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
   return k_positions[None, :] < cache_size
 
 
-# DEBUG
-def log_sharding(tag, x):
-  def _host_log(arr):
-    print(f"{tag}: shape={arr.shape}, sharding={getattr(arr, 'sharding', None)}")
-
-  # jax.debug.callback(_host_log, x)
-  _host_log(x)
-  return x
-
-
-# DEBUG
-
-
 def _attn(
   config: Config,
   kernel,
@@ -160,41 +147,12 @@ def _attn(
   # h: head dim (config.d_head)
   # x_seq: s x d
 
-  # DEBUG
-  @jax.custom_vjp
-  def proj(x_seq, w_qkv):
-    x_seq = log_sharding("proj fwd x_seq", x_seq)
-    w_qkv = log_sharding("proj fwd w_qkv", w_qkv)
-    return jnp.einsum(
-      "sd,d3nh->3nsh", x_seq, w_qkv, out_sharding=jax.P(*config.sharding.att_qkv)
-    )
-
-  def proj_fwd(x_seq, w_qkv):
-    out = jnp.einsum(
-      "sd,d3nh->3nsh", x_seq, w_qkv, out_sharding=jax.P(*config.sharding.att_qkv)
-    )
-    return out, (x_seq, w_qkv)
-
-  def proj_bwd(res, dout):
-    x_seq, w_qkv = res
-    log_sharding("proj bwd dout", dout)
-    log_sharding("proj bwd saved x_seq", x_seq)
-    log_sharding("proj bwd saved w_qkv", w_qkv)
-    dx = jnp.einsum("3nsh,d3nh->sd", dout, w_qkv.conj())
-    dw = jnp.einsum("sd,3nsh->d3nh", x_seq.conj(), dout)
-    return dx, dw
-
-  proj.defvjp(proj_fwd, proj_bwd)
-
-  # q, k, v = jnp.einsum(
-  #   "sd,d3nh->3nsh",
-  #   x_seq,
-  #   params.w_qkv,
-  #   out_sharding=jax.P(*config.sharding.att_qkv),
-  # )
-  qkv = proj(x_seq, params.w_qkv)
-  q, k, v = qkv
-  # DEBUG
+  q, k, v = jnp.einsum(
+    "sd,d3nh->3nsh",
+    x_seq,
+    params.w_qkv,
+    out_sharding=jax.P(*config.sharding.att_qkv),
+  )
   s = q.shape[1]
 
   # Cache + RoPE scheme: we update the cache after applying RoPE to K,
@@ -235,16 +193,7 @@ def _attn(
     segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
 
     splash_sharded, kernel = kernel
-
-    def call_splash(*args):
-      prev = jax.config.jax_disable_jit
-      try:
-        jax.config.update("jax_disable_jit", False)
-        return splash_sharded(*args)
-      finally:
-        jax.config.update("jax_disable_jit", prev)
-
-    attn_out = call_splash(
+    attn_out = splash_sharded(
       kernel,
       q / config.model.d_head**0.25,
       k / config.model.d_head**0.25,
