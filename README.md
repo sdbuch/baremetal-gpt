@@ -50,7 +50,13 @@ We also include an example launch script, `/deploy/run.sh`, for use on
 Google Cloud TPU VMs.
 For example, from the repository root, to train the default model (GPT2-Small
 scale) on Tiny Shakespeare using a 16-chip (4 host) TPU v4 VM `tpu-v4-32` with
-data parallel:
+data parallel, first download the dataset to each host:
+
+```
+./deploy/download_shakespeare.sh tpu-v4-32
+```
+
+Then run the training script:
 
 ```
 ./deploy/run.sh tpu-v4-32 +deploy=v4-16 +experiment=tiny-shakespeare
