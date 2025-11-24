@@ -296,7 +296,6 @@ def _attn_batched(
     attn_out = flash_sharded(q, k, v)
   else:
     # Make mask
-    raise NotImplementedError
     if config.model.is_causal:
       mask = _make_causal_mask(s, t, cache_capacity)
       cache_mask = _make_cache_mask(s, t, cache_params.size) | (
@@ -305,14 +304,14 @@ def _attn_batched(
       mask = mask & cache_mask
     else:
       mask = ~_make_cache_mask(s, t, 0)  # full attention
-    mask = mask[None, ...]  # broadcast over heads
+    mask = mask[None, None, ...]  # broadcast over batch and heads
     # Scale and causal mask
-    logits = jnp.einsum("nsh,nth->nst", q, k).astype(config.model.compute_dtype.value)
+    logits = jnp.einsum("bnsh,bnth->bnst", q, k).astype(config.model.compute_dtype.value)
     logits *= 1.0 / config.model.d_head**0.5
     logits = jnp.where(mask, logits, -jnp.inf)
-    probs = jax.nn.softmax(logits, axis=2)  # type: ignore[reportArgumentType]
+    probs = jax.nn.softmax(logits, axis=-1)  # type: ignore[reportArgumentType]
     probs = probs.astype(config.model.param_dtype.value)
-    attn_out = jnp.einsum("nst,nth->nsh", probs, v)
+    attn_out = jnp.einsum("bnst,bnth->nsh", probs, v)
   out = jnp.einsum(
     "bnsh,hnd->bsd",
     attn_out,
