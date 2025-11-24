@@ -193,14 +193,8 @@ def _attn(
     segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
 
     splash_sharded, kernel = kernel
-    # attn_out = splash_sharded(
-    #   kernel,
-    #   q / config.model.d_head**0.25,
-    #   k / config.model.d_head**0.25,
-    #   v,
-    #   segment_ids,
-    # )
-    attn_out = kernel(
+    attn_out = splash_sharded(
+      kernel,
       q / config.model.d_head**0.25,
       k / config.model.d_head**0.25,
       v,
