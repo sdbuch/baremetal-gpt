@@ -260,8 +260,8 @@ def _attn_batched(
     _apply_rope_one_head = partial(
       _apply_rope, config, rope_cos, rope_sin, positions + cache_params.size
     )
-    _apply_rope_all_heads = jax.vmap(_apply_rope_one_head, in_axes=1, out_axes=1)
-    q, k = _apply_rope_all_heads(q), _apply_rope_all_heads(k)
+    _apply_rope_all_heads_batched = jax.vmap(jax.vmap(_apply_rope_one_head))
+    q, k = _apply_rope_all_heads_batched(q), _apply_rope_all_heads_batched(k)
 
   k_cache, v_cache = jnp.moveaxis(kv_cache, 1, 0)
   if cache_params.enabled:
