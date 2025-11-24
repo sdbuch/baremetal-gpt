@@ -21,7 +21,7 @@ def sample_one_token(
   y, cache_out = _transformer(config, kernel, params, seqs, cache_in, cache_params)
   logits = y.astype(config.model.compute_dtype.value)
   cache_size = cache_size + seqs.shape[-1]
-  next_tokens = jnp.array(jax.random.categorical(key, logits[:, -1] / temperature))
+  next_tokens = jnp.array(jax.random.categorical(key, logits[:, -1:] / temperature))
   return next_tokens, cache_out, cache_size
 
 
@@ -60,7 +60,7 @@ def generate(
       *next_token__cache__cache_size,
       config.inference.temperature,
     )
-    return (next_token, cache, cache_size), next_token
+    return (next_token, cache, cache_size), next_token[:, 0]
 
   keys = jax.random.split(key, config.inference.max_tokens_to_generate)
   (next_tokens, cache, cache_params), output = jax.lax.scan(
