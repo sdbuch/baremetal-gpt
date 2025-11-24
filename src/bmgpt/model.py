@@ -242,7 +242,7 @@ def _attn_batched(
   # x_seq: s x d
 
   qkv = jnp.einsum(
-    "bsd,bd3nh->b3nsh",
+    "bsd,d3nh->b3nsh",
     x_seq,
     params.w_qkv,
     out_sharding=jax.P(*(config.sharding.data + config.sharding.att_qkv)),
@@ -320,7 +320,7 @@ def _attn_batched(
     probs = probs.astype(config.model.param_dtype.value)
     attn_out = jnp.einsum("nst,nth->nsh", probs, v)
   out = jnp.einsum(
-    "bnsh,bhnd->bsd",
+    "bnsh,hnd->bsd",
     attn_out,
     params.w_o,
     out_sharding=jax.P(*(config.sharding.data + config.sharding.res_stream)),
