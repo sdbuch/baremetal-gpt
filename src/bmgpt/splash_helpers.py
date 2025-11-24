@@ -81,6 +81,9 @@ def make_splash_kernel(
       [FullMask(shape=(s, t)) for _ in range(config.model.num_heads)]
     )
   _block_size = min(config.train_dataset.seq_len, 128)
+  if _block_size % 128 != 0:
+    # splash attention kernel requires block size to be a multiple of 128
+    return None
   block_sizes = BlockSizes(
     block_q=_block_size,
     block_kv=_block_size,
