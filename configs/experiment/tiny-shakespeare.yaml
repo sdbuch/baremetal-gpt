@@ -35,3 +35,7 @@ model:
 
 optimizer:
   weight_decay: 1e-1
+
+
+inference:
+  tokenizer: GPT2
