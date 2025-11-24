@@ -236,11 +236,11 @@ def _attn(
 
     splash_sharded, kernel = kernel
 
-    def call_splash(kernel, q, k, v, segment_ids):
-      prev = jax.config.read("jax_disable_jit")
+    def call_splash(*args):
+      prev = jax.config.jax_disable_jit
       try:
         jax.config.update("jax_disable_jit", False)
-        return splash_sharded(kernel, q, k, v, segment_ids)
+        return splash_sharded(*args)
       finally:
         jax.config.update("jax_disable_jit", prev)
 
