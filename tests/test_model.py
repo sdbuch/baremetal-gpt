@@ -121,6 +121,9 @@ def test_attention_masks():
     == jnp.zeros((q_seq_len, kv_cache_size - 2 * q_seq_len)).astype(jnp.bool)
   )
 
+    # Test equivalence
+    assert jnp.all(jnp.equal(cache_mask & causal_mask, causal_mask))
+
 
 def test_cache_correct_predictions():
   # Test we get same preds on new tokens if we have past tokens in cache vs context

@@ -4,6 +4,9 @@ from typing import Any, NamedTuple
 import jax
 import jax.numpy as jnp
 from jax import Array
+from jax.experimental.pallas.ops.tpu.splash_attention import (
+  SegmentIds,
+)
 
 from bmgpt.config import Config, TransformerType
 
@@ -65,6 +68,11 @@ class Attn(NamedTuple):
   w_o: Array
 
 
+class CacheParams(NamedTuple):
+  enabled: bool
+  size: int
+
+
 def init_attn(config: Config, key) -> Attn:
   k_qkv, k_o = jax.random.split(key, 2)
   w_qkv = config.model.param_std * jax.random.normal(
@@ -122,15 +130,16 @@ def _make_causal_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
 def _make_cache_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
   """(1, seq_len_k) bool array with True for actual cache+context positions"""
   k_positions = jnp.arange(seq_len_k)
-  return k_positions[None, :] < cache_size + seq_len_q
+  return k_positions[None, :] < cache_size
 
 
 def _attn(
   config: Config,
+  kernel,
   params: Attn,
   x_seq: jax.Array,
-  kv_cache: jax.Array,  # 2 x config.max_seq_len x n x h (see below)
-  cache_size: int,
+  kv_cache: jax.Array,  # 2 x cache_capacity x n x h
+  cache_params: CacheParams,
 ):
   # s: sequence length
   # d: embedding dim (config.d_model)
@@ -138,55 +147,76 @@ def _attn(
   # h: head dim (config.d_head)
   # x_seq: s x d
 
-  qkv = jnp.einsum(
-    "sd,d3nh->3snh",
+  q, k, v = jnp.einsum(
+    "sd,d3nh->3nsh",
     x_seq,
     params.w_qkv,
     out_sharding=jax.P(*config.sharding.att_qkv),
   )
-  q, k, v = [qkv[i] for i in range(3)]
-  s = q.shape[0]  # we save k shape later, after possibly prepending cache
+  s = q.shape[1]
 
-  # Apply RoPE
+  # Cache + RoPE scheme: we update the cache after applying RoPE to K,
+  #  so new Q/K just needs to RoPE with positions + cache_size!
   if config.model.use_rope:
     with jax.ensure_compile_time_eval():
       rope_cos, rope_sin = _precompute_rope_cossin(config)
       positions = jnp.arange(s, out_sharding=jax.P())
     _apply_rope_one_head = partial(
-      _apply_rope, config, rope_cos, rope_sin, positions + cache_size
+      _apply_rope, config, rope_cos, rope_sin, positions + cache_params.size
     )
-    _apply_rope_all_heads = jax.vmap(_apply_rope_one_head, in_axes=1, out_axes=1)
+    _apply_rope_all_heads = jax.vmap(_apply_rope_one_head)
     q, k = _apply_rope_all_heads(q), _apply_rope_all_heads(k)
 
-  # Read/update/concatenate the cache
-  if cache_size >= 0:
-    k_cache, v_cache = kv_cache[0], kv_cache[1]
-    k = jax.lax.dynamic_update_slice(k_cache, k, (cache_size, 0, 0))
-    v = jax.lax.dynamic_update_slice(v_cache, v, (cache_size, 0, 0))
-    kv_cache_out = jnp.concatenate((k[None], v[None]), axis=0)
+  k_cache, v_cache = kv_cache[0], kv_cache[1]
+  if cache_params.enabled:
+    k_cache_out = jax.lax.dynamic_update_slice(k_cache, k, (0, cache_params.size, 0))
+    v_cache_out = jax.lax.dynamic_update_slice(v_cache, v, (0, cache_params.size, 0))
+    kv_cache_out = jnp.concatenate((k_cache_out[None], v_cache_out[None]), axis=0)
   else:
     kv_cache_out = kv_cache
+  # Cache read scheme: to enable same mask for the same s value (Q seq len),
+  #  we concatenate the full cache to K, and mask empty entries
+  # For efficient training, set cache size zero + cache_params.enabled=False
+  cache_capacity = k_cache.shape[-2]
+  k = jnp.concatenate((k_cache, k), axis=1)
+  v = jnp.concatenate((v_cache, v), axis=1)
 
-  # Attention computation
-  t = k.shape[0]
-  if config.model.is_causal:
-    mask = _make_causal_mask(s, t, cache_size)
-    mask = mask & _make_cache_mask(s, t, cache_size)  # need for static cache
+  # Attention
+  t = k.shape[1]  # t = s + cache_capacity
+  if kernel:
+    q_segment_ids = jnp.zeros((s,))
+    kv_segment_ids = jnp.zeros((t,))
+    kv_segment_ids = kv_segment_ids.at[cache_params.size : cache_capacity].set(1)
+    segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
+
+    splash_sharded, kernel = kernel
+    attn_out = splash_sharded(
+      kernel,
+      q / config.model.d_head**0.25,
+      k / config.model.d_head**0.25,
+      v,
+      segment_ids,
+    )
   else:
-    mask = _make_cache_mask(s, t, 0)  # full attention
-  mask = mask[None, ...]  # broadcast over heads
-  if config.model.use_fa:
-    attn_out = jax.nn.dot_product_attention(q, k, v, scale=None, mask=mask)
-  else:
-    logits = jnp.einsum("snh,tnh->nst", q, k).astype(config.model.compute_dtype.value)
+    # Make mask
+    if config.model.is_causal:
+      mask = _make_causal_mask(s, t, cache_capacity)
+      cache_mask = _make_cache_mask(s, t, cache_params.size) | (
+        ~_make_cache_mask(s, t, cache_capacity)
+      )
+      mask = mask & cache_mask
+    else:
+      mask = ~_make_cache_mask(s, t, 0)  # full attention
+    mask = mask[None, ...]  # broadcast over heads
     # Scale and causal mask
+    logits = jnp.einsum("nsh,nth->nst", q, k).astype(config.model.compute_dtype.value)
     logits *= 1.0 / config.model.d_head**0.5
     logits = jnp.where(mask, logits, -jnp.inf)
     probs = jax.nn.softmax(logits, axis=2)  # type: ignore[reportArgumentType]
     probs = probs.astype(config.model.param_dtype.value)
-    attn_out = jnp.einsum("nst,tnh->snh", probs, v)
+    attn_out = jnp.einsum("nst,nth->nsh", probs, v)
   out = jnp.einsum(
-    "snh,hnd->sd",
+    "nsh,hnd->sd",
     attn_out,
     params.w_o,
     out_sharding=jax.P(*config.sharding.res_stream),
@@ -375,15 +405,16 @@ def init_block(config: Config, key) -> Block:
 
 def _block(
   config: Config,
+  kernel,
   params: Block,
   x_seq: Array,
-  cache_in: jax.Array,
-  cache_size: int,
+  cache: jax.Array,
+  cache_params: CacheParams,
 ):
   att_skip = x_seq
   out = jax.vmap(partial(_layernorm, config, params.norm_attn))(x_seq)
   out, cache_out = _attn(
-    config, params.attn, out, kv_cache=cache_in, cache_size=cache_size
+    config, kernel, params.attn, out, kv_cache=cache, cache_params=cache_params
   )
   out += att_skip
 
@@ -417,19 +448,20 @@ def init_transformer(key, config: Config) -> Transformer:
 
 def _transformer(
   config: Config,
+  kernel,
   params: Transformer,
   tokens: Array,
-  cache_in: jax.Array,
-  cache_size: int,
+  cache: jax.Array,
+  cache_params: CacheParams,
 ):
   _, __, _embedding, _unembedding = transformer_variant_factory(config)
   x_seq = _embedding(config, params.emb, tokens)
 
   def _block_fun(x_seq: Array, params__cache_in: tuple[Block, jax.Array]):
     params, cache_in = params__cache_in
-    return _block(config, params, x_seq, cache_in, cache_size)
+    return _block(config, kernel, params, x_seq, cache_in, cache_params)
 
-  out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache_in))
+  out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache))
 
   out = _unembedding(config, params.unemb, out)
 
@@ -442,28 +474,20 @@ def _transformer(
 
 
 # TODO: update sharding if attention sharding is modified
-def init_kv_cache(config: Config, global_batch_size: int, update_cache: bool):
+def init_kv_cache(config: Config, global_batch_size: int, cache_capacity: int):
   if not config.sharding.data:
     sharding_batch_layer = [None, None]
   else:
     sharding_batch_layer = config.sharding.data + [None]
   sharding = jax.P(*(sharding_batch_layer + config.sharding.att_qkv))
 
-  if not update_cache:
-    # Save memory if we aren't updating the cache
-    dummy_cache = jnp.zeros(
-      (global_batch_size, config.model.num_layers, 2, 1, 1, 1),
-      dtype=config.model.param_dtype.value,
-      out_sharding=sharding,
-    )
-    return dummy_cache
   return jnp.zeros(
     (
       global_batch_size,
       config.model.num_layers,
       2,
-      config.model.max_seq_len,
       config.model.num_heads,
+      cache_capacity,
       config.model.d_head,
     ),
     dtype=config.model.param_dtype.value,
@@ -489,7 +513,7 @@ def model_spec(model: Transformer) -> Any:
       ".w": (-2, -1),
       ".w_emb": (-2, -1),
       ".w_pos": (-2, -1),
-      ".w_reg": (-2, -1),
+      ".w_reg": (-2, -1),  # TODO: weight decay registers?
     }
     return matrix_axes_dict.get(param_str, None)
 

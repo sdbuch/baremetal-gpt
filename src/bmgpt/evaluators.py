@@ -7,7 +7,7 @@ import jax.numpy as jnp
 
 from bmgpt.config import Config, EvaluationConfig, EvaluatorType
 from bmgpt.data import DataloaderOutputType
-from bmgpt.model import Transformer, _transformer, init_kv_cache
+from bmgpt.model import CacheParams, Transformer, _transformer, init_kv_cache
 from bmgpt.sample import generate
 
 
@@ -46,6 +46,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
 def autoregressive_rollouts(
   config: Config,
   key,
+  kernel,
   mesh,
   params: Transformer,
   batch_iter: DataloaderOutputType,
@@ -53,24 +54,24 @@ def autoregressive_rollouts(
 ):
   """prompts should have a leading batch axis"""
   prompts, _ = next(batch_iter)
-  cache_size = 0
 
   @jax.vmap
   def batched_generate(prompt: jax.Array, cache):
-    return generate(config, key, params, prompt, cache, cache_size)
+    return generate(config, key, kernel, params, prompt, cache, 0)
 
   with jax.set_mesh(mesh):
-    cache = init_kv_cache(config, global_batch_size, update_cache=True)
+    cache = init_kv_cache(config, global_batch_size, config.model.max_seq_len - 1)
     outputs, cache, cache_size = batched_generate(prompts, cache)
 
   print(f"Prompt: {prompts.addressable_shards[0].data}")
   print(f"Generated text: {outputs.addressable_shards[0].data}")
-  return outputs
+  return {}
 
 
 def calculate_metric_on_minibatches(
   config: Config,
   key,
+  kernel,
   mesh,
   params: Transformer,
   batch_iter: DataloaderOutputType,
@@ -81,12 +82,12 @@ def calculate_metric_on_minibatches(
 ):
   num_samples_processed = 0
   with jax.set_mesh(mesh):
-    cache = init_kv_cache(config, global_batch_size, update_cache=False)
+    cache = init_kv_cache(config, global_batch_size, 0)
 
   # Process first batch (to get on-device buffer shape)
   batch = next(batch_iter)
   with jax.set_mesh(mesh):
-    batch_metric = metric(config, batch, params, cache)
+    batch_metric = metric(config, kernel, batch, params, cache)
   buffer = batch_metric
   num_samples_processed += len(batch[0])
 
@@ -105,22 +106,34 @@ def calculate_metric_on_minibatches(
 
 
 @jax.jit
-def accuracy(config: Config, batch, params: Transformer, cache):
+def accuracy(config: Config, kernel, batch, params: Transformer, cache):
   inputs, targets = batch
-  logits, _ = jax.vmap(partial(_transformer, config, params, cache_size=-1))(
-    inputs, cache
-  )
+  logits, _ = jax.vmap(
+    partial(
+      _transformer,
+      config,
+      kernel,
+      params,
+      cache_params=CacheParams(enabled=False, size=0),
+    )
+  )(inputs, cache)
   preds = logits.argmax(axis=-1)
   return (preds == targets).astype(jnp.int32)
 
 
 @jax.jit
-def nll(config: Config, batch, params: Transformer, cache):
+def nll(config: Config, kernel, batch, params: Transformer, cache):
   """Negative log likelihood, calculated in nats."""
   inputs, targets = batch
-  logits, _ = jax.vmap(partial(_transformer, config, params, cache_size=-1))(
-    inputs, cache
-  )
+  logits, _ = jax.vmap(
+    partial(
+      _transformer,
+      config,
+      kernel,
+      params,
+      cache_params=CacheParams(enabled=False, size=0),
+    )
+  )(inputs, cache)
   logits = logits.astype(config.model.compute_dtype.value)
   logprobs = jax.nn.log_softmax(logits, axis=-1)
   return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).squeeze(-1)
