@@ -133,7 +133,7 @@ def make_flash_kernel(
   @partial(
     jax.shard_map,
     mesh=mesh,
-    in_specs=(flash_spec, flash_spec, flash_spec, jax.P()),
+    in_specs=(flash_spec, flash_spec, flash_spec),
     out_specs=flash_spec,
     check_vma=False,
   )
