@@ -26,9 +26,9 @@ from bmgpt.model import (
   _transformer,
   init_kv_cache,
   init_transformer,
-  make_splash_kernel,
   model_spec,
 )
+from bmgpt.splash_helpers import make_splash_kernel
 from bmgpt.optimizers import (
   grad_norm_and_clip,
   init_adam_state,

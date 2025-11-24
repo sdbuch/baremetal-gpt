@@ -82,7 +82,7 @@ def calculate_metric_on_minibatches(
 ):
   num_samples_processed = 0
   with jax.set_mesh(mesh):
-    cache = init_kv_cache(config, global_batch_size, update_cache=False)
+    cache = init_kv_cache(config, global_batch_size, 0)
 
   # Process first batch (to get on-device buffer shape)
   batch = next(batch_iter)

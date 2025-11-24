@@ -5,13 +5,8 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 from jax.experimental.pallas.ops.tpu.splash_attention import (
-  CausalMask,
-  MultiHeadMask,
   SegmentIds,
-  make_splash_mha,
-  make_splash_mha_single_device,
 )
-from jax.sharding import auto_axes
 
 from bmgpt.config import Config, TransformerType
 
@@ -539,43 +534,3 @@ def transformer_variant_factory(config: Config):
     fun_unembedding = _classification_head
 
   return (init_embedding, init_unembedding, fun_embedding, fun_unembedding)
-
-
-def make_splash_kernel(
-  config: Config,
-  q_seq_len: int,
-  cache_capacity: int,
-  mesh,
-  head_shards: int = 1,
-  q_seq_shards: int = 1,
-):
-  # s is Q len (seq_len @ train; variable/1 at prefill/decode)
-  # t is K len (s + cache_capacity)
-  # see _attn
-  s = q_seq_len
-  t = s + cache_capacity
-
-  if not config.model.is_causal:
-    raise NotImplementedError  # TODO: manually write a _ComputableMask FullMask
-  mask = MultiHeadMask(
-    [
-      CausalMask(shape=(s, t), offset=cache_capacity)
-      for _ in range(config.model.num_heads)
-    ]
-  )
-  splash_spec = jax.P(None, None)
-  splash_sharding = jax.sharding.NamedSharding(mesh, splash_spec)
-  kernel = make_splash_mha(mask, head_shards=head_shards, q_seq_shards=q_seq_shards)
-  kernel_spec = kernel.manual_sharding_spec(splash_sharding)
-
-  @partial(
-    jax.shard_map,
-    mesh=mesh,
-    in_specs=(kernel_spec, splash_spec, splash_spec, splash_spec, jax.P()),
-    out_specs=splash_spec,
-    check_vma=False,
-  )
-  def splash_sharded(kernel, q, k, v, segment_ids):
-    return kernel(q, k, v, segment_ids=segment_ids)
-
-  return (splash_sharded, kernel)
