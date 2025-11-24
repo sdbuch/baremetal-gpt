@@ -27,7 +27,7 @@ class FullMask(_ComputableMask):
       # When evaluating the mask in _process_mask we typically work with numpy
       # array views.
       # Avoid the addition when possible to avoid instantiating an actual array.
-      return q_ids >= kv_ids | kv_ids > q_ids
+      return (q_ids >= kv_ids) | (kv_ids > q_ids)
 
     mask_function = full_mask_function
 
