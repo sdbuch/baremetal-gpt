@@ -80,7 +80,7 @@ def make_splash_kernel(
     mask = MultiHeadMask(
       [FullMask(shape=(s, t)) for _ in range(config.model.num_heads)]
     )
-  _block_size = config.train_dataset.seq_len
+  _block_size = min(config.train_dataset.seq_len, 128)
   block_sizes = BlockSizes(
     block_q=_block_size,
     block_kv=_block_size,
