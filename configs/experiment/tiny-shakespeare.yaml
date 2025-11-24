@@ -22,7 +22,7 @@ eval_list:
   - dataset:
       name: SHAKESPEARE
       path: ${train_dataset.path}
-      split: TEST
+      split: VAL
       seq_len: 128  # At inference time, this functions like prompt size
       global_batch_size: 16
     evaluator: AUTOREGRESSIVE_ROLLOUTS
