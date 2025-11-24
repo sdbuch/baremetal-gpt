@@ -245,7 +245,7 @@ def _attn_batched(
     "bsd,bd3nh->b3nsh",
     x_seq,
     params.w_qkv,
-    out_sharding=jax.P(*config.sharding.att_qkv),
+    out_sharding=jax.P(*(config.sharding.data + config.sharding.att_qkv)),
   )
   q, k, v = jnp.moveaxis(qkv, 1, 0)
   s = q.shape[2]
@@ -302,6 +302,7 @@ def _attn_batched(
     )
   else:
     # Make mask
+    raise NotImplementedError
     if config.model.is_causal:
       mask = _make_causal_mask(s, t, cache_capacity)
       cache_mask = _make_cache_mask(s, t, cache_params.size) | (
@@ -319,10 +320,10 @@ def _attn_batched(
     probs = probs.astype(config.model.param_dtype.value)
     attn_out = jnp.einsum("nst,nth->nsh", probs, v)
   out = jnp.einsum(
-    "nsh,hnd->sd",
+    "bnsh,bhnd->bsd",
     attn_out,
     params.w_o,
-    out_sharding=jax.P(*config.sharding.res_stream),
+    out_sharding=jax.P(*(config.sharding.data + config.sharding.res_stream)),
   )
 
   return out, kv_cache_out
