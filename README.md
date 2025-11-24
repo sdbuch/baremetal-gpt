@@ -48,11 +48,12 @@ uv run train {Hydra overrides}
 
 We also include an example launch script, `/deploy/run.sh`, for use on
 Google Cloud TPU VMs.
-For example, from the repository root, to train on a 16-chip (4 host) TPU v4 VM
-`tpu-v4-32` with data parallel:
+For example, from the repository root, to train the default model (GPT2-Small
+scale) on Tiny Shakespeare using a 16-chip (4 host) TPU v4 VM `tpu-v4-32` with
+data parallel:
 
 ```
-./deploy/run.sh tpu-v4-32 num_vocab=10 num_layers=4 num_steps=300 lr=3e-4 'mesh_shape=[16]'
+./deploy/run.sh tpu-v4-32 +deploy=v4-16 +experiment=tiny-shakespeare
 ```
 
 # For More Information

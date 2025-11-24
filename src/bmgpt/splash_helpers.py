@@ -63,9 +63,12 @@ def make_splash_kernel(
   head_shards: int = 1,
   q_seq_shards: int = 1,
 ):
+  if not config.model.use_splash:
+    # None ends up calling jax-xla attention
+    # see _attn
+    return None
   # s is Q len (seq_len @ train; variable/1 at prefill/decode)
   # t is K len (s + cache_capacity)
-  # see _attn
   s = q_seq_len
   t = s + cache_capacity
 

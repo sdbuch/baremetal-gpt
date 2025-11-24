@@ -4,11 +4,13 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+from jax.experimental.multihost_utils import process_allgather
 
 from bmgpt.config import Config, EvaluationConfig, EvaluatorType
 from bmgpt.data import DataloaderOutputType
 from bmgpt.model import CacheParams, Transformer, _transformer, init_kv_cache
 from bmgpt.sample import generate
+from bmgpt.tokenizers import get_tokenizer_factory
 
 
 def evaluator_factory(evaluation_config: EvaluationConfig):
@@ -18,6 +20,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
       return partial(
         autoregressive_rollouts,
         global_batch_size=evaluation_config.dataset.global_batch_size,
+        prompt_size=evaluation_config.dataset.seq_len,
       )
     case EvaluatorType.ACCURACY:
       return partial(
@@ -25,6 +28,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
         metric=accuracy,
         global_batch_size=evaluation_config.dataset.global_batch_size,
         metric_name=evaluation_config.dataset.split.value + "/accuracy",
+        num_steps=evaluation_config.dataset.num_steps,
       )
     case EvaluatorType.NLL:
       return partial(
@@ -32,6 +36,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
         metric=nll,
         global_batch_size=evaluation_config.dataset.global_batch_size,
         metric_name=evaluation_config.dataset.split.value + "/nll",
+        num_steps=evaluation_config.dataset.num_steps,
       )
     case EvaluatorType.PERPLEXITY:
       return partial(
@@ -40,6 +45,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
         global_batch_size=evaluation_config.dataset.global_batch_size,
         metric_name=evaluation_config.dataset.split.value + "/perplexity",
         perplexity_flag=True,
+        num_steps=evaluation_config.dataset.num_steps,
       )
 
 
@@ -51,6 +57,7 @@ def autoregressive_rollouts(
   params: Transformer,
   batch_iter: DataloaderOutputType,
   global_batch_size: int,
+  prompt_size: int,
 ):
   """prompts should have a leading batch axis"""
   prompts, _ = next(batch_iter)
@@ -63,8 +70,14 @@ def autoregressive_rollouts(
     cache = init_kv_cache(config, global_batch_size, config.model.max_seq_len - 1)
     outputs, cache, cache_size = batched_generate(prompts, cache)
 
-  print(f"Prompt: {prompts.addressable_shards[0].data}")
-  print(f"Generated text: {outputs.addressable_shards[0].data}")
+  prompts, outputs = process_allgather((prompts, outputs))
+  tokenizer = get_tokenizer_factory(config.inference)
+  str_prompts = [tokenizer.decode(ids[:prompt_size]) for ids in outputs]
+  str_outputs = [tokenizer.decode(ids[prompt_size:]) for ids in outputs]
+  print("#" * 32 + "\nPrompt:\n" + "#" * 32)
+  print(f"{str_prompts[jax.process_index()]}")
+  print("#" * 32 + "\nGenerated text:\n" + "#" * 32)
+  print(f"{str_outputs[jax.process_index()]}")
   return {}
 
 
@@ -79,6 +92,7 @@ def calculate_metric_on_minibatches(
   metric,
   metric_name: str = "",
   perplexity_flag: bool = False,
+  num_steps: int = 0,
 ):
   num_samples_processed = 0
   with jax.set_mesh(mesh):
@@ -92,11 +106,14 @@ def calculate_metric_on_minibatches(
   num_samples_processed += len(batch[0])
 
   # Process remaining batches
-  for batch in batch_iter:
-    with jax.set_mesh(mesh):
-      batch_metric = metric(config, batch, params, cache)
-      buffer += batch_metric
-    num_samples_processed += len(batch[0])
+  if num_steps != 1:  # if num_steps=1, we want to skip this
+    for step, batch in enumerate(batch_iter):
+      with jax.set_mesh(mesh):
+        batch_metric = metric(config, kernel, batch, params, cache)
+        buffer += batch_metric
+      num_samples_processed += len(batch[0])
+      if step == num_steps - 1:
+        break
   metric = buffer.sum() / num_samples_processed
   if perplexity_flag:
     # there is an online algorithm for perplexity with a product reduction
@@ -105,7 +122,7 @@ def calculate_metric_on_minibatches(
   return {metric_name: metric}
 
 
-@jax.jit
+@partial(jax.jit, static_argnums=(1,))
 def accuracy(config: Config, kernel, batch, params: Transformer, cache):
   inputs, targets = batch
   logits, _ = jax.vmap(
@@ -121,7 +138,7 @@ def accuracy(config: Config, kernel, batch, params: Transformer, cache):
   return (preds == targets).astype(jnp.int32)
 
 
-@jax.jit
+@partial(jax.jit, static_argnums=(1,))
 def nll(config: Config, kernel, batch, params: Transformer, cache):
   """Negative log likelihood, calculated in nats."""
   inputs, targets = batch

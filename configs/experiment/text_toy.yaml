@@ -3,6 +3,9 @@
 defaults:
   - /dataset/staircase@train_dataset
 
+train_dataset:
+  num_steps: 100
+
 eval_list:
   - dataset:
       name: NUMBER_STAIRCASE

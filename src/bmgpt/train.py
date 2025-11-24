@@ -1,8 +1,5 @@
-import copy
-import math
 from functools import partial
 from pathlib import Path
-from time import sleep
 from typing import Any, NamedTuple
 
 import hydra
@@ -34,6 +31,7 @@ from bmgpt.optimizers import (
   init_adam_state,
   opt_update_factory,
 )
+from bmgpt.splash_helpers import make_splash_kernel
 
 register_configs()
 
@@ -85,11 +83,16 @@ def main(config: Config):
   val_kernels = []
   eval_kernels = []
   for eval in config.val_list:
-    val_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, 0, mesh))
-  for eval in config.eval_list:
-    # HACK: fallback to XLA attention @ autoregressive
-    # TODO: configure block sizes to use flash for this... (needs adaptive...)
     if eval.evaluator == EvaluatorType.AUTOREGRESSIVE_ROLLOUTS:
+      # HACK: fallback to XLA attention @ autoregressive
+      # TODO: configure block sizes to use flash for this... (needs adaptive/pad)
+      val_kernels.append(None)
+    else:
+      val_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, 0, mesh))
+  for eval in config.eval_list:
+    if eval.evaluator == EvaluatorType.AUTOREGRESSIVE_ROLLOUTS:
+      # HACK: fallback to XLA attention @ autoregressive
+      # TODO: configure block sizes to use flash for this... (needs adaptive/pad)
       eval_kernels.append(None)
     else:
       eval_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, 0, mesh))
@@ -141,7 +144,7 @@ def main(config: Config):
         key_val = do_evals(
           key_val, val_kernels, config.val_list, train_state.params, step
         )
-      if step == config.optimizer.num_steps - 1:
+      if step == config.train_dataset.num_steps - 1:
         break
 
     # Run evals (testing)

@@ -7,11 +7,12 @@ defaults:
 val_log_interval: 468 # every epoch
 
 train_dataset:
-  epochs_to_loop: 15
   path: "data/mnist/patch_7x7"
   split: TRAIN
   seq_len: 16  # 7x7 patches
   global_batch_size: 128
+  epochs_to_loop: 15
+  num_steps: 0
 
 val_list:
   - dataset:
@@ -73,6 +74,5 @@ model:
 
 
 optimizer:
-  num_steps: 0
   weight_decay: 1e-4
   lr: 3e-4

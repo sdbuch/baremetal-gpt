@@ -185,8 +185,11 @@ def _attn(
   t = k.shape[1]  # t = s + cache_capacity
   if kernel:
     q_segment_ids = jnp.zeros((s,))
-    kv_segment_ids = jnp.zeros((t,))
-    kv_segment_ids = kv_segment_ids.at[cache_params.size : cache_capacity].set(1)
+    kv_mask = _make_cache_mask(s, t, cache_params.size) | (
+      ~_make_cache_mask(s, t, cache_capacity)
+    )
+    kv_mask = ~kv_mask[0]
+    kv_segment_ids = kv_mask.astype(jnp.int32)
     segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
 
     splash_sharded, kernel = kernel
