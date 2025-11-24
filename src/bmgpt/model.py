@@ -143,7 +143,7 @@ def _attn(
   kernel,
   params: Attn,
   x_seq: jax.Array,
-  kv_cache: jax.Array,  # 2 x config.max_seq_len x n x h (see below)
+  kv_cache: jax.Array,  # 2 x cache_capacity x n x h
   cache_params: CacheParams,
 ):
   # s: sequence length
@@ -174,24 +174,24 @@ def _attn(
 
   # Cache read scheme: to enable same mask for the same s value (Q seq len),
   #  we concatenate the full cache to K, and mask empty entries with splash attn
+  # For efficient training, set cache size zero + cache_params.enabled=False
+  k_cache, v_cache = kv_cache[0], kv_cache[1]
+  cache_capacity = k_cache.shape[-2]
+  k = jnp.concatenate((k_cache, k), axis=1)
+  v = jnp.concatenate((v_cache, v), axis=1)
   if cache_params.enabled:
-    k_cache, v_cache = kv_cache[0], kv_cache[1]
     k_cache_out = jax.lax.dynamic_update_slice(k_cache, k, (0, cache_params.size, 0))
     v_cache_out = jax.lax.dynamic_update_slice(v_cache, v, (0, cache_params.size, 0))
-    k = jnp.concatenate((k_cache, k), axis=1)
-    v = jnp.concatenate((v_cache, v), axis=1)
     kv_cache_out = jnp.concatenate((k_cache_out[None], v_cache_out[None]), axis=0)
   else:
     kv_cache_out = kv_cache
 
   # Attention
-  t = k.shape[1]  # t = s + config.model.max_seq_len
+  t = k.shape[1]  # t = s + cache_capacity
   if kernel:
     q_segment_ids = jnp.zeros((s,))
     kv_segment_ids = jnp.zeros((t,))
-    kv_segment_ids = kv_segment_ids.at[
-      cache_params.size : config.model.max_seq_len
-    ].set(1)
+    kv_segment_ids = kv_segment_ids.at[cache_params.size : cache_capacity].set(1)
     segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
 
     splash_sharded, kernel = kernel
@@ -205,9 +205,9 @@ def _attn(
   else:
     # Make mask
     if config.model.is_causal:
-      mask = _make_causal_mask(s, t, config.model.max_seq_len)
+      mask = _make_causal_mask(s, t, cache_capacity)
       cache_mask = _make_cache_mask(s, t, cache_params.size) | (
-        ~_make_cache_mask(s, t, config.model.max_seq_len)
+        ~_make_cache_mask(s, t, cache_capacity)
       )
       mask = mask & cache_mask
     else:
@@ -479,28 +479,20 @@ def _transformer(
 
 
 # TODO: update sharding if attention sharding is modified
-def init_kv_cache(config: Config, global_batch_size: int, update_cache: bool):
+def init_kv_cache(config: Config, global_batch_size: int, cache_capacity: int):
   if not config.sharding.data:
     sharding_batch_layer = [None, None]
   else:
     sharding_batch_layer = config.sharding.data + [None]
   sharding = jax.P(*(sharding_batch_layer + config.sharding.att_qkv))
 
-  if not update_cache:
-    # Save memory if we aren't updating the cache
-    dummy_cache = jnp.zeros(
-      (global_batch_size, config.model.num_layers, 2, 1, 1, 1),
-      dtype=config.model.param_dtype.value,
-      out_sharding=sharding,
-    )
-    return dummy_cache
   return jnp.zeros(
     (
       global_batch_size,
       config.model.num_layers,
       2,
       config.model.num_heads,
-      config.model.max_seq_len,
+      cache_capacity,
       config.model.d_head,
     ),
     dtype=config.model.param_dtype.value,
@@ -550,18 +542,24 @@ def transformer_variant_factory(config: Config):
 
 
 def make_splash_kernel(
-  config: Config, q_seq_len: int, mesh, head_shards: int = 1, q_seq_shards: int = 1
+  config: Config,
+  q_seq_len: int,
+  cache_capacity: int,
+  mesh,
+  head_shards: int = 1,
+  q_seq_shards: int = 1,
 ):
   # s is Q len (seq_len @ train; variable/1 at prefill/decode)
-  # t is K len (s + config.model.max_seq_len)
+  # t is K len (s + cache_capacity)
+  # see _attn
   s = q_seq_len
-  t = s + config.model.max_seq_len
+  t = s + cache_capacity
 
   if not config.model.is_causal:
     raise NotImplementedError  # TODO: manually write a _ComputableMask FullMask
   mask = MultiHeadMask(
     [
-      CausalMask(shape=(s, t), offset=config.model.max_seq_len)
+      CausalMask(shape=(s, t), offset=cache_capacity)
       for _ in range(config.model.num_heads)
     ]
   )

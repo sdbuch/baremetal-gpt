@@ -12,6 +12,7 @@ import jax.numpy as jnp
 from bmgpt.config import (
   Config,
   EvaluationConfig,
+  EvaluatorType,
   config_post_init,
   mesh_from_config,
   register_configs,
@@ -20,13 +21,13 @@ from bmgpt.data import get_distributed_batch_iter
 from bmgpt.evaluators import evaluator_factory
 from bmgpt.loggers import Logger, logger_factory
 from bmgpt.model import (
+  CacheParams,
   Transformer,
   _transformer,
   init_kv_cache,
   init_transformer,
   make_splash_kernel,
   model_spec,
-  CacheParams,
 )
 from bmgpt.optimizers import (
   grad_norm_and_clip,
@@ -48,9 +49,7 @@ class TrainState(NamedTuple):
 def init_train_state(key, config: Config) -> TrainState:
   model_params = init_transformer(key, config)
   adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
-  cache = init_kv_cache(
-    config, config.train_dataset.global_batch_size, update_cache=False
-  )
+  cache = init_kv_cache(config, config.train_dataset.global_batch_size, 0)
   return TrainState(params=model_params, opt_state=adam_state, kv_cache=cache)
 
 
@@ -82,20 +81,19 @@ def main(config: Config):
   with jax.set_mesh(mesh):
     train_state = init_train_state(key_model, config)
   cache_params = CacheParams(enabled=False, size=0)
-  # kernel = make_splash_kernel(config, config.train_dataset.seq_len, mesh)
+  # kernel = make_splash_kernel(config, config.train_dataset.seq_len, 0, mesh)
   kernel = None
   val_kernels = []
   eval_kernels = []
   for eval in config.val_list:
-    val_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, mesh))
+    val_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, 0, mesh))
   for eval in config.eval_list:
-    # HACK: in small-seq settings (e.g., autoregressive q_seq_len=1), fallback to
-    # manual XLA attention
-    # TODO: should configure this more robustly (e.g. for small-seq-len training)
-    if eval.dataset.seq_len < 128:
+    # HACK: fallback to XLA attention @ autoregressive
+    # TODO: configure block sizes to use flash for this... (needs adaptive...)
+    if eval.evaluator == EvaluatorType.AUTOREGRESSIVE_ROLLOUTS:
       eval_kernels.append(None)
     else:
-      eval_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, mesh))
+      eval_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, 0, mesh))
   spec = model_spec(train_state.params)
   opt_update = opt_update_factory(config.optimizer.type)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)

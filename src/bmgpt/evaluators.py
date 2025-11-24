@@ -60,7 +60,7 @@ def autoregressive_rollouts(
     return generate(config, key, kernel, params, prompt, cache, 0)
 
   with jax.set_mesh(mesh):
-    cache = init_kv_cache(config, global_batch_size, update_cache=True)
+    cache = init_kv_cache(config, global_batch_size, config.model.max_seq_len - 1)
     outputs, cache, cache_size = batched_generate(prompts, cache)
 
   print(f"Prompt: {prompts.addressable_shards[0].data}")
