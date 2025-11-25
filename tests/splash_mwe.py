@@ -84,7 +84,7 @@ def make_splash_kernel_with_shard_map(mesh):
       jax.sharding.PartitionSpec(),
     ),
     out_specs=splash_spec,
-    check_rep=False,
+    check_vma=False,
   )
   def splash_sharded(kernel, q, k, v, segment_ids):
     return kernel(q, k, v, segment_ids=segment_ids)
@@ -218,7 +218,7 @@ def test_case_works_batch_inside(mesh):
       jax.sharding.PartitionSpec("dp"),  # segment_ids batched
     ),
     out_specs=batched_splash_spec,
-    check_rep=False,
+    check_vma=False,
   )
   def splash_batched_sharded(kernel, q, k, v, segment_ids):
     # vmap INSIDE shard_map over batch dimension
