@@ -211,16 +211,6 @@ def main():
     status = "PASSED ✓" if passed else "FAILED ✗"
     print(f"  {name}: {status}")
 
-  print("\n" + "=" * 70)
-  if not results["case_b_vmap_outside"] and results["case_a_batch_inside"]:
-    print("BUG CONFIRMED: vmap outside shard_map fails while batch-inside works.")
-    print("This is a regression from JAX 0.7.2 -> 0.8.1")
-  elif all(results.values()):
-    print("All tests passed - bug may not reproduce in this configuration.")
-  else:
-    print("Unexpected failure pattern - investigate further.")
-  print("=" * 70)
-
 
 if __name__ == "__main__":
   main()
