@@ -14,10 +14,14 @@ This worked in JAX 0.7.2 but fails in JAX 0.8.1.
 
 Environment:
 - JAX 0.8.1
-- Single-host TPU v4 with 4 chips (can also reproduce on multi-host)
+- Single-host TPU v4 with 4 chips, or multi-host (e.g., v4-16 with 4 hosts)
 
 Usage:
-    python splash_mwe.py
+    # Single-host:
+    python tests/splash_mwe.py
+
+    # Multi-host (via gcloud):
+    ./deploy/run_mwe.sh <TPU_NAME>
 """
 
 from functools import partial
@@ -32,8 +36,7 @@ from jax.experimental.pallas.ops.tpu.splash_attention import (
   make_splash_mha,
 )
 
-# Configuration
-BATCH_SIZE = 4
+# Configuration - BATCH_SIZE will be set dynamically based on device count
 NUM_HEADS = 4
 SEQ_LEN = 256
 HEAD_DIM = 64
@@ -108,7 +111,7 @@ def attention_fn_with_internal_shard_map(splash_sharded, kernel, q, k, v):
   return out
 
 
-def test_case_fails_vmap_outside_shard_map(mesh):
+def test_case_fails_vmap_outside_shard_map(mesh, batch_size):
   """
   CASE B: EXPECTED TO FAIL in JAX 0.8.1
 
@@ -133,9 +136,9 @@ def test_case_fails_vmap_outside_shard_map(mesh):
   )
 
   # Shape: (batch, num_heads, seq_len, head_dim)
-  q = jax.random.normal(k1, (BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
-  k = jax.random.normal(k2, (BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
-  v = jax.random.normal(k3, (BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
+  q = jax.random.normal(k1, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
+  k = jax.random.normal(k2, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
+  v = jax.random.normal(k3, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
 
   # Shard on batch dimension
   q = jax.device_put(q, data_sharding)
@@ -164,7 +167,7 @@ def test_case_fails_vmap_outside_shard_map(mesh):
     return False
 
 
-def test_case_works_batch_inside(mesh):
+def test_case_works_batch_inside(mesh, batch_size):
   """
   CASE A: EXPECTED TO WORK
 
@@ -236,9 +239,9 @@ def test_case_works_batch_inside(mesh):
   )
 
   # Shape: (batch, num_heads, seq_len, head_dim)
-  q = jax.random.normal(k1, (BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
-  k = jax.random.normal(k2, (BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
-  v = jax.random.normal(k3, (BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
+  q = jax.random.normal(k1, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
+  k = jax.random.normal(k2, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
+  v = jax.random.normal(k3, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
 
   q = jax.device_put(q, data_sharding)
   k = jax.device_put(k, data_sharding)
@@ -248,8 +251,8 @@ def test_case_works_batch_inside(mesh):
     s = q.shape[2]
     # Batched segment IDs
     segment_ids = SegmentIds(
-      q=jnp.zeros((BATCH_SIZE, s)),
-      kv=jnp.zeros((BATCH_SIZE, s)),
+      q=jnp.zeros((batch_size, s)),
+      kv=jnp.zeros((batch_size, s)),
     )
     scale = HEAD_DIM**-0.25
     out = splash_batched_sharded(kernel, q * scale, k * scale, v, segment_ids)
@@ -271,7 +274,7 @@ def test_case_works_batch_inside(mesh):
     return False
 
 
-def test_case_works_no_shard_map(mesh):
+def test_case_works_no_shard_map(mesh, batch_size):
   """
   CASE C: Reference - no shard_map at all (pure JAX attention)
 
@@ -289,9 +292,9 @@ def test_case_works_no_shard_map(mesh):
     mesh, jax.sharding.PartitionSpec("dp", None, None, None)
   )
 
-  q = jax.random.normal(k1, (BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
-  k = jax.random.normal(k2, (BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
-  v = jax.random.normal(k3, (BATCH_SIZE, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
+  q = jax.random.normal(k1, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
+  k = jax.random.normal(k2, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
+  v = jax.random.normal(k3, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
 
   q = jax.device_put(q, data_sharding)
   k = jax.device_put(k, data_sharding)
@@ -328,31 +331,47 @@ def test_case_works_no_shard_map(mesh):
 
 
 def main():
+  # Initialize distributed JAX for multi-host TPU
+  # This is a no-op on single-host, but required for multi-host
+  try:
+    jax.distributed.initialize()
+  except RuntimeError:
+    # Already initialized (e.g., when running interactively)
+    pass
+
   print("=" * 70)
   print("JAX Splash Attention + shard_map + vmap Bug MWE")
   print("=" * 70)
   print(f"JAX version: {jax.__version__}")
-  print(f"Devices: {jax.devices()}")
-  print(f"Device count: {jax.device_count()}")
+  print(f"Process index: {jax.process_index()} / {jax.process_count()}")
+  print(f"Local devices: {jax.local_devices()}")
+  print(f"All devices: {jax.devices()}")
+  print(f"Global device count: {jax.device_count()}")
 
-  # Create a simple 1D data-parallel mesh
+  # Create a simple 1D data-parallel mesh across all devices
   devices = jax.devices()
   mesh = jax.sharding.Mesh(devices, ("dp",))
   print(f"Mesh: {mesh}")
+
+  # Batch size = number of devices (one example per device)
+  batch_size = jax.device_count()
+
   print(f"\nTest configuration:")
-  print(f"  BATCH_SIZE={BATCH_SIZE}, NUM_HEADS={NUM_HEADS}")
+  print(f"  batch_size={batch_size} (1 per device), NUM_HEADS={NUM_HEADS}")
   print(f"  SEQ_LEN={SEQ_LEN}, HEAD_DIM={HEAD_DIM}")
 
   results = {}
 
   # Test Case C first (baseline - should always work)
-  results["case_c_no_shard_map"] = test_case_works_no_shard_map(mesh)
+  results["case_c_no_shard_map"] = test_case_works_no_shard_map(mesh, batch_size)
 
   # Test Case A (batch inside shard_map - should work)
-  results["case_a_batch_inside"] = test_case_works_batch_inside(mesh)
+  results["case_a_batch_inside"] = test_case_works_batch_inside(mesh, batch_size)
 
   # Test Case B (vmap outside shard_map - expected to fail in 0.8.1)
-  results["case_b_vmap_outside"] = test_case_fails_vmap_outside_shard_map(mesh)
+  results["case_b_vmap_outside"] = test_case_fails_vmap_outside_shard_map(
+    mesh, batch_size
+  )
 
   # Summary
   print("\n" + "=" * 70)
