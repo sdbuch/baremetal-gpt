@@ -90,7 +90,7 @@ def make_splash_kernel_with_shard_map(mesh):
 def attention_fn_with_internal_shard_map(splash_sharded, kernel, key, x_seq):
   s = x_seq.shape[0]
 
-  q, k, v = jnp.ones((NUM_HEADS, s, HEAD_DIM), out_sharding=jax.P())
+  q, k, v = jnp.ones((3, NUM_HEADS, s, HEAD_DIM), out_sharding=jax.P())
   segment_ids = SegmentIds(q=jnp.zeros((s,)), kv=jnp.zeros((s,)))
 
   # Scale Q and K as splash attention expects
