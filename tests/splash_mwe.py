@@ -173,6 +173,7 @@ def test_case_fails_vmap_outside_shard_map(mesh, batch_size):
   w_qkv = jax.random.normal(k2, (d_model, 3, NUM_HEADS, HEAD_DIM), dtype=DTYPE)
   w_qkv = jax.device_put(w_qkv, weight_sharding)
 
+  @jax.jit
   def loss_fn(w_qkv, x_seq):
     # vmap over batch dimension, calling shard_map-wrapped kernel inside
     # The einsum happens inside each vmapped call
