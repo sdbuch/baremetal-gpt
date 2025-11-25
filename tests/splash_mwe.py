@@ -87,20 +87,10 @@ def make_splash_kernel_with_shard_map(mesh):
   return splash_sharded, kernel
 
 
-def attention_fn_with_internal_shard_map(splash_sharded, kernel, w_qkv, x_seq):
-  d_model = w_qkv.shape[0]
+def attention_fn_with_internal_shard_map(splash_sharded, kernel, key, x_seq):
   s = x_seq.shape[0]
 
-  # Compute Q, K, V via einsum (matching model.py:150)
-  # "sd,d3nh->3nsh"
-  # Note: out_sharding is specified to match actual code pattern
-  q, k, v = jnp.einsum(
-    "sd,d3nh->3nsh",
-    x_seq,
-    w_qkv,
-    out_sharding=jax.sharding.PartitionSpec(None, None, None),
-  )
-
+  q, k, v = jnp.ones((NUM_HEADS, s, HEAD_DIM), out_sharding=jax.P())
   segment_ids = SegmentIds(q=jnp.zeros((s,)), kv=jnp.zeros((s,)))
 
   # Scale Q and K as splash attention expects
@@ -138,17 +128,13 @@ def test_case_fails_vmap_outside_shard_map(mesh, batch_size):
   x_seq = jax.random.normal(k1, (batch_size, SEQ_LEN, d_model), dtype=DTYPE)
   x_seq = jax.device_put(x_seq, input_sharding)
 
-  # Shape: (d_model, 3, num_heads, head_dim)
-  w_qkv = jax.random.normal(k2, (d_model, 3, NUM_HEADS, HEAD_DIM), dtype=DTYPE)
-  w_qkv = jax.device_put(w_qkv, weight_sharding)
-
   @jax.jit
-  def step(w_qkv, x_seq):
-    def loss_fn(w_qkv, x_seq):
+  def step(x_seq):
+    def loss_fn(x_seq):
       # vmap over batch dimension, calling shard_map-wrapped kernel inside
       # The einsum happens inside each vmapped call
       attn_fn = partial(
-        attention_fn_with_internal_shard_map, splash_sharded, kernel, w_qkv
+        attention_fn_with_internal_shard_map, splash_sharded, kernel, k2
       )
       out = jax.vmap(attn_fn)(x_seq)  # vmap adds batch dim
       return out.sum()
