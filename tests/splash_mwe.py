@@ -173,7 +173,7 @@ def main():
 
   # Create a simple 1D data-parallel mesh across all devices
   devices = jax.devices()
-  mesh = jax.sharding.Mesh(devices, ("dp",), (jax.sharding.AxisType.Explicit,))
+  mesh = jax.sharding.Mesh(devices, ("dp",), (jax.sharding.AxisType.Auto,))
   print(f"Mesh: {mesh}")
 
   # Batch size = number of devices (one example per device)

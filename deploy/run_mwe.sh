@@ -9,7 +9,7 @@ COMMANDS="if [ ! -d \"baremetal-gpt\" ]; then git clone git@github.com:sdbuch/ba
     && git checkout -f splash \
     && git pull \
     && uv sync --extra tpu \
-    && uv run python tests/splash_mwe.py $@"
+    && uv run tests/splash_mwe.py $@"
 
 gcloud compute tpus tpu-vm ssh "$TPU_NAME" \
   --ssh-flag="$SSH_FLAGS" \
