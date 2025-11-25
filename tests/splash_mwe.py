@@ -173,15 +173,18 @@ def test_case_fails_vmap_outside_shard_map(mesh, batch_size):
   w_qkv = jax.random.normal(k2, (d_model, 3, NUM_HEADS, HEAD_DIM), dtype=DTYPE)
   w_qkv = jax.device_put(w_qkv, weight_sharding)
 
-  @jax.jit
-  def loss_fn(w_qkv, x_seq):
-    # vmap over batch dimension, calling shard_map-wrapped kernel inside
-    # The einsum happens inside each vmapped call
-    attn_fn = partial(
-      attention_fn_with_internal_shard_map, splash_sharded, kernel, w_qkv
-    )
-    out = jax.vmap(attn_fn)(x_seq)  # vmap adds batch dim
-    return out.sum()
+  def step(w_qkv, x_seq):
+    def loss_fn(w_qkv, x_seq):
+      # vmap over batch dimension, calling shard_map-wrapped kernel inside
+      # The einsum happens inside each vmapped call
+      attn_fn = partial(
+        attention_fn_with_internal_shard_map, splash_sharded, kernel, w_qkv
+      )
+      out = jax.vmap(attn_fn)(x_seq)  # vmap adds batch dim
+      return out.sum()
+
+    loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1))(w_qkv, x_seq)
+    return loss, grads
 
   print(f"Input shapes: x_seq={x_seq.shape}, w_qkv={w_qkv.shape}")
   print(f"Input sharding: x_seq={x_seq.sharding}, w_qkv={w_qkv.sharding}")
@@ -189,7 +192,7 @@ def test_case_fails_vmap_outside_shard_map(mesh, batch_size):
 
   try:
     with jax.set_mesh(mesh):
-      loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1))(w_qkv, x_seq)
+      loss, grads = step(w_qkv, x_seq)
     print(f"SUCCESS: loss={loss}, grad shapes={[g.shape for g in grads]}")
     return True
   except AssertionError as e:
