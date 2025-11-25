@@ -146,7 +146,9 @@ def test_case_fails_vmap_outside_shard_map(mesh, batch_size):
 
   try:
     with jax.set_mesh(mesh):
+      jax.profiler.start_trace('/tmp/profile-step')
       loss, grads = step(x_seq)
+      jax.profiler.stop_trace()
     print(f"SUCCESS: loss={loss}, grad shapes={[g.shape for g in grads]}")
     return True
   except AssertionError as e:
