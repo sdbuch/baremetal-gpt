@@ -95,14 +95,32 @@ def make_splash_kernel_with_shard_map(mesh):
   return splash_sharded, kernel
 
 
-def attention_fn_with_internal_shard_map(splash_sharded, kernel, q, k, v):
+def attention_fn_with_internal_shard_map(splash_sharded, kernel, w_qkv, x_seq):
   """
   Attention function that internally calls the shard_map-wrapped kernel.
 
-  Input shapes: (num_heads, seq_len, head_dim)
+  This matches the structure in the actual code where Q, K, V are computed
+  from a projection of the input via einsum.
+
+  Input shapes:
+    - x_seq: (seq_len, d_model)
+    - w_qkv: (d_model, 3, num_heads, head_dim)
+
   This is designed to be vmapped over a batch dimension.
   """
-  s = q.shape[1]
+  d_model = w_qkv.shape[0]
+  s = x_seq.shape[0]
+
+  # Compute Q, K, V via einsum (matching model.py:150)
+  # "sd,d3nh->3nsh"
+  # Note: out_sharding is specified to match actual code pattern
+  q, k, v = jnp.einsum(
+    "sd,d3nh->3nsh",
+    x_seq,
+    w_qkv,
+    out_sharding=jax.sharding.PartitionSpec(None, None, None),
+  )
+
   segment_ids = SegmentIds(q=jnp.zeros((s,)), kv=jnp.zeros((s,)))
 
   # Scale Q and K as splash attention expects
@@ -120,6 +138,8 @@ def test_case_fails_vmap_outside_shard_map(mesh, batch_size):
   The shard_map is defined with specs for (heads, seq) dimensions only.
   vmap adds a batch dimension externally.
   In the backward pass, sharding assertions fail.
+
+  This version matches the actual code structure with QKV projection via einsum.
   """
   print("\n" + "=" * 70)
   print("CASE B: vmap OUTSIDE shard_map (expected to FAIL in JAX 0.8.1)")
@@ -127,36 +147,47 @@ def test_case_fails_vmap_outside_shard_map(mesh, batch_size):
 
   splash_sharded, kernel = make_splash_kernel_with_shard_map(mesh)
 
-  # Create batched inputs with data-parallel sharding on batch dimension
-  key = jax.random.key(0)
-  k1, k2, k3, k4 = jax.random.split(key, 4)
+  # Create batched inputs matching the actual code structure
+  # x_seq shape: (batch, seq_len, d_model)
+  # w_qkv shape: (d_model, 3, num_heads, head_dim)
+  d_model = NUM_HEADS * HEAD_DIM
 
-  data_sharding = jax.sharding.NamedSharding(
-    mesh, jax.sharding.PartitionSpec("dp", None, None, None)
+  key = jax.random.key(0)
+  k1, k2 = jax.random.split(key, 2)
+
+  # Input sequence sharding: batch dimension sharded
+  input_sharding = jax.sharding.NamedSharding(
+    mesh, jax.sharding.PartitionSpec("dp", None, None)
   )
 
-  # Shape: (batch, num_heads, seq_len, head_dim)
-  q = jax.random.normal(k1, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
-  k = jax.random.normal(k2, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
-  v = jax.random.normal(k3, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
+  # Weight sharding: replicated (matching typical parameter sharding)
+  weight_sharding = jax.sharding.NamedSharding(
+    mesh, jax.sharding.PartitionSpec(None, None, None, None)
+  )
 
-  # Shard on batch dimension
-  q = jax.device_put(q, data_sharding)
-  k = jax.device_put(k, data_sharding)
-  v = jax.device_put(v, data_sharding)
+  # Shape: (batch, seq_len, d_model)
+  x_seq = jax.random.normal(k1, (batch_size, SEQ_LEN, d_model), dtype=DTYPE)
+  x_seq = jax.device_put(x_seq, input_sharding)
 
-  def loss_fn(q, k, v):
+  # Shape: (d_model, 3, num_heads, head_dim)
+  w_qkv = jax.random.normal(k2, (d_model, 3, NUM_HEADS, HEAD_DIM), dtype=DTYPE)
+  w_qkv = jax.device_put(w_qkv, weight_sharding)
+
+  def loss_fn(w_qkv, x_seq):
     # vmap over batch dimension, calling shard_map-wrapped kernel inside
-    attn_fn = partial(attention_fn_with_internal_shard_map, splash_sharded, kernel)
-    out = jax.vmap(attn_fn)(q, k, v)  # vmap adds batch dim
+    # The einsum happens inside each vmapped call
+    attn_fn = partial(
+      attention_fn_with_internal_shard_map, splash_sharded, kernel, w_qkv
+    )
+    out = jax.vmap(attn_fn)(x_seq)  # vmap adds batch dim
     return out.sum()
 
-  print(f"Input shapes: q={q.shape}, k={k.shape}, v={v.shape}")
-  print(f"Input sharding: {q.sharding}")
+  print(f"Input shapes: x_seq={x_seq.shape}, w_qkv={w_qkv.shape}")
+  print(f"Input sharding: x_seq={x_seq.sharding}, w_qkv={w_qkv.sharding}")
   print("Running value_and_grad(vmap(fn_with_shard_map_inside))...")
 
   try:
-    loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1, 2))(q, k, v)
+    loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1))(w_qkv, x_seq)
     print(f"SUCCESS: loss={loss}, grad shapes={[g.shape for g in grads]}")
     return True
   except AssertionError as e:
@@ -175,10 +206,14 @@ def test_case_works_batch_inside(mesh, batch_size):
 
   This approach processes the full batch at once inside the shard_map,
   rather than vmapping over individual examples.
+
+  Updated to use einsum for QKV projection to match actual code structure.
   """
   print("\n" + "=" * 70)
   print("CASE A: Batch handled INSIDE (no vmap over shard_map) - expected to WORK")
   print("=" * 70)
+
+  d_model = NUM_HEADS * HEAD_DIM
 
   mask = MultiHeadMask([CausalMask(shape=(SEQ_LEN, SEQ_LEN)) for _ in range(NUM_HEADS)])
   block_sizes = BlockSizes(
@@ -232,38 +267,57 @@ def test_case_works_batch_inside(mesh, batch_size):
 
   # Create batched inputs
   key = jax.random.key(0)
-  k1, k2, k3, k4 = jax.random.split(key, 4)
+  k1, k2 = jax.random.split(key, 2)
 
-  data_sharding = jax.sharding.NamedSharding(
-    mesh, jax.sharding.PartitionSpec("dp", None, None, None)
+  input_sharding = jax.sharding.NamedSharding(
+    mesh, jax.sharding.PartitionSpec("dp", None, None)
   )
 
-  # Shape: (batch, num_heads, seq_len, head_dim)
-  q = jax.random.normal(k1, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
-  k = jax.random.normal(k2, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
-  v = jax.random.normal(k3, (batch_size, NUM_HEADS, SEQ_LEN, HEAD_DIM), dtype=DTYPE)
+  weight_sharding = jax.sharding.NamedSharding(
+    mesh, jax.sharding.PartitionSpec(None, None, None, None)
+  )
 
-  q = jax.device_put(q, data_sharding)
-  k = jax.device_put(k, data_sharding)
-  v = jax.device_put(v, data_sharding)
+  # Shape: (batch, seq_len, d_model)
+  x_seq = jax.random.normal(k1, (batch_size, SEQ_LEN, d_model), dtype=DTYPE)
+  x_seq = jax.device_put(x_seq, input_sharding)
 
-  def loss_fn(q, k, v):
-    s = q.shape[2]
-    # Batched segment IDs
+  # Shape: (d_model, 3, num_heads, head_dim)
+  w_qkv = jax.random.normal(k2, (d_model, 3, NUM_HEADS, HEAD_DIM), dtype=DTYPE)
+  w_qkv = jax.device_put(w_qkv, weight_sharding)
+
+  def loss_fn(w_qkv, x_seq):
+    # Compute Q, K, V for the batch via vmap of einsum
+    def compute_qkv(x):
+      return jnp.einsum(
+        "sd,d3nh->3nsh",
+        x,
+        w_qkv,
+        out_sharding=jax.sharding.PartitionSpec(None, None, None),
+      )
+
+    # Shape: (batch, 3, num_heads, seq_len, head_dim)
+    qkv_batch = jax.vmap(compute_qkv)(x_seq)
+    q_batch = qkv_batch[:, 0]
+    k_batch = qkv_batch[:, 1]
+    v_batch = qkv_batch[:, 2]
+
+    s = x_seq.shape[1]
     segment_ids = SegmentIds(
       q=jnp.zeros((batch_size, s)),
       kv=jnp.zeros((batch_size, s)),
     )
     scale = HEAD_DIM**-0.25
-    out = splash_batched_sharded(kernel, q * scale, k * scale, v, segment_ids)
+    out = splash_batched_sharded(
+      kernel, q_batch * scale, k_batch * scale, v_batch, segment_ids
+    )
     return out.sum()
 
-  print(f"Input shapes: q={q.shape}, k={k.shape}, v={v.shape}")
-  print(f"Input sharding: {q.sharding}")
+  print(f"Input shapes: x_seq={x_seq.shape}, w_qkv={w_qkv.shape}")
+  print(f"Input sharding: x_seq={x_seq.sharding}, w_qkv={w_qkv.sharding}")
   print("Running value_and_grad with batch handled inside shard_map...")
 
   try:
-    loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1, 2))(q, k, v)
+    loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1))(w_qkv, x_seq)
     print(f"SUCCESS: loss={loss}, grad shapes={[g.shape for g in grads]}")
     return True
   except AssertionError as e:
@@ -350,7 +404,7 @@ def main():
 
   # Create a simple 1D data-parallel mesh across all devices
   devices = jax.devices()
-  mesh = jax.sharding.Mesh(devices, ("dp",))
+  mesh = jax.sharding.Mesh(devices, ("dp",), (jax.sharding.AxisType.Explicit,))
   print(f"Mesh: {mesh}")
 
   # Batch size = number of devices (one example per device)
