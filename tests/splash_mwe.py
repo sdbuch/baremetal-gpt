@@ -139,7 +139,7 @@ def test_case_fails_vmap_outside_shard_map(mesh, batch_size):
       out = jax.vmap(attn_fn)(x_seq)  # vmap adds batch dim
       return out.sum()
 
-    loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1))(x_seq)
+    loss, grads = jax.value_and_grad(loss_fn)(x_seq)
     return loss, grads
 
   print("Running value_and_grad(vmap(fn_with_shard_map_inside))...")
