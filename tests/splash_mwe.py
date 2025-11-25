@@ -188,7 +188,8 @@ def test_case_fails_vmap_outside_shard_map(mesh, batch_size):
   print("Running value_and_grad(vmap(fn_with_shard_map_inside))...")
 
   try:
-    loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1))(w_qkv, x_seq)
+    with jax.set_mesh(mesh):
+      loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1))(w_qkv, x_seq)
     print(f"SUCCESS: loss={loss}, grad shapes={[g.shape for g in grads]}")
     return True
   except AssertionError as e:
@@ -318,7 +319,8 @@ def test_case_works_batch_inside(mesh, batch_size):
   print("Running value_and_grad with batch handled inside shard_map...")
 
   try:
-    loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1))(w_qkv, x_seq)
+    with jax.set_mesh(mesh):
+      loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1))(w_qkv, x_seq)
     print(f"SUCCESS: loss={loss}, grad shapes={[g.shape for g in grads]}")
     return True
   except AssertionError as e:
@@ -374,7 +376,8 @@ def test_case_works_no_shard_map(mesh, batch_size):
   print("Running value_and_grad(vmap(pure_attention))...")
 
   try:
-    loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1, 2))(q, k, v)
+    with jax.set_mesh(mesh):
+      loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1, 2))(q, k, v)
     print(f"SUCCESS: loss={loss}, grad shapes={[g.shape for g in grads]}")
     return True
   except AssertionError as e:
@@ -406,7 +409,6 @@ def main():
   # Create a simple 1D data-parallel mesh across all devices
   devices = jax.devices()
   mesh = jax.sharding.Mesh(devices, ("dp",), (jax.sharding.AxisType.Explicit,))
-  jax.set_mesh(mesh)
   print(f"Mesh: {mesh}")
 
   # Batch size = number of devices (one example per device)
