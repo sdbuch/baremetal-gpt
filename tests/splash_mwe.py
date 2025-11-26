@@ -18,26 +18,10 @@ DTYPE = jnp.bfloat16
 
 def make_splash_kernel_with_shard_map(mesh):
   mask = MultiHeadMask([CausalMask(shape=(SEQ_LEN, SEQ_LEN)) for _ in range(NUM_HEADS)])
-  block_sizes = BlockSizes(
-    block_q=128,
-    block_kv=128,
-    block_kv_compute=128,
-    block_q_dkv=128,
-    block_kv_dkv=128,
-    block_kv_dkv_compute=128,
-    block_q_dq=128,
-    block_kv_dq=128,
-  )
-
   splash_spec = jax.P(None, None)
   sspec = jax.sharding.NamedSharding(mesh, splash_spec)
 
-  kernel = make_splash_mha(
-    mask,
-    head_shards=1,
-    q_seq_shards=1,
-    block_sizes=block_sizes,
-  )
+  kernel = make_splash_mha(mask, head_shards=1, q_seq_shards=1)
   kspec = kernel.manual_sharding_spec(sspec)
 
   @partial(
@@ -84,10 +68,7 @@ def test_case_fails_vmap_outside_shard_map(mesh, batch_size):
     return loss, grads
 
   with jax.set_mesh(mesh):
-    jax.profiler.start_trace("/tmp/profile-step")
     loss, grads = step(x_seq)
-    jax.block_until_ready((loss, grads))
-    jax.profiler.stop_trace()
   return True
 
 
