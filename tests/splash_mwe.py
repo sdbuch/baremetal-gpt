@@ -3,7 +3,6 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 from jax.experimental.pallas.ops.tpu.splash_attention import (
-  BlockSizes,
   CausalMask,
   MultiHeadMask,
   SegmentIds,
@@ -37,10 +36,12 @@ def make_splash_kernel_with_shard_map(mesh):
   return splash_sharded, kernel
 
 
-def attention_fn_with_internal_shard_map(splash_sharded, kernel, x_seq):
+def attention_fn_with_internal_shard_map(splash_sharded, kernel, qkv_proj, x_seq):
   s = x_seq.shape[0]
+  qkv = jnp.einsum("sd,dhne->nhse", x_seq, qkv_proj)
+  qkv = qkv.astype(x_seq.dtype)
+  q, k, v = qkv[0], qkv[1], qkv[2]
 
-  q, k, v = jnp.ones((3, NUM_HEADS, s, HEAD_DIM), out_sharding=jax.P())
   segment_ids = SegmentIds(q=jnp.zeros((s,)), kv=jnp.zeros((s,)))
 
   scale = HEAD_DIM**-0.25
@@ -53,22 +54,30 @@ def test_case_fails_vmap_outside_shard_map(mesh, batch_size):
 
   d_model = NUM_HEADS * HEAD_DIM
   key = jax.random.key(0)
+  key_x, key_qkv = jax.random.split(key)
+
   input_sharding = jax.sharding.NamedSharding(mesh, jax.P("dp", None, None))
-  x_seq = jax.random.normal(key, (batch_size, SEQ_LEN, d_model), dtype=DTYPE)
+  x_seq = jax.random.normal(key_x, (batch_size, SEQ_LEN, d_model), dtype=DTYPE)
   x_seq = jax.device_put(x_seq, input_sharding)
 
+  param_sharding = jax.sharding.NamedSharding(mesh, jax.P(None, None, None, None))
+  qkv_proj = jax.random.normal(key_qkv, (d_model, 3, NUM_HEADS, HEAD_DIM), dtype=DTYPE)
+  qkv_proj = jax.device_put(qkv_proj, param_sharding)
+
   @jax.jit
-  def step(x_seq):
-    def loss_fn(x_seq):
-      attn_fn = partial(attention_fn_with_internal_shard_map, splash_sharded, kernel)
+  def step(qkv_proj, x_seq):
+    def loss_fn(qkv_proj, x_seq):
+      attn_fn = partial(
+        attention_fn_with_internal_shard_map, splash_sharded, kernel, qkv_proj
+      )
       out = jax.vmap(attn_fn)(x_seq)
       return out.sum()
 
-    loss, grads = jax.value_and_grad(loss_fn)(x_seq)
+    loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1))(qkv_proj, x_seq)
     return loss, grads
 
   with jax.set_mesh(mesh):
-    loss, grads = step(x_seq)
+    loss, grads = step(qkv_proj, x_seq)
   return True
 
 
