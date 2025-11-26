@@ -73,7 +73,7 @@ def test_case_fails_vmap_outside_shard_map(mesh, batch_size):
       out = jax.vmap(attn_fn)(x_seq)
       return out.sum()
 
-    loss, grads = jax.value_and_grad(loss_fn, argnums=(0, 1))(qkv_proj, x_seq)
+    loss, grads = jax.value_and_grad(loss_fn)(qkv_proj, x_seq)
     return loss, grads
 
   with jax.set_mesh(mesh):
