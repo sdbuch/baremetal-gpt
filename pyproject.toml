@@ -17,10 +17,10 @@ dependencies = [
 
 [project.optional-dependencies]
 cpu = [
-    "jax<=0.8.1",
+    "jax<=0.8.0",
 ]
 tpu = [
-    "jax[tpu]<=0.8.1",
+    "jax[tpu]<=0.8.0",
 ]
 
 [project.scripts]
