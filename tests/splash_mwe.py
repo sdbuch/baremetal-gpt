@@ -86,8 +86,8 @@ def test_case_fails_vmap_outside_shard_map(mesh, batch_size):
   with jax.set_mesh(mesh):
     jax.profiler.start_trace("/tmp/profile-step")
     loss, grads = step(x_seq)
+    jax.block_until_ready((loss, grads))
     jax.profiler.stop_trace()
-  print(f"SUCCESS: loss={loss}, grad shapes={[g.shape for g in grads]}")
   return True
 
 
@@ -95,7 +95,6 @@ def main():
   jax.distributed.initialize()
   devices = jax.devices()
   mesh = jax.sharding.Mesh(devices, ("dp",), (jax.sharding.AxisType.Explicit,))
-  print(f"Mesh: {mesh}")
 
   batch_size = jax.device_count()
   test_case_fails_vmap_outside_shard_map(mesh, batch_size)
