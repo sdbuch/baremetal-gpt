@@ -45,6 +45,9 @@ class Logger:
   def log(self, log_dict: dict):
     pass
 
+  def warn(self, message: str):
+    pass
+
   def buffer(self, log_dict: dict) -> dict | None:
     self.prev_log_data, buffered_metrics = log_dict, self.prev_log_data
     return buffered_metrics
@@ -65,10 +68,12 @@ class PrintLogger(Logger):
     return super().__enter__()
 
   def log(self, log_dict: dict):
-    buffered_dict = self.buffer(log_dict)
-    if buffered_dict is None:
+    if (buffered_dict := self.buffer(log_dict)) is None:
       return
     print(*[f"{metric}: {val}" for metric, val in buffered_dict.items()], sep="\t")
+
+  def warn(self, message: str):
+    print(message)
 
 
 class WandbLogger(Logger):
@@ -88,7 +93,10 @@ class WandbLogger(Logger):
 
   def log(self, log_dict: dict):
     if self.is_master:
-      buffered_dict = self.buffer(log_dict)
-      if buffered_dict is None:
+      if (buffered_dict := self.buffer(log_dict)) is None:
         return
       wandb.log(buffered_dict)
+
+  def warn(self, message: str):
+    if self.is_master:
+      print(message)
