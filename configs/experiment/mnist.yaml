@@ -13,6 +13,7 @@ train_dataset:
   global_batch_size: 128
   epochs_to_loop: 15
   num_steps: 0
+  use_splash: False
 
 val_list:
   - dataset:
@@ -22,6 +23,7 @@ val_list:
       seq_len: 16
       global_batch_size: 4000
       epochs_to_loop: 1
+      use_splash: False
     evaluator: ACCURACY
   - dataset:
       name: MNIST
@@ -30,6 +32,7 @@ val_list:
       seq_len: 16
       global_batch_size: 4000
       epochs_to_loop: 1
+      use_splash: False
     evaluator: NLL
   - dataset:
       name: MNIST
@@ -38,6 +41,7 @@ val_list:
       seq_len: 16
       global_batch_size: 4000
       epochs_to_loop: 1
+      use_splash: False
     evaluator: PERPLEXITY
 
 eval_list:
@@ -48,6 +52,7 @@ eval_list:
       seq_len: 16
       global_batch_size: 6000
       epochs_to_loop: 1
+      use_splash: False
     evaluator: ACCURACY
   - dataset:
       name: MNIST
@@ -56,6 +61,7 @@ eval_list:
       seq_len: 16
       global_batch_size: 60000
       epochs_to_loop: 1
+      use_splash: False
     evaluator: ACCURACY
 
 model:

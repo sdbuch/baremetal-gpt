@@ -86,6 +86,10 @@ class DatasetConfig:
   epochs_to_loop: int = -1  # -1 means indefinite; otherwise, fixed num epochs
   num_steps: int = 10**3  # if 0 or less, will train until dataloader exhausted
 
+  ## Call-time parameters
+  # It makes sense to do these here, instead of model, since they're data-specific
+  use_splash: bool = True  # use splash attention pallas kernel or jax-xla attention
+
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class EvaluationConfig:
@@ -140,7 +144,6 @@ class ModelConfig:
   use_bias_ln: bool = False  # layer norm or RMS norm
   use_bias_mlp: bool = False  # bias in MLPs
   use_rope: bool = True  # RoPE or not
-  use_splash: bool = True  # use splash attention pallas kernel or jax-xla attention
 
   # Discrete-specific model parameters
   # Continuous-specific model parameters

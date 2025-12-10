@@ -12,7 +12,7 @@ from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_mask impo
   _ComputableMask,
 )
 
-from bmgpt.config import Config
+from bmgpt.config import Config, DatasetConfig
 
 
 class FullMask(_ComputableMask):
@@ -57,19 +57,19 @@ class FullMask(_ComputableMask):
 
 def make_splash_kernel(
   config: Config,
-  q_seq_len: int,
+  config_data: DatasetConfig,
   cache_capacity: int,
   mesh,
   head_shards: int = 1,
   q_seq_shards: int = 1,
 ):
-  if not config.model.use_splash:
+  if not config_data.use_splash:
     # None ends up calling jax-xla attention
     # see _attn
     return None
   # s is Q len (seq_len @ train; variable/1 at prefill/decode)
   # t is K len (s + cache_capacity)
-  s = q_seq_len
+  s = config_data.seq_len
   t = s + cache_capacity
 
   if config.model.is_causal:
@@ -83,19 +83,19 @@ def make_splash_kernel(
     mask = MultiHeadMask(
       [FullMask(shape=(s, t)) for _ in range(config.model.num_heads)]
     )
-  _block_size = min(config.train_dataset.seq_len, 128)
-  if _block_size % 128 != 0:
+  BLOCK_SIZE = min(config_data.seq_len, 128)
+  if config_data.seq_len % 128 != 0 or BLOCK_SIZE % 128 != 0:
     # splash attention kernel requires block size to be a multiple of 128
-    return None
+    raise NotImplementedError("Splash block size needs to be a multiple of 128")
   block_sizes = BlockSizes(
-    block_q=_block_size,
-    block_kv=_block_size,
-    block_kv_compute=_block_size,
-    block_q_dkv=_block_size,
-    block_kv_dkv=_block_size,
-    block_kv_dkv_compute=_block_size,
-    block_q_dq=_block_size,
-    block_kv_dq=_block_size,
+    block_q=BLOCK_SIZE,
+    block_kv=BLOCK_SIZE,
+    block_kv_compute=BLOCK_SIZE,
+    block_q_dkv=BLOCK_SIZE,
+    block_kv_dkv=BLOCK_SIZE,
+    block_kv_dkv_compute=BLOCK_SIZE,
+    block_q_dq=BLOCK_SIZE,
+    block_kv_dq=BLOCK_SIZE,
   )
   splash_spec = jax.P(None, None)
   splash_sharding = jax.sharding.NamedSharding(mesh, splash_spec)

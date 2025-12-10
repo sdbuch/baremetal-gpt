@@ -25,7 +25,6 @@ from bmgpt.model import (
   init_transformer,
   model_spec,
 )
-from bmgpt.splash_helpers import make_splash_kernel
 from bmgpt.optimizers import (
   grad_norm_and_clip,
   init_adam_state,
@@ -79,23 +78,7 @@ def main(config: Config):
   with jax.set_mesh(mesh):
     train_state = init_train_state(key_model, config)
   cache_params = CacheParams(enabled=False, size=0)
-  kernel = make_splash_kernel(config, config.train_dataset.seq_len, 0, mesh)
-  val_kernels = []
-  eval_kernels = []
-  for eval in config.val_list:
-    if eval.evaluator == EvaluatorType.AUTOREGRESSIVE_ROLLOUTS:
-      # HACK: fallback to XLA attention @ autoregressive
-      # TODO: configure block sizes to use flash for this... (needs adaptive/pad)
-      val_kernels.append(None)
-    else:
-      val_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, 0, mesh))
-  for eval in config.eval_list:
-    if eval.evaluator == EvaluatorType.AUTOREGRESSIVE_ROLLOUTS:
-      # HACK: fallback to XLA attention @ autoregressive
-      # TODO: configure block sizes to use flash for this... (needs adaptive/pad)
-      eval_kernels.append(None)
-    else:
-      eval_kernels.append(make_splash_kernel(config, eval.dataset.seq_len, 0, mesh))
+  kernel = make_splash_kernel(config, config.train_dataset, 0, mesh)
   spec = model_spec(train_state.params)
   opt_update = opt_update_factory(config.optimizer.type)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
@@ -141,22 +124,17 @@ def main(config: Config):
       logger.log(metrics | {"step": step})
       if (step + 1) % config.val_log_interval == 0:
         # Calculate val metrics
-        key_val = do_evals(
-          key_val, val_kernels, config.val_list, train_state.params, step
-        )
+        key_val = do_evals(key_val, config.val_list, train_state.params, step)
       if step == config.train_dataset.num_steps - 1:
         break
 
     # Run evals (testing)
-    key_eval = do_evals(
-      key_eval, eval_kernels, config.eval_list, train_state.params, step
-    )
+    key_eval = do_evals(key_eval, config.eval_list, train_state.params, step)
 
 
 def eval_loop(
   config: Config,
   key,
-  kernels: list[Any],
   eval_list: list[EvaluationConfig],
   params: Transformer,
   step: int,
@@ -164,7 +142,8 @@ def eval_loop(
   mesh,
 ):
   logger.flush_buffer()
-  for evaluation, kernel in zip(eval_list, kernels):
+  for evaluation in eval_list:
+    kernel = make_splash_kernel(config, evaluation.dataset, 0, mesh)
     key, key_d, key_e = jax.random.split(key, 3)
     batch_iter = get_distributed_batch_iter(config, evaluation.dataset, key_d, mesh)
     evaluation_fn = evaluator_factory(evaluation)

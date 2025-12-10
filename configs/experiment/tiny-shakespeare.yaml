@@ -23,6 +23,7 @@ val_list:
       split: VAL
       seq_len: 128  # At inference time, this functions like prompt size
       global_batch_size: 16
+      use_splash: False
     evaluator: AUTOREGRESSIVE_ROLLOUTS
 
 eval_list:
@@ -32,6 +33,7 @@ eval_list:
       split: VAL
       seq_len: 128  # At inference time, this functions like prompt size
       global_batch_size: 16
+      use_splash: False
     evaluator: AUTOREGRESSIVE_ROLLOUTS
 
 model:

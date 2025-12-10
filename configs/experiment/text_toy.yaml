@@ -13,6 +13,7 @@ eval_list:
       split: TEST
       seq_len: 1  # At inference time, this functions like prompt size
       global_batch_size: 16
+      use_splash: False
     evaluator: AUTOREGRESSIVE_ROLLOUTS
 
 model:
