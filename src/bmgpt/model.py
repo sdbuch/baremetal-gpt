@@ -18,28 +18,42 @@ from bmgpt.config import Config, TransformerType
 class Mlp(NamedTuple):
   w_up: Array
   bias_up: Array
+  w_gate: Array
+  bias_gate: Array
   w_down: Array
   bias_down: Array
 
 
 def init_mlp(config: Config, key) -> Mlp:
   k_w_up, k_w_down = jax.random.split(key, 2)
+  d_hidden = int(config.model.mlp_factor * config.model.d_model)
   w_up = config.model.param_std * jax.random.normal(
     k_w_up,
-    (config.model.d_model, config.model.mlp_factor * config.model.d_model),
+    (config.model.d_model, d_hidden),
+    config.model.param_dtype.value,
+    out_sharding=jax.P(*config.sharding.wup),
+  )
+  w_gate = config.model.param_std * jax.random.normal(
+    k_w_up,
+    (config.model.d_model, d_hidden),
     config.model.param_dtype.value,
     out_sharding=jax.P(*config.sharding.wup),
   )
   w_down = config.model.param_std * (
     jax.random.normal(
       k_w_down,
-      (config.model.mlp_factor * config.model.d_model, config.model.d_model),
+      (d_hidden, config.model.d_model),
       config.model.param_dtype.value,
       out_sharding=jax.P(*config.sharding.wdown),
     )
   )
   bias_up = jnp.zeros(
-    (config.model.mlp_factor * config.model.d_model,),
+    (d_hidden,),
+    config.model.param_dtype.value,
+    out_sharding=jax.P(*config.sharding.mlp_hidden),
+  )
+  bias_gate = jnp.zeros(
+    (d_hidden,),
     config.model.param_dtype.value,
     out_sharding=jax.P(*config.sharding.mlp_hidden),
   )
@@ -48,7 +62,14 @@ def init_mlp(config: Config, key) -> Mlp:
     config.model.param_dtype.value,
     out_sharding=jax.P(*config.sharding.res_stream),
   )
-  return Mlp(w_up=w_up, bias_up=bias_up, w_down=w_down, bias_down=bias_down)
+  return Mlp(
+    w_up=w_up,
+    bias_up=bias_up,
+    w_gate=w_gate,
+    bias_gate=bias_gate,
+    w_down=w_down,
+    bias_down=bias_down,
+  )
 
 
 def _mlp(config: Config, params: Mlp, x: Array):
@@ -56,7 +77,12 @@ def _mlp(config: Config, params: Mlp, x: Array):
   if config.model.use_bias_mlp:
     # PERF: check that compiler fuses these
     preact += params.bias_up
-  act = jax.nn.gelu(preact, approximate=True)
+  gate = jax.nn.swish(
+    jnp.matmul(x, params.w_gate, out_sharding=jax.P(*config.sharding.mlp_hidden))
+  )
+  if config.model.use_bias_mlp:
+    gate += params.bias_gate
+  act = gate * preact
   out = jnp.matmul(act, params.w_down, out_sharding=jax.P(*config.sharding.res_stream))
   if config.model.use_bias_mlp:
     out += params.bias_down
@@ -514,6 +540,7 @@ def model_spec(model: Transformer) -> Any:
       ".w_qkv": (-4, -1),
       ".w_o": (-3, -1),
       ".w_up": (-2, -1),
+      ".w_gate": (-2, -1),
       ".w_down": (-2, -1),
       ".w": (-2, -1),
       ".w_emb": (-2, -1),
