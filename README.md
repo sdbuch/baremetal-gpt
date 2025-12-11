@@ -64,7 +64,8 @@ Then run the training script:
 
 # For More Information
 
-Check out the associated series of blogs. Currently two are published:
+Check out the associated series of blogs. Currently three are published:
 
 - [SPMD in JAX #1: Sharding](https://sdbuchanan.com/blog/jax-1/)
 - [SPMD in JAX #2: Transformers in Bare-Metal JAX](https://sdbuchanan.com/blog/jax-2/)
+- [SPMD in JAX #3: Infrastructure Buildout](https://sdbuchanan.com/blog/jax-3/)

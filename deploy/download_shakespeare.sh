@@ -1,5 +1,5 @@
 #!/bin/bash
-# USAGE: TPU VM name is first arg, second arg is --patch_size=<2, 4, or 7>
+# USAGE: TPU VM name is first arg
 
 TPU_NAME="$1"
 shift
@@ -8,7 +8,7 @@ COMMANDS="if [ ! -d \"baremetal-gpt\" ]; then git clone git@github.com:sdbuch/ba
     && export HF_TOKEN='$HF_TOKEN' \
     && cd baremetal-gpt \
     && git fetch \
-    && git checkout text-data \
+    && git checkout -f main \
     && git pull \
     && uv sync --extra tpu \
     && uv run data/tiny-shakespeare/download_and_tokenize_tiny_shakespeare.py $@"
