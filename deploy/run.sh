@@ -10,7 +10,7 @@ COMMANDS="if [ ! -d \"baremetal-gpt\" ]; then git clone git@github.com:sdbuch/ba
     && export HF_TOKEN='$HF_TOKEN' \
     && cd baremetal-gpt \
     && git fetch \
-    && git checkout -f main \
+    && git checkout -f arch-fixes \
     && git pull \
     && uv sync --extra tpu \
     && uv run train $@"
