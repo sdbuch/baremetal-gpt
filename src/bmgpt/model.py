@@ -375,10 +375,12 @@ def init_layernorm(config: Config) -> LayerNorm:
 
 
 def _layernorm(config: Config, params: LayerNorm, x: Array):
-  x_std = jax.nn.standardize(
-    x.astype(config.model.compute_dtype.value), epsilon=config.model.eps_ln
-  )
-  out = params.gamma * x_std.astype(config.model.param_dtype.value)
+  """Naive three-pass layernorm algorithm. (layer/RMS norm, with/without bias)"""
+  x = x.astype(config.model.compute_dtype.value)
+  if config.model.use_centering_ln:
+    x = x - x.mean()
+  x = x * jax.lax.rsqrt(config.model.eps_ln + x.var())
+  out = params.gamma * x.astype(config.model.param_dtype.value)
   if config.model.use_bias_ln:
     out += params.beta
   return out
