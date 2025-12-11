@@ -143,6 +143,7 @@ class ModelConfig:
   eps_ln: float = 1e-6  # epsilon for layer norm
   use_centering_ln: bool = False  # layer norm or RMS norm
   use_bias_ln: bool = False  # bias in layernorm/RMSnorm
+  use_gating_mlp: bool = True  # Gated MLP or standard
   use_bias_mlp: bool = False  # bias in MLPs
   use_rope: bool = True  # RoPE or not
 

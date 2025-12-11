@@ -77,12 +77,12 @@ def _mlp(config: Config, params: Mlp, x: Array):
   if config.model.use_bias_mlp:
     # PERF: check that compiler fuses these
     preact += params.bias_up
-  gate = jax.nn.swish(
-    jnp.matmul(x, params.w_gate, out_sharding=jax.P(*config.sharding.mlp_hidden))
-  )
-  if config.model.use_bias_mlp:
-    gate += params.bias_gate
-  act = gate * preact
+  act = jax.nn.swish(preact)
+  if config.model.use_gating_mlp:
+    gate = jnp.matmul(x, params.w_gate, out_sharding=jax.P(*config.sharding.mlp_hidden))
+    if config.model.use_bias_mlp:
+      gate += params.bias_gate
+    act *= gate
   out = jnp.matmul(act, params.w_down, out_sharding=jax.P(*config.sharding.res_stream))
   if config.model.use_bias_mlp:
     out += params.bias_down
