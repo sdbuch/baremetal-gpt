@@ -379,7 +379,6 @@ def _layernorm(config: Config, params: LayerNorm, x: Array):
   x = x.astype(config.model.compute_dtype.value)
   if config.model.use_centering_ln:
     x = x - x.mean()
-  # TODO: Fix
   x = x * jax.lax.rsqrt(config.model.eps_ln + (x**2).mean())
   out = params.gamma * x.astype(config.model.param_dtype.value)
   if config.model.use_bias_ln:
