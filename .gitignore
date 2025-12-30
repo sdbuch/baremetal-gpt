@@ -1,4 +1,6 @@
 outputs
+multirun
+wandb
 *egg-info
 __pycache__
 *.npy

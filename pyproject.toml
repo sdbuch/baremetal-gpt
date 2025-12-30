@@ -17,10 +17,10 @@ dependencies = [
 
 [project.optional-dependencies]
 cpu = [
-    "jax==0.8.0",
+    "jax==0.8.2",
 ]
 tpu = [
-    "jax[tpu]==0.8.0",
+    "jax[tpu]==0.8.2",
 ]
 
 [project.scripts]
@@ -67,13 +67,13 @@ ignore = [
 
 [dependency-groups]
 dev = [
-    "datasets>=4.4.1",
-    "debugpy>=1.8.17",
+    "datasets>=4.4.2",
+    "debugpy>=1.8.19",
     "ipython>=9.8.0",
     "optax>=0.2.6",
     "pillow>=12.0.0",
     "pytest>=9.0.2",
     "rich>=14.2.0",
-    "tyro>=1.0.0",
+    "tyro>=1.0.3",
     "xprof>=2.21.3",
 ]
