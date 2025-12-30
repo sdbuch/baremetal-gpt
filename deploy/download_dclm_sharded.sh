@@ -1,6 +1,8 @@
 #!/bin/bash
 # Download from private R2 bucket using credentials
 # USAGE: ./download_dclm_sharded_private.sh <TPU_NAME>
+# NOTE: We assume deterministic execution of jax.process_index() in this downloading scheme
+#   Dataloading should fail explicitly if deterministic execution does not hold
 
 TPU_NAME="$1"
 SSH_FLAGS='-A -o ForwardAgent=yes'
@@ -16,8 +18,8 @@ OUTPUT_DIR='data/dclm'
 TOTAL_SHARDS=2192
 
 cd baremetal-gpt
-PROCESS_INDEX=\$(uv run python -c 'import jax; print(jax.process_index())')
-PROCESS_COUNT=\$(uv run python -c 'import jax; print(jax.process_count())')
+PROCESS_INDEX=\$(uv run python -c 'import jax; jax.distributed.initialize(); print(jax.process_index())')
+PROCESS_COUNT=\$(uv run python -c 'import jax; jax.distributed.initialize(); print(jax.process_count())')
 
 echo \"Process \$PROCESS_INDEX of \$PROCESS_COUNT\"
 
