@@ -78,7 +78,7 @@ def main(config: Config):
   with jax.set_mesh(mesh):
     train_state = init_train_state(key_model, config)
   cache_params = CacheParams(enabled=False, size=0)
-  kernel = make_splash_kernel(config, config.train_dataset, 0, mesh)
+  shard_mapped__kernel = make_splash_kernel(config, config.train_dataset, 0, mesh)
   spec = model_spec(train_state.params)
   opt_update = opt_update_factory(config.optimizer.type)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
@@ -88,7 +88,9 @@ def main(config: Config):
     def loss_fn(params: Transformer):
       inputs, targets = batch
       logits, _ = jax.vmap(
-        partial(_transformer, config, kernel, params, cache_params=cache_params)
+        partial(
+          _transformer, config, shard_mapped__kernel, params, cache_params=cache_params
+        )
       )(inputs, train_state.kv_cache)
       logits = logits.astype(config.model.compute_dtype.value)
       logprobs = jax.nn.log_softmax(logits, axis=-1)
@@ -143,11 +145,13 @@ def eval_loop(
 ):
   logger.flush_buffer()
   for evaluation in eval_list:
-    kernel = make_splash_kernel(config, evaluation.dataset, 0, mesh)
+    shard_mapped__kernel = make_splash_kernel(config, evaluation.dataset, 0, mesh)
     key, key_d, key_e = jax.random.split(key, 3)
     batch_iter = get_distributed_batch_iter(config, evaluation.dataset, key_d, mesh)
     evaluation_fn = evaluator_factory(evaluation)
-    metrics = evaluation_fn(config, key_e, kernel, mesh, params, batch_iter)
+    metrics = evaluation_fn(
+      config, key_e, shard_mapped__kernel, mesh, params, batch_iter
+    )
     logger.log(metrics | {"step": step})
   logger.flush_buffer()
   return key
