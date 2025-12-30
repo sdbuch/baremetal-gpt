@@ -25,11 +25,9 @@ echo \"Process \$PROCESS_INDEX of \$PROCESS_COUNT\"
 
 mkdir -p \"\$OUTPUT_DIR\"
 
-if [ \"\$PROCESS_INDEX\" -eq 0 ]; then
-    aws s3 cp --endpoint-url \"\$R2_ENDPOINT\" \
-        \"s3://\${BUCKET}/\${DATASET}/manifest.jsonl\" \
-        \"\$OUTPUT_DIR/manifest.jsonl\"
-fi
+aws s3 cp --endpoint-url \"\$R2_ENDPOINT\" \
+    \"s3://\${BUCKET}/\${DATASET}/manifest.jsonl\" \
+    \"\$OUTPUT_DIR/manifest.jsonl\"
 
 for ((i=PROCESS_INDEX; i<TOTAL_SHARDS; i+=PROCESS_COUNT)); do
     SHARD=\$(printf 'shard_%08d.tar' \$i)
