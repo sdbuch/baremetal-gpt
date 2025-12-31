@@ -6,8 +6,8 @@ defaults:
 val_log_interval: 250
 
 train_dataset:  # about 2b tokens
-  num_steps: 2000
-  global_batch_size: 512
+  num_steps: 4000
+  global_batch_size: 256
 
 val_list:
   - dataset:
@@ -16,7 +16,7 @@ val_list:
       split: VAL
       seq_len: ${train_dataset.seq_len}  # At inference time, this functions like prompt size
       global_batch_size: ${train_dataset.global_batch_size}
-      num_steps: 32  # about 32M tokens
+      num_steps: 64  # about 32M tokens
     evaluator: NLL
 
 eval_list:
