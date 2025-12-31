@@ -1,6 +1,6 @@
 from functools import partial
 from pathlib import Path
-from typing import Any, NamedTuple, Iterable
+from typing import Any, Iterable, NamedTuple
 
 import hydra
 import jax
@@ -147,14 +147,14 @@ def main(config: Config):
 def eval_loop(
   config: Config,
   key,
-  eval_list: Iterable[tuple[EvaluationConfig, Any]],
+  evals_and_kernels: Iterable[tuple[EvaluationConfig, Any]],
   params: Transformer,
   step: int,
   logger: Logger,
   mesh,
 ):
   logger.flush_buffer()
-  for evaluation, shard_mapped__kernel in eval_list:
+  for evaluation, shard_mapped__kernel in evals_and_kernels:
     key, key_d, key_e = jax.random.split(key, 3)
     batch_iter = get_distributed_batch_iter(config, evaluation.dataset, key_d, mesh)
     evaluation_fn = evaluator_factory(evaluation)
