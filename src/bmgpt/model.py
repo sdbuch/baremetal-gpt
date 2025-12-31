@@ -493,6 +493,7 @@ def _transformer(
   _, __, _embedding, _unembedding = transformer_variant_factory(config)
   x_seq = _embedding(config, params.emb, tokens)
 
+  @partial(jax.remat, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)
   def _block_fun(x_seq: Array, params__cache_in: tuple[Block, jax.Array]):
     params, cache_in = params__cache_in
     return _block(config, shard_mapped__kernel, params, x_seq, cache_in, cache_params)
