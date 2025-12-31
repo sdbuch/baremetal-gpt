@@ -1,0 +1,44 @@
+# @package _global_
+
+defaults:
+  - /dataset/dclm@train_dataset
+
+val_log_interval: 250
+
+train_dataset:  # about 2b tokens
+  num_steps: 2000
+  global_batch_size: 512
+
+val_list:
+  - dataset:
+      name: DCLM
+      path: ${train_dataset.path}
+      split: VAL
+      seq_len: ${train_dataset.seq_len}  # At inference time, this functions like prompt size
+      global_batch_size: ${train_dataset.global_batch_size}
+      num_steps: 32  # about 32M tokens
+    evaluator: NLL
+
+eval_list:
+  - dataset:
+      name: DCLM
+      path: ${train_dataset.path}
+      split: VAL
+      seq_len: 1024  # At inference time, this functions like prompt size
+      global_batch_size: 16
+      use_splash: False
+    evaluator: AUTOREGRESSIVE_ROLLOUTS
+
+model:
+  transformer_type: DISCRETE
+  max_seq_len: ${train_dataset.seq_len}  # no longer than train
+  is_causal: True
+  num_vocab: 128256  # llama 3 tokenizer
+
+# TODO: tune hparams, find good defaults!
+optimizer:
+  weight_decay: 1e-1
+
+inference:
+  tokenizer: LLAMA3
+  max_tokens_to_generate: 1024

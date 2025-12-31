@@ -61,11 +61,13 @@ class DatasetName(Enum):
   NUMBER_STAIRCASE = "number_staircase"
   MNIST = "mnist"
   SHAKESPEARE = "tiny-shakespeare"
+  DCLM = "dclm"
 
 
 class TokenizerType(Enum):
   IDENTITY = 0
   GPT2 = 1
+  LLAMA3 = 2
 
 
 @dataclass(kw_only=True, unsafe_hash=True)

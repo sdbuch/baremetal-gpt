@@ -4,6 +4,7 @@ from typing import Any, Callable, Iterator
 
 import jax
 import jax.numpy as jnp
+import webdataset as wds
 from jax import Array
 from jax.sharding import Mesh, NamedSharding
 
@@ -19,15 +20,11 @@ def dataset_dataloader_factory(config: DatasetConfig):
     case DatasetName.MNIST:
       return (load_mnist(config), dataloader_without_replacement)
     case DatasetName.NUMBER_STAIRCASE:
-      return (
-        make_number_staircase_data(config),
-        dataloader_with_replacement,
-      )
+      return (make_number_staircase_data(config), dataloader_with_replacement)
     case DatasetName.SHAKESPEARE:
-      return (
-        load_shakespeare(config),
-        dataloader_with_replacement,
-      )
+      return (load_shakespeare(config), dataloader_with_replacement)
+    case DatasetName.DCLM:
+      return (load_dclm(config), dataloader_dclm)
 
 
 def get_range_iterable(config: DatasetConfig):
@@ -73,6 +70,19 @@ def load_shakespeare(config: DatasetConfig):
   return data, jnp.array(0)
 
 
+def load_dclm(config: DatasetConfig):
+  # For streaming support, just returns the list of local shards
+  if config.split == SplitType.TRAIN:
+    data_dir = Path(config.path) / "train"
+  elif config.split == SplitType.VAL:
+    data_dir = Path(config.path) / "val"
+  else:
+    raise NotImplementedError
+  shard_files = sorted(data_dir.glob("shard_*.tar"))
+  shard_urls = [str(f) for f in shard_files]
+  return shard_urls
+
+
 def make_number_staircase_data(config: DatasetConfig):
   # Simple data sequence!
   # Small, so mega replicate for ease
@@ -102,6 +112,33 @@ def split_data(data: Array, train_fraction: float, dev_fraction: float):
 ##################################
 ##        Dataloaders
 ##################################
+
+
+# DCLM-specific dataloader
+# - We use webdataset for this, as DCLM preprocessing outputs in wds format!
+# - Data is pre-shuffled and we currently don't re-shuffle it (doesn't use key)
+# - Can't load all data into RAM, so doesn't follow the same API as other loaders
+def dataloader_dclm(
+  key, config: DatasetConfig, data: list[str]
+) -> DataloaderOutputType:
+  local_batch_size = config.global_batch_size // jax.process_count()
+  to_jax_array = lambda x: jnp.array(x, dtype=jnp.int32)
+
+  # TODO: Make the loader work for both train or val splits
+  # For val, we need to set aside a split
+
+  dataloader = (
+    wds.WebDataset(data, shardshuffle=False)
+    .decode()  # Auto-decompress gzip and decode JSON
+    .to_tuple("json.gz")  # Extract json.gz key-value, no metadata
+    .map(lambda x: map(to_jax_array, (x[0][:-1], x[0][1:])))  # x is a len-1 tuple
+    .batched(
+      local_batch_size,
+      partial=False,
+      collation_fn=lambda batches: [jnp.stack(x) for x in zip(*batches)],
+    )
+  )
+  yield from dataloader
 
 
 # Simple next-token prediction dataloader for text training:
