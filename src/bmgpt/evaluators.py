@@ -102,19 +102,19 @@ def calculate_metric_on_minibatches(
   batch = next(batch_iter)
   with jax.set_mesh(mesh):
     batch_metric = metric(config, kernel, batch, params, cache)
-  buffer = batch_metric
-  num_samples_processed += len(batch[0])
+  batch_metric_buffer = batch_metric
+  num_samples_processed += batch[0].size
 
   # Process remaining batches
   if num_steps != 1:  # if num_steps=1, we want to skip this
     for step, batch in enumerate(batch_iter):
       with jax.set_mesh(mesh):
         batch_metric = metric(config, kernel, batch, params, cache)
-        buffer += batch_metric
-      num_samples_processed += len(batch[0])
+        batch_metric_buffer += batch_metric
+      num_samples_processed += batch[0].size
       if step == num_steps - 1:
         break
-  metric = buffer.sum() / num_samples_processed
+  metric = batch_metric_buffer / num_samples_processed
   if perplexity_flag:
     # there is an online algorithm for perplexity with a product reduction
     # but it is not numerically stable... easier to just do this hack
@@ -135,7 +135,7 @@ def accuracy(config: Config, kernel, batch, params: Transformer, cache):
     )
   )(inputs, cache)
   preds = logits.argmax(axis=-1)
-  return (preds == targets).astype(jnp.int32)
+  return (preds == targets).astype(jnp.int32).sum()
 
 
 @partial(jax.jit, static_argnums=(1,))
@@ -153,4 +153,4 @@ def nll(config: Config, kernel, batch, params: Transformer, cache):
   )(inputs, cache)
   logits = logits.astype(config.model.compute_dtype.value)
   logprobs = jax.nn.log_softmax(logits, axis=-1)
-  return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).squeeze(-1)
+  return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).sum()

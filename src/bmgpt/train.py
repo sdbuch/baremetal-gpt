@@ -167,6 +167,7 @@ def eval_loop(
       config, key_e, shard_mapped__kernel, mesh, params, batch_iter
     )
     logger.log(metrics | {"step": step})
+    logger.warn(str(metrics))
   logger.flush_buffer()
   return key
 
