@@ -7,3 +7,6 @@ __pycache__
 *.npz
 *.bin
 *.txt
+*.jsonl
+*.json
+*.tar
