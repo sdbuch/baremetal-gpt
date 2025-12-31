@@ -48,7 +48,12 @@ uv run train {Hydra overrides}
 
 We also include an example launch script, `/deploy/run.sh`, for use on
 Google Cloud TPU VMs.
-For example, from the repository root, to train the default model (GPT2-Small
+
+## Examples
+
+### Tiny Shakespeare
+
+From the repository root, to train the default model (GPT2-Small
 scale) on Tiny Shakespeare using a 16-chip (4 host) TPU v4 VM `tpu-v4-32` with
 data parallel, first download the dataset to each host:
 
@@ -61,6 +66,23 @@ Then run the training script:
 ```
 ./deploy/run.sh tpu-v4-32 +deploy=v4-16 +experiment=tiny-shakespeare
 ```
+
+### DCLM
+
+To train on DCLM, first:
+- Download and preprocess the dataset (an example script is given in
+  `data/dclm/download_and_preprocess_dclm.sh` for the `1b-1x` configuration,
+  approximately `36B` tokens);
+- Upload the preprocessed dataset to an R2 bucket (etc.);
+- Download the necessary dataset shards to each host (an example script is given
+  in `download_dclm_sharded.sh` for my R2 bucket).
+
+Then run the training script:
+
+```
+./deploy/run.sh tpu-v4-32 +deploy=v4-16 +experiment=dclm
+```
+
 
 # For More Information
 

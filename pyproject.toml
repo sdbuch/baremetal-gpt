@@ -13,6 +13,7 @@ dependencies = [
     "hydra-joblib-launcher>=1.2.0",
     "tiktoken>=0.12.0",
     "wandb>=0.23.1",
+    "webdataset>=1.0.2",
 ]
 
 [project.optional-dependencies]
@@ -63,17 +64,18 @@ ignore = [
     "F821",  # Undefined name
     "E402",  # Module level import not at top of file
     "F841",  # Local variable assigned but not used
+    "E731",  # use a def, not a lambda
 ]
 
 [dependency-groups]
 dev = [
-    "datasets>=4.4.1",
-    "debugpy>=1.8.17",
+    "datasets>=4.4.2",
+    "debugpy>=1.8.19",
     "ipython>=9.8.0",
     "optax>=0.2.6",
     "pillow>=12.0.0",
     "pytest>=9.0.2",
     "rich>=14.2.0",
-    "tyro>=1.0.0",
+    "tyro>=1.0.3",
     "xprof>=2.21.3",
 ]

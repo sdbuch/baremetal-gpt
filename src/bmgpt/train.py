@@ -1,6 +1,6 @@
 from functools import partial
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Iterable, NamedTuple
 
 import hydra
 import jax
@@ -74,11 +74,23 @@ def main(config: Config):
   # Data
   batch_iter = get_distributed_batch_iter(config, config.train_dataset, key_train, mesh)
 
-  # Initialize state, configure forward pass and optimization
+  # Initialize state
   with jax.set_mesh(mesh):
     train_state = init_train_state(key_model, config)
   cache_params = CacheParams(enabled=False, size=0)
-  kernel = make_splash_kernel(config, config.train_dataset, 0, mesh)
+
+  # Configure forward pass (attention kernels)
+  shard_mapped__kernel = make_splash_kernel(config, config.train_dataset, 0, mesh)
+  val_kernels = []
+  eval_kernels = []
+  for evaluation in config.val_list:
+    val_kernels.append(make_splash_kernel(config, evaluation.dataset, 0, mesh))
+  for evaluation in config.eval_list:
+    eval_kernels.append(make_splash_kernel(config, evaluation.dataset, 0, mesh))
+  assert len(val_kernels) == len(config.val_list)
+  assert len(eval_kernels) == len(config.eval_list)
+
+  # Configure optimization
   spec = model_spec(train_state.params)
   opt_update = opt_update_factory(config.optimizer.type)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
@@ -88,9 +100,10 @@ def main(config: Config):
     def loss_fn(params: Transformer):
       inputs, targets = batch
       logits, _ = jax.vmap(
-        partial(_transformer, config, kernel, params, cache_params=cache_params)
+        partial(
+          _transformer, config, shard_mapped__kernel, params, cache_params=cache_params
+        )
       )(inputs, train_state.kv_cache)
-      logits = logits.astype(config.model.compute_dtype.value)
       logprobs = jax.nn.log_softmax(logits, axis=-1)
       return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
@@ -124,30 +137,35 @@ def main(config: Config):
       logger.log(metrics | {"step": step})
       if (step + 1) % config.val_log_interval == 0:
         # Calculate val metrics
-        key_val = do_evals(key_val, config.val_list, train_state.params, step)
+        key_val = do_evals(
+          key_val, zip(config.val_list, val_kernels), train_state.params, step
+        )
       if step == config.train_dataset.num_steps - 1:
         break
 
     # Run evals (testing)
-    key_eval = do_evals(key_eval, config.eval_list, train_state.params, step)
+    key_eval = do_evals(
+      key_eval, zip(config.eval_list, eval_kernels), train_state.params, step
+    )
 
 
 def eval_loop(
   config: Config,
   key,
-  eval_list: list[EvaluationConfig],
+  evals_and_kernels: Iterable[tuple[EvaluationConfig, Any]],
   params: Transformer,
   step: int,
   logger: Logger,
   mesh,
 ):
   logger.flush_buffer()
-  for evaluation in eval_list:
-    kernel = make_splash_kernel(config, evaluation.dataset, 0, mesh)
+  for evaluation, shard_mapped__kernel in evals_and_kernels:
     key, key_d, key_e = jax.random.split(key, 3)
     batch_iter = get_distributed_batch_iter(config, evaluation.dataset, key_d, mesh)
     evaluation_fn = evaluator_factory(evaluation)
-    metrics = evaluation_fn(config, key_e, kernel, mesh, params, batch_iter)
+    metrics = evaluation_fn(
+      config, key_e, shard_mapped__kernel, mesh, params, batch_iter
+    )
     logger.log(metrics | {"step": step})
   logger.flush_buffer()
   return key

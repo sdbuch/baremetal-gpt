@@ -1,7 +1,12 @@
 outputs
+multirun
+wandb
 *egg-info
 __pycache__
 *.npy
 *.npz
 *.bin
 *.txt
+*.jsonl
+*.json
+*.tar

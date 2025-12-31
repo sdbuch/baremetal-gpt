@@ -161,7 +161,7 @@ def _make_cache_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
 
 def _attn(
   config: Config,
-  kernel,
+  shard_mapped__kernel,
   params: Attn,
   x_seq: jax.Array,
   kv_cache: jax.Array,  # 2 x cache_capacity x n x h
@@ -209,7 +209,7 @@ def _attn(
 
   # Attention
   t = k.shape[1]  # t = s + cache_capacity
-  if kernel:
+  if shard_mapped__kernel:
     q_segment_ids = jnp.zeros((s,))
     kv_mask = _make_cache_mask(s, t, cache_params.size) | (
       ~_make_cache_mask(s, t, cache_capacity)
@@ -218,7 +218,7 @@ def _attn(
     kv_segment_ids = kv_mask.astype(jnp.int32)
     segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
 
-    splash_sharded, kernel = kernel
+    splash_sharded, kernel = shard_mapped__kernel
     attn_out = splash_sharded(
       kernel,
       q / config.model.d_head**0.25,
@@ -436,7 +436,7 @@ def init_block(config: Config, key) -> Block:
 
 def _block(
   config: Config,
-  kernel,
+  shard_mapped__kernel,
   params: Block,
   x_seq: Array,
   cache: jax.Array,
@@ -445,7 +445,12 @@ def _block(
   att_skip = x_seq
   out = jax.vmap(partial(_layernorm, config, params.norm_attn))(x_seq)
   out, cache_out = _attn(
-    config, kernel, params.attn, out, kv_cache=cache, cache_params=cache_params
+    config,
+    shard_mapped__kernel,
+    params.attn,
+    out,
+    kv_cache=cache,
+    cache_params=cache_params,
   )
   out += att_skip
 
@@ -479,7 +484,7 @@ def init_transformer(key, config: Config) -> Transformer:
 
 def _transformer(
   config: Config,
-  kernel,
+  shard_mapped__kernel,
   params: Transformer,
   tokens: Array,
   cache: jax.Array,
@@ -488,9 +493,10 @@ def _transformer(
   _, __, _embedding, _unembedding = transformer_variant_factory(config)
   x_seq = _embedding(config, params.emb, tokens)
 
+  @partial(jax.remat, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)
   def _block_fun(x_seq: Array, params__cache_in: tuple[Block, jax.Array]):
     params, cache_in = params__cache_in
-    return _block(config, kernel, params, x_seq, cache_in, cache_params)
+    return _block(config, shard_mapped__kernel, params, x_seq, cache_in, cache_params)
 
   out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache))
 
