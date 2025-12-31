@@ -64,6 +64,7 @@ ignore = [
     "F821",  # Undefined name
     "E402",  # Module level import not at top of file
     "F841",  # Local variable assigned but not used
+    "E731",  # use a def, not a lambda
 ]
 
 [dependency-groups]

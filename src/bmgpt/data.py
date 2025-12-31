@@ -118,20 +118,20 @@ def split_data(data: Array, train_fraction: float, dev_fraction: float):
 # - We use webdataset for this, as DCLM preprocessing outputs in wds format!
 # - Data is pre-shuffled and we currently don't re-shuffle it (doesn't use key)
 # - Can't load all data into RAM, so doesn't follow the same API as other loaders
+# - Data is sharded across hosts in advance (see load_dclm)
 def dataloader_dclm(
   key, config: DatasetConfig, data: list[str]
 ) -> DataloaderOutputType:
   local_batch_size = config.global_batch_size // jax.process_count()
-  to_jax_array = lambda x: jnp.array(x, dtype=jnp.int32)
+  s = config.seq_len
 
-  # TODO: Make the loader work for both train or val splits
-  # For val, we need to set aside a split
+  to_jax_array = lambda x: jnp.array(x, dtype=jnp.int32)
 
   dataloader = (
     wds.WebDataset(data, shardshuffle=False)
     .decode()  # Auto-decompress gzip and decode JSON
     .to_tuple("json.gz")  # Extract json.gz key-value, no metadata
-    .map(lambda x: map(to_jax_array, (x[0][:-1], x[0][1:])))  # x is a len-1 tuple
+    .map(lambda x: map(to_jax_array, (x[0][:s], x[0][1 : s + 1])))  # x is a len-1 tuple
     .batched(
       local_batch_size,
       partial=False,

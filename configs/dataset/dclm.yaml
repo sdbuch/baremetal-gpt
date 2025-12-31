@@ -1,5 +1,5 @@
 name: DCLM
 path: "data/dclm"
 split: TRAIN
-seq_len: 2048
+seq_len: 2048  # this is the max seq length
 global_batch_size: 512
