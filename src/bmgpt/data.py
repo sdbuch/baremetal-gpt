@@ -119,9 +119,11 @@ def split_data(data: Array, train_fraction: float, dev_fraction: float):
 # - Data is pre-shuffled and we currently don't re-shuffle it (doesn't use key)
 # - Can't load all data into RAM, so doesn't follow the same API as other loaders
 # - Data is sharded across hosts in advance (see load_dclm)
+# - DCLM Llama3 tokenizer is used and is weird about the pad token (handle it here)
 def dataloader_dclm(
   key, config: DatasetConfig, data: list[str]
 ) -> DataloaderOutputType:
+  PAD_TOKEN = 128258
   local_batch_size = config.global_batch_size // jax.process_count()
   s = config.seq_len
 
@@ -130,8 +132,9 @@ def dataloader_dclm(
   dataloader = (
     wds.WebDataset(data, shardshuffle=False)
     .decode()  # Auto-decompress gzip and decode JSON
-    .to_tuple("json.gz")  # Extract json.gz key-value, no metadata
-    .map(lambda x: map(to_jax_array, (x[0][:s], x[0][1 : s + 1])))  # x is a len-1 tuple
+    .to_tuple("json.gz")  # Extract json.gz key-value, no metadata, as (1,) shape tuple
+    .select(lambda ctx: all(token != PAD_TOKEN for token in ctx[0]))  # no PAD tokens
+    .map(lambda x: map(to_jax_array, (x[0][:s], x[0][1 : s + 1])))  # to JAX array
     .batched(
       local_batch_size,
       partial=False,

@@ -33,7 +33,7 @@ model:
   transformer_type: DISCRETE
   max_seq_len: ${train_dataset.seq_len}  # no longer than train
   is_causal: True
-  num_vocab: 128256  # llama 3 tokenizer
+  num_vocab: 131072  # llama 3 tokenizer, rounded up to 128K
 
 # TODO: tune hparams, find good defaults!
 optimizer:

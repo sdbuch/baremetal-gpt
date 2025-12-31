@@ -73,4 +73,8 @@ def get_tokenizer_factory(config: InferenceConfig):
     case TokenizerType.GPT2:
       return TiktokenTokenizer("gpt2")
     case TokenizerType.LLAMA3:
+      # NOTE: (IMPORTANT) This is using the DCLM llama3 tokenizer
+      # It has some nonstandard quirks:
+      # It uses ID 0 (which is !) as end-of-text (llama3's EoT is 128001)
+      # It uses ID 128258 as a PAD token (although vocab_size is 128256)
       return TiktokenCustomTokenizer(Path("tokenizers/meta-llama-3-8B.tiktoken"))
