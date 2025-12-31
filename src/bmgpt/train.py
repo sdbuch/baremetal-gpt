@@ -98,8 +98,8 @@ def main(config: Config):
           _transformer, config, shard_mapped__kernel, params, cache_params=cache_params
         )
       )(inputs, train_state.kv_cache)
-      logits = logits.astype(config.model.compute_dtype.value)
-      logprobs = jax.nn.log_softmax(logits, axis=-1)
+      logits_up = jax.lax.convert_element_type(logits, config.model.compute_dtype.value)
+      logprobs = jax.nn.log_softmax(logits_up, axis=-1)
       return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
     loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
