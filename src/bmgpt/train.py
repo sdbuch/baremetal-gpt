@@ -74,10 +74,12 @@ def main(config: Config):
   # Data
   batch_iter = get_distributed_batch_iter(config, config.train_dataset, key_train, mesh)
 
-  # Initialize state, configure forward pass and optimization
+  # Initialize state
   with jax.set_mesh(mesh):
     train_state = init_train_state(key_model, config)
   cache_params = CacheParams(enabled=False, size=0)
+
+  # Configure forward pass (attention kernels)
   shard_mapped__kernel = make_splash_kernel(config, config.train_dataset, 0, mesh)
   val_kernels = []
   eval_kernels = []
@@ -85,6 +87,10 @@ def main(config: Config):
     val_kernels.append(make_splash_kernel(config, evaluation.dataset, 0, mesh))
   for evaluation in config.eval_list:
     eval_kernels.append(make_splash_kernel(config, evaluation.dataset, 0, mesh))
+  assert len(val_kernels) == len(config.val_list)
+  assert len(eval_kernels) == len(config.eval_list)
+
+  # Configure optimization
   spec = model_spec(train_state.params)
   opt_update = opt_update_factory(config.optimizer.type)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
