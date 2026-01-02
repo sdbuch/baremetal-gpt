@@ -95,7 +95,7 @@ def main(config: Config):
   opt_update = partial(opt_update_factory(config.optimizer.type), config)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
 
-  # @partial(jax.jit, donate_argnums=2)
+  @partial(jax.jit, donate_argnums=2)
   def train_step(config: Config, batch, state: TrainState):
     @partial(jax.remat, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)
     def loss_fn(params: Transformer):
@@ -110,10 +110,7 @@ def main(config: Config):
       return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
     loss, grad = jax.value_and_grad(loss_fn)(state.params)
-    print('state', jax.tree.map(lambda x: x.dtype, state.params))
-    print('grad', jax.tree.map(lambda x: x.dtype, grad))
     grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
-    print('clipped', jax.tree.map(lambda x: x.dtype, grad_clipped))
     update__opt_state = jax.tree.map(
       opt_update, state.params, grad_clipped, state.opt_state, weight_decay_mask
     )
