@@ -130,7 +130,7 @@ def dataloader_dclm(
   to_jax_array = lambda x: jnp.array(x, dtype=jnp.int32)
 
   dataloader = (
-    wds.WebDataset(data, shardshuffle=False)
+    wds.WebDataset(data, shardshuffle=False)  # type: ignore[attr-defined]
     .decode()  # Auto-decompress gzip and decode JSON
     .to_tuple("json.gz")  # Extract json.gz key-value, no metadata, as (1,) shape tuple
     .select(lambda ctx: all(token != PAD_TOKEN for token in ctx[0]))  # no PAD tokens

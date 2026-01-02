@@ -2,6 +2,7 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+from jax import Array
 
 from bmgpt.config import Config
 from bmgpt.model import CacheParams, Transformer, _transformer
@@ -16,7 +17,7 @@ def sample_one_prompt(
   cache_in: jax.Array,
   cache_size: int,
   temperature: float,
-):
+) -> tuple[Array, Array, int]:
   """Expects seq and cache_in to have no batch axis."""
   cache_params = CacheParams(enabled=True, size=cache_size)
   y, cache_out = _transformer(config, kernel, params, seq, cache_in, cache_params)
@@ -32,10 +33,10 @@ def generate(
   key,
   kernel,
   params: Transformer,
-  prompt: jax.Array,
-  cache: jax.Array,
+  prompt: Array,
+  cache: Array,
   cache_size: int,
-) -> tuple[jax.Array, jax.Array, int]:
+) -> tuple[Array, Array, int]:
   """Expects prompt and cache to have no batch axis."""
   # Note: next_token is a length-1 sequence throughout
   # Prefill
@@ -53,7 +54,7 @@ def generate(
   prefill = jnp.concatenate((prompt, next_token))
 
   # Generation loop
-  def loop_fn(next_token__cache__cache_size, key):
+  def loop_fn(next_token__cache__cache_size: tuple[Array, Array, int], key):
     next_token, cache, cache_size = sample_one_prompt(
       config,
       key,

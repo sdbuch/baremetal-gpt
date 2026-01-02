@@ -42,8 +42,10 @@ module-name = "bmgpt"
 [tool.uv.sources]
 bmgpt = { path = ".", editable = true }
 
+[tool.ty.src]
+exclude = ["tests"]
+
 [tool.ruff]
-# Basic configuration
 line-length = 88
 indent-width = 2
 
@@ -51,14 +53,11 @@ indent-width = 2
 indent-style = "space"
 
 [tool.ruff.lint]
-# Enable fix mode (equivalent to --fix flag)
 fixable = ["ALL"]
 unfixable = []
 
-# Rule selection
 select = ["E", "W", "F"]  # Error, Warning, and Pyflakes rules
 
-# Rules to ignore
 ignore = [
     "F401",  # Unused import
     "F821",  # Undefined name
@@ -76,6 +75,8 @@ dev = [
     "pillow>=12.0.0",
     "pytest>=9.0.2",
     "rich>=14.2.0",
+    "ruff>=0.14.10",
+    "ty>=0.0.8",
     "tyro>=1.0.3",
     "xprof>=2.21.3",
 ]

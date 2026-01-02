@@ -14,10 +14,10 @@ class Tokenizer:
     pass
 
   def encode(self, text: str) -> jax.Array:
-    pass
+    return jnp.array(())
 
   def decode(self, ids: jax.Array) -> str:
-    pass
+    return ""
 
 
 class IdentityTokenizer(Tokenizer):
