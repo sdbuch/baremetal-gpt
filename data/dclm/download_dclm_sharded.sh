@@ -16,7 +16,7 @@ BUCKET='dclm'
 DATASET='dclm_tokshuf_1b'
 OUTPUT_DIR='data/dclm'
 TRAIN_SHARDS=2176
-VAL_SHARDS=4
+VAL_SHARDS=16
 
 cd baremetal-gpt
 PROCESS_INDEX=\$(uv run python -c 'import jax; jax.distributed.initialize(); print(jax.process_index())')
