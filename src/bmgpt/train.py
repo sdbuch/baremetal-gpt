@@ -97,6 +97,7 @@ def main(config: Config):
 
   @partial(jax.jit, donate_argnums=2)
   def train_step(config: Config, batch, train_state: TrainState):
+    @partial(jax.remat, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)
     def loss_fn(params: Transformer):
       inputs, targets = batch
       logits, _ = jax.vmap(
@@ -104,6 +105,7 @@ def main(config: Config):
           _transformer, config, shard_mapped__kernel, params, cache_params=cache_params
         )
       )(inputs, train_state.kv_cache)
+      logits = logits.astype(config.model.compute_dtype.value)
       logprobs = jax.nn.log_softmax(logits, axis=-1)
       return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
