@@ -126,7 +126,7 @@ class ModelConfig:
   d_model: int = 768
   num_heads: int = 12
   d_head: int = 64
-  mlp_factor: float = 8/3
+  mlp_factor: float = 8 / 3
   num_layers: int = 12
   param_std: float = 0.02
   rope_theta: float = 10000.0
@@ -136,9 +136,9 @@ class ModelConfig:
   num_classes: int = MISSING  # output dim (equals input dim for text tf)
 
   # Model dtypes
-  param_dtype: DType = DType.BFLOAT16  # weights, activations
-  compute_dtype: DType = DType.FLOAT32  # layernorm, attn logits, rope
-  optimizer_dtype: DType = DType.FLOAT32  # optimizer state
+  # Select operations (layernorm, logits, rope) always done in FP32
+  param_dtype: DType = DType.FLOAT32  # master weights dtype
+  compute_dtype: DType = DType.BFLOAT16  # cast params to this for fwd (&bwd)
 
   # Model call-time params
   use_bias_embeddings: bool = False  # bias in emb / unemb

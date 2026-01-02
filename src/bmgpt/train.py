@@ -105,7 +105,7 @@ def main(config: Config):
           _transformer, config, shard_mapped__kernel, params, cache_params=cache_params
         )
       )(inputs, train_state.kv_cache)
-      logits = logits.astype(config.model.compute_dtype.value)
+      logits = logits.astype(jnp.float32)
       logprobs = jax.nn.log_softmax(logits, axis=-1)
       return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 

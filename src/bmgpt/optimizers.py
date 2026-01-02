@@ -49,8 +49,8 @@ class OptState(NamedTuple):
 
 def init_adam_state(config: Config, param: jax.Array) -> OptState:
   return OptState(
-    mu=jnp.zeros_like(param, dtype=config.model.optimizer_dtype.value),
-    nu=jnp.zeros_like(param, dtype=config.model.optimizer_dtype.value),
+    mu=jnp.zeros_like(param, dtype=config.model.param_dtype.value),
+    nu=jnp.zeros_like(param, dtype=config.model.param_dtype.value),
     step=jnp.array(0, dtype=jnp.int32),
   )
 
@@ -69,11 +69,8 @@ def adamw_update(
   eps = config.optimizer.eps_adam
   weight_decay = config.optimizer.weight_decay
 
-  mu = beta1 * state.mu + (1 - beta1) * grad.astype(config.model.optimizer_dtype.value)
-  nu = (
-    beta2 * state.nu
-    + (1 - beta2) * grad.astype(config.model.optimizer_dtype.value) ** 2
-  )
+  mu = beta1 * state.mu + (1 - beta1) * grad
+  nu = beta2 * state.nu + (1 - beta2) * grad**2
   new_state = OptState(mu=mu, nu=nu, step=state.step + 1)
 
   mu_debias = mu / (1 - beta1**new_state.step)
@@ -82,7 +79,7 @@ def adamw_update(
   if wd_mask:
     # Apply weight decay
     update = update - lr * weight_decay * param
-  return update.astype(config.model.param_dtype.value), new_state
+  return update, new_state
 
 
 def sgd_update(

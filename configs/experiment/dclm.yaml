@@ -7,7 +7,7 @@ val_log_interval: 250
 
 train_dataset:  # about 2b tokens
   num_steps: 4000
-  global_batch_size: 256
+  global_batch_size: 512
 
 val_list:
   - dataset:

@@ -151,6 +151,6 @@ def nll(config: Config, kernel, batch, params: Transformer, cache):
       cache_params=CacheParams(enabled=False, size=0),
     )
   )(inputs, cache)
-  logits = logits.astype(config.model.compute_dtype.value)
+  logits = logits.astype(jnp.float32)
   logprobs = jax.nn.log_softmax(logits, axis=-1)
   return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).sum()

@@ -20,7 +20,7 @@ def sample_one_prompt(
   """Expects seq and cache_in to have no batch axis."""
   cache_params = CacheParams(enabled=True, size=cache_size)
   y, cache_out = _transformer(config, kernel, params, seq, cache_in, cache_params)
-  logits = y.astype(config.model.compute_dtype.value)
+  logits = y.astype(jnp.float32)
   cache_size = cache_size + seq.shape[-1]
   next_token = jnp.array((jax.random.categorical(key, logits[-1] / temperature),))
   return next_token, cache_out, cache_size

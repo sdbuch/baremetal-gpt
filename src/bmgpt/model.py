@@ -120,7 +120,7 @@ def init_attn(config: Config, key) -> Attn:
 
 def _precompute_rope_cossin(config: Config):
   freqs = jnp.exp(
-    -jnp.log(config.model.rope_theta).astype(config.model.compute_dtype.value)
+    -jnp.log(config.model.rope_theta).astype(jnp.float32)
     * 2
     / config.model.d_head
     * jnp.arange(config.model.d_head // 2, out_sharding=jax.P())
@@ -142,7 +142,7 @@ def _apply_rope(
   return jnp.concatenate(
     (c * x_1 - s * x_2, c * x_2 + s * x_1),
     axis=-1,
-    dtype=config.model.param_dtype.value,
+    dtype=config.model.compute_dtype.value,
   )
 
 
@@ -238,11 +238,11 @@ def _attn(
       mask = ~_make_cache_mask(s, t, 0)  # full attention
     mask = mask[None, ...]  # broadcast over heads
     # Scale and causal mask
-    logits = jnp.einsum("nsh,nth->nst", q, k).astype(config.model.compute_dtype.value)
+    logits = jnp.einsum("nsh,nth->nst", q, k).astype(jnp.float32)
     logits *= 1.0 / config.model.d_head**0.5
     logits = jnp.where(mask, logits, -jnp.inf)
     probs = jax.nn.softmax(logits, axis=2)  # type: ignore[reportArgumentType]
-    probs = probs.astype(config.model.param_dtype.value)
+    probs = probs.astype(config.model.compute_dtype.value)
     attn_out = jnp.einsum("nst,nth->nsh", probs, v)
   out = jnp.einsum(
     "nsh,hnd->sd",
@@ -402,14 +402,14 @@ def init_layernorm(config: Config) -> LayerNorm:
 
 def _layernorm(config: Config, params: LayerNorm, x: Array):
   """Naive three-pass layernorm algorithm. (layer/RMS norm, with/without bias)"""
-  x = x.astype(config.model.compute_dtype.value)
+  x = x.astype(jnp.float32)
   if config.model.use_centering_ln:
     x = x - x.mean()
   x = x * jax.lax.rsqrt(config.model.eps_ln + (x**2).mean())
-  out = params.gamma * x.astype(config.model.param_dtype.value)
+  out = params.gamma * x
   if config.model.use_bias_ln:
     out += params.beta
-  return out
+  return out.astype(config.model.compute_dtype.value)
 
 
 ##################################
@@ -490,6 +490,8 @@ def _transformer(
   cache: jax.Array,
   cache_params: CacheParams,
 ):
+  # Cast to compute_dtype
+  params = jax.tree.map(lambda x: x.astype(config.model.compute_dtype.value), params)
   _, __, _embedding, _unembedding = transformer_variant_factory(config)
   x_seq = _embedding(config, params.emb, tokens)
 
@@ -527,7 +529,7 @@ def init_kv_cache(config: Config, global_batch_size: int, cache_capacity: int):
       cache_capacity,
       config.model.d_head,
     ),
-    dtype=config.model.param_dtype.value,
+    dtype=config.model.compute_dtype.value,
     out_sharding=sharding,
   )
 
