@@ -92,11 +92,11 @@ def main(config: Config):
 
   # Configure optimization
   spec = model_spec(train_state.params)
-  opt_update = opt_update_factory(config.optimizer.type)
+  opt_update = partial(opt_update_factory(config.optimizer.type), config)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
 
   @partial(jax.jit, donate_argnums=2)
-  def train_step(config: Config, batch, train_state: TrainState):
+  def train_step(config: Config, batch, state: TrainState):
     @partial(jax.remat, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)
     def loss_fn(params: Transformer):
       inputs, targets = batch
@@ -104,28 +104,22 @@ def main(config: Config):
         partial(
           _transformer, config, shard_mapped__kernel, params, cache_params=cache_params
         )
-      )(inputs, train_state.kv_cache)
+      )(inputs, state.kv_cache)
       logits = logits.astype(jnp.float32)
       logprobs = jax.nn.log_softmax(logits, axis=-1)
       return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
-    loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
+    loss, grad = jax.value_and_grad(loss_fn)(state.params)
     grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
     update__opt_state = jax.tree.map(
-      partial(opt_update, config),
-      train_state.params,
-      grad_clipped,
-      train_state.opt_state,
-      weight_decay_mask,
+      opt_update, state.params, grad_clipped, state.opt_state, weight_decay_mask
     )
     # Transpose the output tree to get update tree and state tree
     update, opt_state = map(
       lambda i: jax.tree.map(lambda x, y: y[i], grad, update__opt_state), range(2)
     )
-    params = jax.tree.map(lambda x, y: x + y, train_state.params, update)
-    new_state = TrainState(
-      params=params, opt_state=opt_state, kv_cache=train_state.kv_cache
-    )
+    params = jax.tree.map(lambda x, y: x + y, state.params, update)
+    new_state = TrainState(params=params, opt_state=opt_state, kv_cache=state.kv_cache)
 
     metrics = {"batch_loss": loss, "grad_norm": global_grad_norm}
     return metrics, new_state
