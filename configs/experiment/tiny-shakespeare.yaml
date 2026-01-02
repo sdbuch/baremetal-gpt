@@ -22,7 +22,7 @@ val_list:
       path: ${train_dataset.path}
       split: VAL
       seq_len: 128  # At inference time, this functions like prompt size
-      global_batch_size: 16
+      global_batch_size: ${sharding.mesh_shape[0]}
       use_splash: False
     evaluator: AUTOREGRESSIVE_ROLLOUTS
 
@@ -32,7 +32,7 @@ eval_list:
       path: ${train_dataset.path}
       split: VAL
       seq_len: 128  # At inference time, this functions like prompt size
-      global_batch_size: 16
+      global_batch_size: ${sharding.mesh_shape[0]}
       use_splash: False
     evaluator: AUTOREGRESSIVE_ROLLOUTS
 

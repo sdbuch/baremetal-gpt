@@ -7,6 +7,8 @@ import jax.numpy as jnp
 from bmgpt.config import Config, OptType
 from bmgpt.model import Transformer
 
+"""Optimizer init/updates operate on Arrays, not pytrees (tree.map them)"""
+
 
 def opt_update_factory(opt_type: OptType):
   match opt_type:
