@@ -2,12 +2,12 @@
 
 # TODO
 sharding:
-  mesh_axis_names: ["dp"]
-  data: ["dp"]
-  wqkv: []
-  wo: []
-  wup: []
-  wdown: []
+  mesh_axis_names: ["fsdp"]
+  data: ["fsdp"]
+  wqkv: ["fsdp"]
+  wo: ["fsdp"]
+  wup: ["fsdp"]
+  wdown: [None, "fsdp"]
   mlp_hidden: []
   res_stream: []
   att_qkv: []

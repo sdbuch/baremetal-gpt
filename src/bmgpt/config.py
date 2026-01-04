@@ -181,11 +181,13 @@ class ShardingConfig:
   # NOTE: technically jax.P can merge axes, e.g. (('x', 'y')), but hydra rejects this
   mesh_shape: list[int] = MISSING
   mesh_axis_names: list[str] = MISSING
-  data: list[str | None] = MISSING  # M (accum_steps x micro_bs = global_bs)
+  # Parameter sharding specs
   wqkv: list[str | None] = MISSING  # D x 3 x N x H
   wo: list[str | None] = MISSING  # D x N x H
   wup: list[str | None] = MISSING  # D x F
   wdown: list[str | None] = MISSING  # F x D
+  # Activation sharding specs
+  data: list[str | None] = MISSING  # M (accum_steps x micro_bs = global_bs)
   mlp_hidden: list[str | None] = MISSING  # F
   res_stream: list[str | None] = MISSING  # D
   att_qkv: list[str | None] = MISSING  # 3 x S x N x H
