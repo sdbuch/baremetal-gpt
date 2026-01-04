@@ -103,7 +103,6 @@ def main(config: Config):
 
   @partial(jax.jit, donate_argnums=2)
   def train_step(config: Config, batch, state: TrainState):
-    @partial(jax.remat, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)
     def loss_fn(params: Transformer, microbatch: tuple[jax.Array, jax.Array]):
       inputs, targets = microbatch
       logits, _ = jax.vmap(
@@ -111,10 +110,16 @@ def main(config: Config):
           _transformer, config, shard_mapped__kernel, params, cache_params=cache_params
         )
       )(inputs, state.kv_cache)
-      logits = logits.astype(jnp.float32)
-      label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
-      lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
-      return (lse - label_logits).mean()
+
+      @partial(jax.remat, policy=jax.checkpoint_policies.nothing_saveable)
+      def cross_entropy(logits, targets):
+        logits = logits.astype(jnp.float32)
+        label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
+        lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
+        return (lse - label_logits).mean()
+
+      return cross_entropy(logits, targets)
+
       # logprobs = jax.nn.log_softmax(logits, axis=-1)
       # return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
