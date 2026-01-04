@@ -175,6 +175,8 @@ def eval_loop(
   for evaluation, shard_mapped__kernel in evals_and_kernels:
     key, key_d, key_e = jax.random.split(key, 3)
     batch_iter = get_distributed_batch_iter(config, evaluation.dataset, key_d, mesh)
+    # HACK: eval loop should be refactored to unify with gradient accum (& cut this)
+    batch_iter = map(lambda b: jax.tree.map(lambda x: x.squeeze(0), b), batch_iter)
     evaluation_fn = evaluator_factory(evaluation)
     metrics = evaluation_fn(
       config, key_e, shard_mapped__kernel, mesh, params, batch_iter
