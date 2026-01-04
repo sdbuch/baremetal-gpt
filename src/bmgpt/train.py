@@ -119,7 +119,7 @@ def main(config: Config):
         # logits = logits.astype(jnp.float32)
         label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
         lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
-        return (lse - label_logits).mean()
+        return (0 - label_logits).mean()
 
       return cross_entropy(logits, targets)
 
