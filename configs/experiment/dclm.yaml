@@ -27,7 +27,7 @@ eval_list:
       seq_len: 1024  # At inference time, this functions like prompt size
       global_batch_size: ${sharding.mesh_shape[0]}
       use_splash: False
-      microbatch_size: 0
+      num_microbatches: 0
     evaluator: AUTOREGRESSIVE_ROLLOUTS
 
 model:
