@@ -82,7 +82,7 @@ class DatasetConfig:
   # Batch size parameters
   # effective bs: microbatch_size = global_batch_size / num_microbatches
   global_batch_size: int = MISSING
-  num_microbatches: int = 1  # set to < 1 for inference (no microbatching)
+  num_microbatches: int = 1
 
   ## Duration parameters
   # For some datasets, epochs makes sense; others are too large.
@@ -239,19 +239,13 @@ def config_post_init(config: Config):
   num_hosts = jax.process_count()
 
   def check_batch_size_division(dataset: DatasetConfig):
-    if dataset.num_microbatches > 0:
-      # Check microbatch size is shardable
-      assert dataset.global_batch_size % dataset.num_microbatches == 0, (
-        f"Number of gradient accumulation steps must divide global batch size {dataset}"
-      )
-      assert (dataset.global_batch_size // dataset.num_microbatches) % num_hosts == 0, (
-        f"Number of hosts needs to divide microbatch size {dataset}"
-      )
-    else:
-      # Check batch size itself is shardable
-      assert dataset.global_batch_size % num_hosts == 0, (
-        f"Number of hosts needs to divide the batch size {dataset}"
-      )
+    # Check microbatch size is shardable
+    assert dataset.global_batch_size % dataset.num_microbatches == 0, (
+      f"Number of gradient accumulation steps must divide global batch size {dataset}"
+    )
+    assert (dataset.global_batch_size // dataset.num_microbatches) % num_hosts == 0, (
+      f"Number of hosts needs to divide microbatch size {dataset}"
+    )
 
   check_batch_size_division(config.train_dataset)
   for eval in config.val_list:

@@ -46,7 +46,12 @@ class TrainState(NamedTuple):
 def init_train_state(key, config: Config) -> TrainState:
   model_params = init_transformer(key, config)
   adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
-  cache = init_kv_cache(config, config.train_dataset.global_batch_size, 0)
+  cache = init_kv_cache(
+    config,
+    config.train_dataset.global_batch_size,
+    config.train_dataset.num_microbatches,
+    0,
+  )
   return TrainState(params=model_params, opt_state=adam_state, kv_cache=cache)
 
 

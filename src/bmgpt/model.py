@@ -512,16 +512,19 @@ def _transformer(
 #####################################
 
 
-def init_kv_cache(config: Config, global_batch_size: int, cache_capacity: int):
+def init_kv_cache(
+  config: Config, global_batch_size: int, num_microbatches: int, cache_capacity: int
+):
   if not config.sharding.data:
-    sharding_batch_layer = [None, None]
+    sharding_batch_layer = [None, None, None]
   else:
-    sharding_batch_layer = config.sharding.data + [None]
+    sharding_batch_layer = [None] + config.sharding.data + [None]
   sharding = jax.P(*(sharding_batch_layer + config.sharding.att_qkv))
 
   return jnp.zeros(
     (
-      global_batch_size,
+      num_microbatches,
+      global_batch_size // num_microbatches,
       config.model.num_layers,
       2,
       config.model.num_heads,

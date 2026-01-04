@@ -6,6 +6,7 @@ import jax
 import jax.numpy as jnp
 from jax.experimental.multihost_utils import process_allgather
 
+from bmgpt import data
 from bmgpt.config import Config, EvaluationConfig, EvaluatorType
 from bmgpt.data import DataloaderOutputType
 from bmgpt.model import CacheParams, Transformer, _transformer, init_kv_cache
@@ -19,14 +20,20 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
     case EvaluatorType.AUTOREGRESSIVE_ROLLOUTS:
       return partial(
         autoregressive_rollouts,
-        global_batch_size=evaluation_config.dataset.global_batch_size,
+        global_batch_size__num_microbatches=(
+          evaluation_config.dataset.global_batch_size,
+          evaluation_config.dataset.num_microbatches,
+        ),
         prompt_size=evaluation_config.dataset.seq_len,
       )
     case EvaluatorType.ACCURACY:
       return partial(
         calculate_metric_on_minibatches,
         metric=accuracy,
-        global_batch_size=evaluation_config.dataset.global_batch_size,
+        global_batch_size__num_microbatches=(
+          evaluation_config.dataset.global_batch_size,
+          evaluation_config.dataset.num_microbatches,
+        ),
         metric_name=evaluation_config.dataset.split.value + "/accuracy",
         num_steps=evaluation_config.dataset.num_steps,
       )
@@ -34,7 +41,10 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
       return partial(
         calculate_metric_on_minibatches,
         metric=nll,
-        global_batch_size=evaluation_config.dataset.global_batch_size,
+        global_batch_size__num_microbatches=(
+          evaluation_config.dataset.global_batch_size,
+          evaluation_config.dataset.num_microbatches,
+        ),
         metric_name=evaluation_config.dataset.split.value + "/nll",
         num_steps=evaluation_config.dataset.num_steps,
       )
@@ -42,7 +52,10 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
       return partial(
         calculate_metric_on_minibatches,
         metric=nll,
-        global_batch_size=evaluation_config.dataset.global_batch_size,
+        global_batch_size__num_microbatches=(
+          evaluation_config.dataset.global_batch_size,
+          evaluation_config.dataset.num_microbatches,
+        ),
         metric_name=evaluation_config.dataset.split.value + "/perplexity",
         perplexity_flag=True,
         num_steps=evaluation_config.dataset.num_steps,
@@ -56,7 +69,7 @@ def autoregressive_rollouts(
   mesh,
   params: Transformer,
   batch_iter: DataloaderOutputType,
-  global_batch_size: int,
+  global_batch_size__num_microbatches: tuple[int, int],
   prompt_size: int,
 ):
   prompts, _ = next(batch_iter)
@@ -66,7 +79,9 @@ def autoregressive_rollouts(
     return generate(config, key, kernel, params, prompt, cache, 0)
 
   with jax.set_mesh(mesh):
-    cache = init_kv_cache(config, global_batch_size, config.model.max_seq_len - 1)
+    cache = init_kv_cache(
+      config, *global_batch_size__num_microbatches, config.model.max_seq_len - 1
+    )
     outputs, cache, cache_size = batched_generate(prompts, cache)
 
   prompts, outputs = process_allgather((prompts, outputs), tiled=True)
@@ -87,15 +102,16 @@ def calculate_metric_on_minibatches(
   mesh,
   params: Transformer,
   batch_iter: DataloaderOutputType,
-  global_batch_size: int,
+  global_batch_size__num_microbatches: tuple[int, int],
   metric,
   metric_name: str = "",
   perplexity_flag: bool = False,
   num_steps: int = 0,
 ):
+  # TODO: Now that we added gradient accum, this whole fun could be refactored...
   num_samples_processed = 0
   with jax.set_mesh(mesh):
-    cache = init_kv_cache(config, global_batch_size, 0)
+    cache = init_kv_cache(config, *global_batch_size__num_microbatches, 0)
 
   # Process first batch (to get on-device buffer shape)
   batch = next(batch_iter)

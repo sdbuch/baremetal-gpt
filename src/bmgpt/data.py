@@ -215,20 +215,16 @@ def get_dataset_on_device(
 def get_distributed_batch_iter(
   config: Config, dataset_config: DatasetConfig, key, mesh
 ):
+  # Microbatch the batch axis for gradient accumulation
+  num_microbatches = dataset_config.num_microbatches
+  local_batch_size = dataset_config.global_batch_size // jax.process_count()
+  local_microbatch_size = local_batch_size // num_microbatches
+
+  def make_microbatch(batch):
+    return jax.tree.map(
+      lambda x: x.reshape(num_microbatches, local_microbatch_size, -1), batch
+    )
+
   data, dataloader_factory = dataset_dataloader_factory(dataset_config)
-  dataloader = dataloader_factory(key, dataset_config, data)
-  sharding_data = config.sharding.data
-  if dataset_config.num_microbatches > 0:
-    # Microbatch the batch axis for gradient accumulation
-    num_microbatches = dataset_config.num_microbatches
-    local_batch_size = dataset_config.global_batch_size // jax.process_count()
-    local_microbatch_size = local_batch_size // num_microbatches
-
-    def make_microbatch(batch):
-      return jax.tree.map(
-        lambda x: x.reshape(num_microbatches, local_microbatch_size, -1), batch
-      )
-
-    dataloader = map(make_microbatch, dataloader)
-    sharding_data = [None] + sharding_data
-  return get_dataset_on_device(dataloader, mesh, sharding_data)
+  dataloader = map(make_microbatch, dataloader_factory(key, dataset_config, data))
+  return get_dataset_on_device(dataloader, mesh, [None] + config.sharding.data)
