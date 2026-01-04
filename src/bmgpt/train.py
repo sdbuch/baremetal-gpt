@@ -97,14 +97,15 @@ def main(config: Config):
 
   # Configure optimization
   spec = model_spec(train_state.params)
-  opt_update = partial(opt_update_factory(config.optimizer.type), config)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
+  opt_update = opt_update_factory(config.optimizer.type)
+  opt_update = partial(opt_update, config, weight_decay_mask)
 
   @partial(jax.jit, donate_argnums=2)
   def train_step(config: Config, batch, state: TrainState):
     @partial(jax.remat, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)
-    def loss_fn(params: Transformer):
-      inputs, targets = batch
+    def loss_fn(params: Transformer, microbatch: tuple[jax.Array, jax.Array]):
+      inputs, targets = microbatch
       logits, _ = jax.vmap(
         partial(
           _transformer, config, shard_mapped__kernel, params, cache_params=cache_params
@@ -114,16 +115,27 @@ def main(config: Config):
       logprobs = jax.nn.log_softmax(logits, axis=-1)
       return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
-    loss, grad = jax.value_and_grad(loss_fn)(state.params)
+    # Calculate gradients: use a scan for gradient accumulation
+    def gradient_accum(loss__grad, microbatch):
+      loss_accum, grad_accum = loss__grad
+      loss, grad = jax.value_and_grad(loss_fn)(state.params, microbatch)
+      return (loss_accum + loss, jax.tree.map(jnp.add, grad_accum, grad)), None
+
+    carry = (jnp.zeros(()), jax.tree.map(jnp.zeros_like, state.params))
+    (loss, grad), _ = jax.lax.scan(gradient_accum, carry, batch)
+    loss = loss / config.train_dataset.num_microbatches
+    grad = jax.tree.map(lambda x: x / config.train_dataset.num_microbatches, grad)
+
+    # loss, grad = jax.value_and_grad(loss_fn)(state.params)
+    # Update parameters
     grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
-    update__opt_state = jax.tree.map(
-      opt_update, state.params, grad_clipped, state.opt_state, weight_decay_mask
+    update_tree = jax.tree.map(opt_update, state.params, grad_clipped, state.opt_state)
+    update, opt_state = jax.tree.transpose(
+      jax.tree.structure(state.params),
+      jax.tree.structure((0, 0)),  # opt_update returns (update, new_state)
+      update_tree,
     )
-    # Transpose the output tree to get update tree and state tree
-    update, opt_state = map(
-      lambda i: jax.tree.map(lambda x, y: y[i], grad, update__opt_state), range(2)
-    )
-    params = jax.tree.map(lambda x, y: x + y, state.params, update)
+    params = jax.tree.map(jnp.add, state.params, update)
     new_state = TrainState(params=params, opt_state=opt_state, kv_cache=state.kv_cache)
 
     metrics = {"batch_loss": loss, "grad_norm": global_grad_norm}

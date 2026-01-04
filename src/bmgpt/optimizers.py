@@ -61,7 +61,7 @@ def init_adam_state(config: Config, param: jax.Array) -> OptState:
 
 
 def adamw_update(
-  config: Config, param: jax.Array, grad: jax.Array, state: OptState, wd_mask: bool
+  config: Config, wd_mask: bool, param: jax.Array, grad: jax.Array, state: OptState
 ):
   beta1 = config.optimizer.beta1
   beta2 = config.optimizer.beta2
@@ -83,7 +83,7 @@ def adamw_update(
 
 
 def sgd_update(
-  config: Config, param: jax.Array, grad: jax.Array, state: OptState, wd_mask: bool
+  config: Config, wd_mask: bool, param: jax.Array, grad: jax.Array, state: OptState
 ):
   update = -config.optimizer.lr * grad
   if wd_mask:

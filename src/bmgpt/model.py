@@ -566,13 +566,13 @@ def model_spec(model: Transformer) -> Any:
 def transformer_variant_factory(config: Config):
   if config.model.transformer_type == TransformerType.DISCRETE:
     init_embedding = init_embedding_discrete
-    fun_embedding = _embedding_discrete
+    fn_embedding = _embedding_discrete
     init_unembedding = init_lm_head
-    fun_unembedding = _lm_head
+    fn_unembedding = _lm_head
   else:
     init_embedding = init_embedding_continuous
-    fun_embedding = _embedding_continuous
+    fn_embedding = _embedding_continuous
     init_unembedding = init_classification_head
-    fun_unembedding = _classification_head
+    fn_unembedding = _classification_head
 
-  return (init_embedding, init_unembedding, fun_embedding, fun_unembedding)
+  return (init_embedding, init_unembedding, fn_embedding, fn_unembedding)
