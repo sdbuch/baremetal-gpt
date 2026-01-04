@@ -239,7 +239,7 @@ def config_post_init(config: Config):
   num_hosts = jax.process_count()
 
   def check_batch_size_division(dataset: DatasetConfig):
-    assert dataset.global_batch_size % dataset.num_microbatches, (
+    assert dataset.global_batch_size % dataset.num_microbatches == 0, (
       f"Number of gradient accumulation steps must divide global batch size {dataset}"
     )
     assert (dataset.global_batch_size // dataset.num_microbatches) % num_hosts == 0, (
