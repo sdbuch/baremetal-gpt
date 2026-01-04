@@ -112,8 +112,11 @@ def main(config: Config):
         )
       )(inputs, state.kv_cache)
       logits = logits.astype(jnp.float32)
-      logprobs = jax.nn.log_softmax(logits, axis=-1)
-      return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
+      label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
+      lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
+      return (lse - label_logits).mean()
+      # logprobs = jax.nn.log_softmax(logits, axis=-1)
+      # return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
 
     # Calculate gradients: use a scan for gradient accumulation
     def gradient_accum(loss__grad, microbatch):
