@@ -205,7 +205,7 @@ def get_dataset_on_device(
 ) -> DataloaderOutputType:
   return map(
     lambda batch: jax.make_array_from_process_local_data(
-      NamedSharding(mesh, jax.P(sharding_data)), batch
+      NamedSharding(mesh, jax.P(*sharding_data)), batch
     ),
     dataloader,
   )
