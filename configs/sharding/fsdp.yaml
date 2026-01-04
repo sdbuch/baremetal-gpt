@@ -5,7 +5,7 @@ sharding:
   mesh_axis_names: ["fsdp"]
   data: ["fsdp"]
   wqkv: ["fsdp"]
-  wo: ["fsdp"]
+  wo: [null, null, "fsdp"]
   wup: ["fsdp"]
   wdown: [null, "fsdp"]
   mlp_hidden: []

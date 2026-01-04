@@ -183,7 +183,7 @@ class ShardingConfig:
   mesh_axis_names: list[str] = MISSING
   # Parameter sharding specs
   wqkv: list[str | None] = MISSING  # D x 3 x N x H
-  wo: list[str | None] = MISSING  # D x N x H
+  wo: list[str | None] = MISSING  # H x N x D
   wup: list[str | None] = MISSING  # D x F
   wdown: list[str | None] = MISSING  # F x D
   # Activation sharding specs
