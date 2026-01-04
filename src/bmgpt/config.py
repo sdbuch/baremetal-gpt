@@ -141,8 +141,8 @@ class ModelConfig:
 
   # Model dtypes
   # Select operations (layernorm, logits, rope) always done in FP32
-  param_dtype: DType = DType.FLOAT32  # master weights dtype
-  compute_dtype: DType = DType.BFLOAT16  # cast params to this for fwd (&bwd)
+  param_dtype: DType = DType.BFLOAT16  # master weights dtype
+  opt_dtype: DType = DType.FLOAT32  # optimizer state dtype
 
   # Model call-time params
   use_bias_embeddings: bool = False  # bias in emb / unemb

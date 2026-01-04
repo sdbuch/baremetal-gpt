@@ -101,6 +101,9 @@ def main(config: Config):
   opt_update = opt_update_factory(config.optimizer.type)
   opt_update = partial(opt_update, config, weight_decay_mask)
 
+  # # Cast to compute_dtype
+  # params = jax.tree.map(lambda x: x.astype(config.model.param_dtype.value), params)
+
   @partial(jax.jit, donate_argnums=2)
   def train_step(config: Config, batch, state: TrainState):
     def loss_fn(params: Transformer, microbatch: tuple[jax.Array, jax.Array]):

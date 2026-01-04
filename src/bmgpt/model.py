@@ -142,7 +142,7 @@ def _apply_rope(
   return jnp.concatenate(
     (c * x_1 - s * x_2, c * x_2 + s * x_1),
     axis=-1,
-    dtype=config.model.compute_dtype.value,
+    dtype=config.model.param_dtype.value,
   )
 
 
@@ -242,7 +242,7 @@ def _attn(
     logits *= 1.0 / config.model.d_head**0.5
     logits = jnp.where(mask, logits, -jnp.inf)
     probs = jax.nn.softmax(logits, axis=2)  # type: ignore[reportArgumentType]
-    probs = probs.astype(config.model.compute_dtype.value)
+    probs = probs.astype(config.model.param_dtype.value)
     attn_out = jnp.einsum("nst,nth->nsh", probs, v)
   out = jnp.einsum(
     "nsh,hnd->sd",
@@ -409,7 +409,7 @@ def _layernorm(config: Config, params: LayerNorm, x: Array):
   out = params.gamma * x
   if config.model.use_bias_ln:
     out += params.beta
-  return out.astype(config.model.compute_dtype.value)
+  return out.astype(config.model.param_dtype.value)
 
 
 ##################################
@@ -490,8 +490,6 @@ def _transformer(
   cache: jax.Array,
   cache_params: CacheParams,
 ):
-  # Cast to compute_dtype
-  params = jax.tree.map(lambda x: x.astype(config.model.compute_dtype.value), params)
   _, __, _embedding, _unembedding = transformer_variant_factory(config)
   x_seq = _embedding(config, params.emb, tokens)
 
@@ -530,7 +528,7 @@ def init_kv_cache(
       cache_capacity,
       config.model.d_head,
     ),
-    dtype=config.model.compute_dtype.value,
+    dtype=config.model.param_dtype.value,
     out_sharding=sharding,
   )
 
