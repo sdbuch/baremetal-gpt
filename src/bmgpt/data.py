@@ -201,11 +201,11 @@ def dataloader_without_replacement(
 
 # Helper to map a dataloader with make_array_from_process_local_data
 def get_dataset_on_device(
-  config: Config, dataloader: DataloaderOutputType, mesh: Mesh
+  dataloader: DataloaderOutputType, mesh: Mesh, sharding_data: list[str | None]
 ) -> DataloaderOutputType:
   return map(
     lambda batch: jax.make_array_from_process_local_data(
-      NamedSharding(mesh, jax.P(*config.sharding.data)), batch
+      NamedSharding(mesh, jax.P(sharding_data)), batch
     ),
     dataloader,
   )
@@ -217,6 +217,7 @@ def get_distributed_batch_iter(
 ):
   data, dataloader_factory = dataset_dataloader_factory(dataset_config)
   dataloader = dataloader_factory(key, dataset_config, data)
+  sharding_data = config.sharding.data
   if dataset_config.num_microbatches > 0:
     # Microbatch the batch axis for gradient accumulation
     num_microbatches = dataset_config.num_microbatches
@@ -228,4 +229,5 @@ def get_distributed_batch_iter(
       )
 
     dataloader = map(make_microbatch, dataloader)
-  return get_dataset_on_device(config, dataloader, mesh)
+    sharding_data = [None] + sharding_data
+  return get_dataset_on_device(dataloader, mesh, sharding_data)
