@@ -500,7 +500,7 @@ def _transformer(
 
   out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache))
 
-  out = _unembedding(config, params.unemb, out)
+  out = jax.remat(_unembedding)(config, params.unemb, out)
 
   return out, cache_out
 
