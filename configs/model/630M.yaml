@@ -1,0 +1,13 @@
+# @package _global_
+
+# about 630M params with DCLM tokenizer embeddings
+# follows Qwen2.5-0.5B config
+# But no GQA!
+model:
+  d_model: 896
+  num_heads: 14
+  d_head: 64
+  num_layers: 24
+  mlp_factor: 5.429
+
+  use_gating_mlp: True

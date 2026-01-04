@@ -1,0 +1,12 @@
+# @package _global_
+
+# follows Llama2-7B config
+# But no GQA!
+model:
+  d_model: 4096
+  num_heads: 32
+  d_head: 128
+  num_layers: 32
+  mlp_factor: 2.6875
+
+  use_gating_mlp: True

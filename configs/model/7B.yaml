@@ -1,0 +1,12 @@
+# @package _global_
+
+# follows Qwen2.5-7B config
+# But no GQA!
+model:
+  d_model: 3584
+  num_heads: 28
+  d_head: 128
+  num_layers: 28
+  mlp_factor: 5.2857143
+
+  use_gating_mlp: True
