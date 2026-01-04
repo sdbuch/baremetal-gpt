@@ -7,7 +7,7 @@ sharding:
   wqkv: ["fsdp"]
   wo: ["fsdp"]
   wup: ["fsdp"]
-  wdown: [None, "fsdp"]
+  wdown: [null, "fsdp"]
   mlp_hidden: []
   res_stream: []
   att_qkv: []
