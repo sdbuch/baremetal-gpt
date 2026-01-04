@@ -221,11 +221,12 @@ def get_distributed_batch_iter(
   if dataset_config.num_microbatches > 0:
     # Microbatch the batch axis for gradient accumulation
     num_microbatches = dataset_config.num_microbatches
-    microbatch_size = dataset_config.global_batch_size // num_microbatches
+    local_batch_size = dataset_config.global_batch_size // jax.process_count()
+    local_microbatch_size = local_batch_size // num_microbatches
 
     def make_microbatch(batch):
       return jax.tree.map(
-        lambda x: x.reshape(num_microbatches, microbatch_size, -1), batch
+        lambda x: x.reshape(num_microbatches, local_microbatch_size, -1), batch
       )
 
     dataloader = map(make_microbatch, dataloader)
