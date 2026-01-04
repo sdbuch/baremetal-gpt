@@ -186,6 +186,8 @@ class ShardingConfig:
   wo: list[str | None] = MISSING  # H x N x D
   wup: list[str | None] = MISSING  # D x F
   wdown: list[str | None] = MISSING  # F x D
+  wemb: list[str | None] = MISSING  # V x D
+  wunemb: list[str | None] = MISSING # D x V
   # Activation sharding specs
   data: list[str | None] = MISSING  # M (accum_steps x micro_bs = global_bs)
   mlp_hidden: list[str | None] = MISSING  # F

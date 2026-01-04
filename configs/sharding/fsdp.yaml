@@ -8,6 +8,8 @@ sharding:
   wo: [null, null, "fsdp"]
   wup: ["fsdp"]
   wdown: [null, "fsdp"]
+  wemb: []
+  wunemb: ["fsdp"]
   mlp_hidden: []
   res_stream: []
   att_qkv: []

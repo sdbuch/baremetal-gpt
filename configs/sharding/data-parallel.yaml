@@ -7,6 +7,8 @@ sharding:
   wo: []
   wup: []
   wdown: []
+  wemb: []
+  wunemb: []
   mlp_hidden: []
   res_stream: []
   att_qkv: []

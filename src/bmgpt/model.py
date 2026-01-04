@@ -294,7 +294,7 @@ def init_embedding_continuous(config: Config, key) -> EmbeddingContinuous:
     key_emb,
     (config.model.num_vocab, config.model.d_model),
     config.model.param_dtype.value,
-    out_sharding=jax.P(*([None] + config.sharding.res_stream)),
+    out_sharding=jax.P(*config.sharding.wemb),
   )
   w_reg = config.model.param_std * jax.random.normal(
     key_reg,
@@ -337,7 +337,7 @@ def init_lm_head(config: Config, key) -> LMHead:
     key,
     (config.model.d_model, config.model.num_vocab),
     config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.res_stream),
+    out_sharding=jax.P(*config.sharding.wunemb),
   )
   bias = jnp.zeros(
     (config.model.num_vocab,),
