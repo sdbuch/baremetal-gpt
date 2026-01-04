@@ -111,9 +111,9 @@ def main(config: Config):
         )
       )(inputs, state.kv_cache)
 
-      @partial(jax.remat, policy=jax.checkpoint_policies.nothing_saveable)
+      # @partial(jax.remat, policy=jax.checkpoint_policies.nothing_saveable)
       def cross_entropy(logits, targets):
-        logits = logits.astype(jnp.float32)
+        # logits = logits.astype(jnp.float32)
         label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
         lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
         return (lse - label_logits).mean()

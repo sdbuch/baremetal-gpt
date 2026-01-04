@@ -348,7 +348,7 @@ def init_lm_head(config: Config, key) -> LMHead:
 
 
 def _lm_head(config: Config, params: LMHead, x: Array):
-  logits = jnp.matmul(x, params.w)
+  logits = jnp.matmul(x, params.w, preferred_element_type=jnp.float32)
   if config.model.use_bias_embeddings:
     logits += params.bias
   return logits
