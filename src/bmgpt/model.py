@@ -512,7 +512,6 @@ def _transformer(
 #####################################
 
 
-# TODO: update sharding if attention sharding is modified
 def init_kv_cache(config: Config, global_batch_size: int, cache_capacity: int):
   if not config.sharding.data:
     sharding_batch_layer = [None, None]

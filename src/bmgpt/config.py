@@ -78,7 +78,11 @@ class DatasetConfig:
   path: str = MISSING
   split: SplitType = SplitType.VAL
   seq_len: int = MISSING
+
+  # Batch size parameters
+  # effective bs: microbatch_size = global_batch_size / num_microbatches
   global_batch_size: int = MISSING
+  num_microbatches: int = 1  # set to < 1 for inference (no microbatching)
 
   ## Duration parameters
   # For some datasets, epochs makes sense; others are too large.
@@ -164,19 +168,27 @@ class InferenceConfig:
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class ShardingConfig:
-  """Model sharding params (args to jax.P)-- list of mesh_axis_names els or None"""
+  """
+  Model sharding params (args to jax.P)-- list of mesh_axis_names els or None
 
-  # NOTE: technically jax.P can merge axes, e.g. (('x', 'y')), but we reject this
+  See data.py and model.py for usage (and notation used in comments). Key points:
+    - model.py has a vmap-first design structure.
+      So activation shardings are as "deep as possible" (eg no batch/seq axis for MLPs)
+    - Explicit AxisType is used
+    - configs/ directory has sensible defaults (dp, fsdp)
+  """
+
+  # NOTE: technically jax.P can merge axes, e.g. (('x', 'y')), but hydra rejects this
   mesh_shape: list[int] = MISSING
-  mesh_axis_names: list[str] = field(default_factory=lambda: ["dp"])
-  data: list[str | None] = field(default_factory=lambda: ["dp"])
-  wqkv: list[str | None] = field(default_factory=list)  # D x 3 x N x H
-  wo: list[str | None] = field(default_factory=list)  # D x N x H
-  wup: list[str | None] = field(default_factory=list)  # D x 4D
-  wdown: list[str | None] = field(default_factory=list)  # 4D x D
-  mlp_hidden: list[str | None] = field(default_factory=list)  # 4D
-  res_stream: list[str | None] = field(default_factory=list)  # D
-  att_qkv: list[str | None] = field(default_factory=list)  # 3 x S x N x H
+  mesh_axis_names: list[str] = MISSING
+  data: list[str | None] = MISSING  # M (accum_steps x micro_bs = global_bs)
+  wqkv: list[str | None] = MISSING  # D x 3 x N x H
+  wo: list[str | None] = MISSING  # D x N x H
+  wup: list[str | None] = MISSING  # D x F
+  wdown: list[str | None] = MISSING  # F x D
+  mlp_hidden: list[str | None] = MISSING  # F
+  res_stream: list[str | None] = MISSING  # D
+  att_qkv: list[str | None] = MISSING  # 3 x S x N x H
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -218,12 +230,24 @@ def mesh_from_config(config: Config):
 
 
 def config_post_init(config: Config):
-  """Input validation."""
-  # Check arguments
+  """Input validation. Call after jax.distributed.initialize()"""
+  # model arguments
   assert config.model.d_head % 2 == 0, (
     "Head dimension needs to be divisible by 2 for RoPE"
   )
-  assert config.train_dataset.global_batch_size % jax.process_count() == 0 and all(
-    eval.dataset.global_batch_size % jax.process_count() == 0
-    for eval in config.eval_list
-  ), "Number of hosts needs to divide the global batch size for all data"
+  # batch size checking
+  num_hosts = jax.process_count()
+
+  def check_batch_size_division(dataset: DatasetConfig):
+    assert dataset.global_batch_size % dataset.num_microbatches, (
+      f"Number of gradient accumulation steps must divide global batch size {dataset}"
+    )
+    assert (dataset.global_batch_size // dataset.num_microbatches) % num_hosts == 0, (
+      f"Number of hosts needs to divide microbatch size {dataset}"
+    )
+
+  check_batch_size_division(config.train_dataset)
+  for eval in config.val_list:
+    check_batch_size_division(eval.dataset)
+  for eval in config.eval_list:
+    check_batch_size_division(eval.dataset)

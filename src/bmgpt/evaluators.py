@@ -59,7 +59,6 @@ def autoregressive_rollouts(
   global_batch_size: int,
   prompt_size: int,
 ):
-  """prompts should have a leading batch axis"""
   prompts, _ = next(batch_iter)
 
   @jax.vmap

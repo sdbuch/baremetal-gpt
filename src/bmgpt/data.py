@@ -215,5 +215,17 @@ def get_dataset_on_device(
 def get_distributed_batch_iter(
   config: Config, dataset_config: DatasetConfig, key, mesh
 ):
-  data, dataloader = dataset_dataloader_factory(dataset_config)
-  return get_dataset_on_device(config, dataloader(key, dataset_config, data), mesh)
+  data, dataloader_factory = dataset_dataloader_factory(dataset_config)
+  dataloader = dataloader_factory(key, dataset_config, data)
+  if dataset_config.num_microbatches > 0:
+    # Microbatch the batch axis for gradient accumulation
+    num_microbatches = dataset_config.num_microbatches
+    microbatch_size = dataset_config.global_batch_size // num_microbatches
+
+    def make_microbatch(batch):
+      return jax.tree.map(
+        lambda x: x.reshape(num_microbatches, microbatch_size, -1), batch
+      )
+
+    dataloader = map(make_microbatch, dataloader)
+  return get_dataset_on_device(config, dataloader, mesh)
