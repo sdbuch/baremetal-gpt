@@ -37,13 +37,11 @@ def fused_softmax_cross_entropy(
   targets: jax.Array,
   shard_mapped__kernel,
 ):
-  """HBM-efficient softmax cross entropy loss (with splash attention!)"""
+  """HBM-efficient softmax cross entropy loss."""
   # Fold batch and sequence dimensions and gather unembeddings
   b, s = outputs.shape[:2]
-  reshape_data = lambda x: x.reshape(
-    b * s, -1, out_sharding=jax.P(*config.sharding.data)
-  )
-  outputs, targets = jax.tree.map(reshape_data, (outputs, targets))
+  outputs = outputs.reshape(b * s, -1, out_sharding=jax.P(*config.sharding.data))
+  targets = targets.ravel(out_sharding=jax.P(*config.sharding.data))
   w_unemb = jax.sharding.reshard(unembedding.w, out_shardings=jax.P())
   # lse from splash_attention
   q, k = outputs, w_unemb
@@ -54,7 +52,8 @@ def fused_softmax_cross_entropy(
   # TODO: does the usual logit scaling make sense for outputs too?
   # lse = lse_sharded(lse_kernel, q / d**0.25, k / d**0.25, v, segment_ids)
   lse = lse_sharded(lse_kernel, q, k).squeeze(0)
-  per_token_unembs = jnp.take_along_axis(w_unemb, targets, axis=0)  # B x D
+  # per_token_unembs = jnp.take_along_axis(w_unemb, targets, axis=0)  # B x D
+  per_token_unembs = w_unemb.at[targets].get(out_sharding=jax.P(*config.sharding.data))
   label_logits = jnp.sum(outputs * per_token_unembs, axis=-1)
   return (lse - label_logits).mean()
 
