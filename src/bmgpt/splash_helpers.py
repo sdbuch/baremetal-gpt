@@ -3,7 +3,9 @@ from functools import partial
 import jax
 import numpy as np
 from jax.experimental.pallas.ops.tpu.splash_attention import (
-  BlockSizes,
+  BlockSizes as BlockSizesSplash,
+)
+from jax.experimental.pallas.ops.tpu.splash_attention import (
   CausalMask,
   MultiHeadMask,
   make_splash_mha,
@@ -12,8 +14,9 @@ from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_mask impo
   _ComputableMask,
 )
 
-from bmgpt.kernels.lse_mask import VocabMask
 from bmgpt.config import Config, DatasetConfig
+from bmgpt.kernels.lse_kernel import BlockSizes, make_lse_kernel
+from bmgpt.kernels.lse_mask import VocabMask
 
 
 class FullMask(_ComputableMask):
@@ -53,18 +56,74 @@ class FullMask(_ComputableMask):
     )
 
 
-def make_splash_kernel(
-  num_heads: int,
+def make_lse_kernel_sharded(
   q_seq_len: int,
-  cache_capacity: int,
+  k_seq_len: int,
   mesh,
-  save_residuals: bool = False,
   data_sharding: list[str | None] = [None],  # following only used if previous is True
   q_seq_shards: int = 1,
   block_size: int = 128,
   max_valid_id: int | None = None,
 ):
-  """Currently only supports two modes: causal transformer + fused xent"""
+  """Currently only supports causal transformer"""
+  # s is Q len (seq_len @ train; variable/1 at prefill/decode)
+  # t is K len (s + cache_capacity)
+  # NOTE: if save_residuals is True, assume we're doing fused cross entropy
+  s = q_seq_len
+  t = k_seq_len
+
+  # mask
+  # BUG: a JAX bug means a simple full mask doesn't work!
+  # VocabMask is a workaround -- it *requires* the vocab to have unused tokens
+  # (so pad embeddings if necessary)
+  if not max_valid_id:
+    raise ValueError("max_valid_id needs to be set and >0 for save_residuals=True")
+  mask = MultiHeadMask([VocabMask((s, t), max_valid_id=max_valid_id)])
+
+  # kernel
+  if block_size % 128 != 0:
+    # splash attention kernel requires block size to be a multiple of 128
+    raise NotImplementedError("Splash block size needs to be a multiple of 128")
+  block_sizes = BlockSizes(
+    block_q=block_size,
+    block_kv=block_size,
+    block_kv_compute=block_size,
+  )
+  kernel = make_lse_kernel(mask, block_sizes=block_sizes, q_seq_shards=q_seq_shards)
+
+  # sharding: can shard q_seq_len and head_dim, kv_seq_len cannot
+  # q is N x S x H
+  # k is N x T x H
+  # v is N x T x H'
+  q_spec = jax.P(None, *data_sharding)
+  k_spec = jax.P(None, None)
+  lse_spec = q_spec
+  kernel_sharding = jax.sharding.NamedSharding(mesh, q_spec)
+  kernel_spec = kernel.manual_sharding_spec(kernel_sharding)
+
+  # shard_mapped kernel
+  @partial(
+    jax.shard_map,
+    mesh=mesh,
+    in_specs=(kernel_spec, q_spec, k_spec),
+    out_specs=lse_spec,
+    check_vma=False,
+  )
+  def sharded_kernel(kernel, q, k):
+    return kernel(q, k)
+
+  return (sharded_kernel, kernel)
+
+
+def make_splash_kernel_sharded(
+  num_heads: int,
+  q_seq_len: int,
+  cache_capacity: int,
+  mesh,
+  q_seq_shards: int = 1,
+  block_size: int = 128,
+):
+  """Currently only supports causal transformer"""
   # s is Q len (seq_len @ train; variable/1 at prefill/decode)
   # t is K len (s + cache_capacity)
   # NOTE: if save_residuals is True, assume we're doing fused cross entropy
@@ -72,27 +131,15 @@ def make_splash_kernel(
   t = s + cache_capacity
 
   # mask
-  if save_residuals:
-    # fused cross entropy
-    # BUG: a JAX bug means a simple full mask doesn't work!
-    # VocabMask is a workaround -- it *requires* the vocab to have unused tokens
-    # (so pad embeddings if necessary)
-    if not max_valid_id:
-      raise ValueError("max_valid_id needs to be set and >0 for save_residuals=True")
-    mask = MultiHeadMask(
-      [VocabMask(shape=(s, t), max_valid_id=max_valid_id) for _ in range(num_heads)]
-    )
-  else:
-    # attention
-    mask = MultiHeadMask(
-      [CausalMask(shape=(s, t), offset=cache_capacity) for _ in range(num_heads)]
-    )
+  mask = MultiHeadMask(
+    [CausalMask(shape=(s, t), offset=cache_capacity) for _ in range(num_heads)]
+  )
 
   # kernel
   if block_size % 128 != 0:
     # splash attention kernel requires block size to be a multiple of 128
     raise NotImplementedError("Splash block size needs to be a multiple of 128")
-  block_sizes = BlockSizes(
+  block_sizes = BlockSizesSplash(
     block_q=block_size,
     block_kv=block_size,
     block_kv_compute=block_size,
@@ -107,22 +154,15 @@ def make_splash_kernel(
     head_shards=1,
     q_seq_shards=q_seq_shards,
     block_sizes=block_sizes,
-    save_residuals=save_residuals,
   )
 
   # sharding: can shard q_seq_len and head_dim, kv_seq_len cannot
   # q is N x S x H
   # k is N x T x H
   # v is N x T x H'
-  if save_residuals:
-    q_spec = jax.P(None, *data_sharding)
-    kv_spec = jax.P(None, None)
-    out_specs = (q_spec, (q_spec,))  # (out, (lse,))
-  else:
-    # No head/sequence sharding by default
-    q_spec = jax.P(None, None)
-    kv_spec = q_spec
-    out_specs = q_spec
+  q_spec = jax.P(None, None)
+  kv_spec = q_spec
+  out_spec = q_spec
   splash_sharding = jax.sharding.NamedSharding(mesh, q_spec)
   kernel_spec = kernel.manual_sharding_spec(splash_sharding)
 
@@ -131,7 +171,7 @@ def make_splash_kernel(
     jax.shard_map,
     mesh=mesh,
     in_specs=(kernel_spec, q_spec, kv_spec, kv_spec, jax.P()),
-    out_specs=out_specs,
+    out_specs=out_spec,
     check_vma=False,
   )
   def splash_sharded(kernel, q, k, v, segment_ids):
@@ -148,7 +188,7 @@ def forward_kernels_from_config(config: Config, mesh):
       # None ends up calling jax-xla attention: see _attn
       return None
     splash_args = (config.model.num_heads, dataset.seq_len)
-    return make_splash_kernel(*splash_args, 0, mesh)
+    return make_splash_kernel_sharded(*splash_args, 0, mesh)
 
   # model splash attention kernel
   train_attn_kernel = make_splash_kernel_wrapper(config.train_dataset)
@@ -165,18 +205,18 @@ def forward_kernels_from_config(config: Config, mesh):
     ]
   else:
     num_data_shards = 1
-  ce_kernel_kwargs = {
-    "save_residuals": True,
+  lse_kernel_kwargs = {
+    "data_sharding": config.sharding.data,
     "q_seq_shards": num_data_shards,
-    "block_size": 512,
+    "block_size": 128,
     "max_valid_id": config.train_dataset.max_valid_token_id,
   }
-  train_ce_kernel = make_splash_kernel(
-    1, num_toks, config.model.num_vocab - num_toks, mesh, **ce_kernel_kwargs
+  train_lse_kernel = make_lse_kernel_sharded(
+    num_toks, config.model.num_vocab, mesh, **lse_kernel_kwargs
   )
   # val and test splash attention kernels
   val_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.val_list]
   eval_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.eval_list]
   assert len(val_kernels) == len(config.val_list)
   assert len(eval_kernels) == len(config.eval_list)
-  return train_attn_kernel, train_ce_kernel, val_kernels, eval_kernels
+  return train_attn_kernel, train_lse_kernel, val_kernels, eval_kernels

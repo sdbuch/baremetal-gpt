@@ -335,7 +335,7 @@ class LMHead(NamedTuple):
 def init_lm_head(config: Config, key) -> LMHead:
   unemb = config.model.param_std * jax.random.normal(
     key,
-    (config.model.d_model, config.model.num_vocab),
+    (config.model.num_vocab, config.model.d_model),
     config.model.param_dtype.value,
     out_sharding=jax.P(*config.sharding.wunemb),
   )
@@ -348,7 +348,7 @@ def init_lm_head(config: Config, key) -> LMHead:
 
 
 def _lm_head(config: Config, params: LMHead, x: Array):
-  logits = jnp.matmul(x, params.w, preferred_element_type=jnp.float32)
+  logits = jnp.matmul(x, params.w.mT, preferred_element_type=jnp.float32)
   if config.model.use_bias_embeddings:
     logits += params.bias
   return logits

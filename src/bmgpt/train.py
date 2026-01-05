@@ -81,7 +81,7 @@ def main(config: Config):
   cache_params = CacheParams(enabled=False, size=0)
 
   # Configure forward pass (attention kernels)
-  train_attn_kernel, train_ce_kernel, val_kernels, eval_kernels = (
+  train_attn_kernel, train_lse_kernel, val_kernels, eval_kernels = (
     forward_kernels_from_config(config, mesh)
   )
 
@@ -101,7 +101,7 @@ def main(config: Config):
         )
       )(inputs, state.kv_cache)
       out = fused_softmax_cross_entropy(
-        config, params.unemb, outputs, targets, train_ce_kernel
+        config, params.unemb, outputs, targets, train_lse_kernel
       )
       return softmax_cross_entropy(config, params.unemb, outputs, targets)
 

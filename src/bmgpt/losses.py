@@ -2,9 +2,6 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-from jax.experimental.pallas.ops.tpu.splash_attention import (
-  SegmentIds,
-)
 
 from bmgpt.config import Config
 from bmgpt.model import ClassificationHead, LMHead, transformer_variant_factory
@@ -46,20 +43,14 @@ def fused_softmax_cross_entropy(
   outputs = outputs.reshape(b * s, -1, out_sharding=jax.P(*config.sharding.data))
   w_unemb = jax.sharding.reshard(unembedding.w, out_shardings=jax.P())
   # lse from splash_attention
-  q = outputs
-  k = w_unemb.mT
-  seq_len_q, seq_len_kv, d = q.shape[0], k.shape[0], q.shape[1]
-  v = jnp.zeros((seq_len_kv, 1), dtype=jnp.bfloat16)
+  q, k = outputs, w_unemb
+  # seq_len_q, seq_len_kv, d = q.shape[0], k.shape[0], q.shape[1]
 
-  q_segment_ids = jnp.zeros((seq_len_q,))
-  kv_segment_ids = jnp.zeros((seq_len_kv,))
-  segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
-
-  splash_sharded, kernel = shard_mapped__kernel
-  q, k, v = jax.tree.map(lambda x: x[None], (q, k, v))  # add singleton head dim
+  lse_sharded, lse_kernel = shard_mapped__kernel
+  q, k = jax.tree.map(lambda x: x[None], (q, k))  # add singleton head dim
   # TODO: does the usual logit scaling make sense for outputs too?
-  # _, (lse,) = splash_sharded(kernel, q / d**0.25, k / d**0.25, v, segment_ids)
-  _, (lse,) = splash_sharded(kernel, q / d**0.25, k / d**0.25, v, segment_ids)
+  # lse = lse_sharded(lse_kernel, q / d**0.25, k / d**0.25, v, segment_ids)
+  lse = lse_sharded(lse_kernel, q, k)
 
   print(lse.shape)
 
