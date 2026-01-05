@@ -116,18 +116,12 @@ def main(config: Config):
   def train_step(config: Config, batch, state: TrainState):
     def loss_fn(params: Transformer, microbatch: tuple[jax.Array, jax.Array]):
       inputs, targets = microbatch
-      logits, _ = jax.vmap(
+      outputs, _ = jax.vmap(
         partial(
           _transformer, config, train_attn_kernel, params, cache_params=cache_params
         )
       )(inputs, state.kv_cache)
-      # return softmax_cross_entropy(config, params.unemb, outputs, targets)
-      def cross_entropy(logits, targets):
-        label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
-        lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
-        return (lse - label_logits).mean()
-
-      return cross_entropy(logits, targets)
+      return softmax_cross_entropy(config, params.unemb, outputs, targets)
 
     # Calculate gradients: use a scan for gradient accumulation
     def gradient_accum(loss__grad, microbatch):
