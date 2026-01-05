@@ -1,5 +1,7 @@
 """Tests for the CE forward kernel (fused cross-entropy LSE computation)."""
 
+import functools
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -7,11 +9,13 @@ import pytest
 
 from bmgpt.ce_kernel import (
   BlockSizes,
+  CEKernel,
   QKVLayout,
   _ce_backward_dk,
   _ce_backward_dq,
   _ce_custom,
   _ce_forward,
+  make_ce_kernel,
 )
 from bmgpt.ce_mask import MultiHeadMask, VocabMask
 from bmgpt.ce_mask_info import _process_mask
@@ -1068,6 +1072,224 @@ def test_ce_custom_gradients_on_tpu():
       attn_logits_soft_cap=None,
       interpret=False,  # Real TPU execution
     )
+    return lse.sum()
+
+  loss_kernel = kernel_loss(q, k)
+  dq_kernel, dk_kernel = jax.grad(kernel_loss, argnums=(0, 1))(q, k)
+
+  np.testing.assert_allclose(loss_kernel, loss_ref, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(dq_kernel, dq_ref, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)
+
+
+# =============================================================================
+# CEKernel and make_ce_kernel Tests
+# =============================================================================
+
+
+@pytest.mark.skipif(
+  not jax.devices()[0].platform == "tpu",
+  reason="TPU test - skip on non-TPU platforms",
+)
+def test_ce_kernel_sharded_q_seq():
+  """Test CEKernel with q_seq sharding via shard_map."""
+  from jax.experimental.shard_map import shard_map
+
+  num_heads = 1
+  num_tokens = 1024  # Must be divisible by q_seq_shards * block_size
+  vocab_size = 2048
+  head_dim = 128
+  max_valid_id = 2000
+
+  # Get number of devices for sharding
+  q_seq_shards = len(jax.devices())
+
+  # Ensure num_tokens is divisible by q_seq_shards
+  assert num_tokens % q_seq_shards == 0, (
+    f"{num_tokens=} must be divisible by {q_seq_shards=}"
+  )
+
+  key = jax.random.PRNGKey(789)
+  key_q, key_k = jax.random.split(key)
+  q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
+  k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
+
+  # Reference (unsharded)
+  def ref_loss(q, k):
+    logits = jnp.einsum("hsd,htd->hst", q, k)
+    vocab_ids = jnp.arange(vocab_size)
+    mask = vocab_ids <= max_valid_id
+    logits_masked = jnp.where(mask[None, None, :], logits, -1e10)
+    lse = jax.nn.logsumexp(logits_masked, axis=-1)
+    return lse.sum()
+
+  loss_ref = ref_loss(q, k)
+  dq_ref, dk_ref = jax.grad(ref_loss, argnums=(0, 1))(q, k)
+
+  # Sharded kernel
+  mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
+  kernel = make_ce_kernel(
+    mask_obj,
+    is_mqa=False,
+    head_shards=1,
+    q_seq_shards=q_seq_shards,
+    interpret=False,
+  )
+
+  # Create mesh and sharding
+  mesh = jax.sharding.Mesh(jax.devices(), ("q_seq",))
+  q_spec = jax.sharding.PartitionSpec(None, "q_seq", None)  # (heads, tokens, head_dim)
+  k_spec = jax.sharding.PartitionSpec(
+    None, None, None
+  )  # (heads, vocab, head_dim) - replicated
+  lse_spec = jax.sharding.PartitionSpec(None, "q_seq")  # (heads, tokens)
+
+  # Get kernel sharding spec
+  kernel_sharding = jax.sharding.NamedSharding(
+    mesh, jax.sharding.PartitionSpec(None, "q_seq")
+  )
+  kernel_spec = kernel.manual_sharding_spec(kernel_sharding)
+
+  @jax.jit
+  def sharded_loss(q, k):
+    @functools.partial(
+      shard_map,
+      mesh=mesh,
+      in_specs=(kernel_spec, q_spec, k_spec),
+      out_specs=lse_spec,
+      check_rep=False,
+    )
+    def sharded_kernel(kernel, q, k):
+      return kernel(q, k)
+
+    lse = sharded_kernel(kernel, q, k)
+    return lse.sum()
+
+  loss_kernel = sharded_loss(q, k)
+  dq_kernel, dk_kernel = jax.grad(sharded_loss, argnums=(0, 1))(q, k)
+
+  np.testing.assert_allclose(loss_kernel, loss_ref, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(dq_kernel, dq_ref, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)
+
+
+def test_make_ce_kernel_forward():
+  """Test make_ce_kernel factory and CEKernel forward pass."""
+  num_heads = 1
+  num_tokens = 256
+  vocab_size = 512
+  head_dim = 128
+  max_valid_id = 500
+
+  key = jax.random.PRNGKey(42)
+  key_q, key_k = jax.random.split(key)
+  q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
+  k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
+
+  # Reference
+  logits = jnp.einsum("hsd,htd->hst", q, k)
+  vocab_ids = jnp.arange(vocab_size)
+  mask = vocab_ids <= max_valid_id
+  logits_masked = jnp.where(mask[None, None, :], logits, -1e10)
+  lse_ref = jax.nn.logsumexp(logits_masked, axis=-1)
+
+  # Use make_ce_kernel factory
+  mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
+  kernel = make_ce_kernel(
+    mask_obj,
+    is_mqa=False,
+    interpret=True,
+  )
+
+  lse_kernel = kernel(q, k)
+
+  np.testing.assert_allclose(lse_kernel, lse_ref, rtol=1e-4, atol=1e-4)
+
+
+def test_make_ce_kernel_gradients():
+  """Test make_ce_kernel factory with gradients via jax.grad."""
+  num_heads = 1
+  num_tokens = 256
+  vocab_size = 512
+  head_dim = 128
+  max_valid_id = 500
+
+  key = jax.random.PRNGKey(123)
+  key_q, key_k = jax.random.split(key)
+  q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
+  k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
+
+  # Reference
+  def ref_loss(q, k):
+    logits = jnp.einsum("hsd,htd->hst", q, k)
+    vocab_ids = jnp.arange(vocab_size)
+    mask = vocab_ids <= max_valid_id
+    logits_masked = jnp.where(mask[None, None, :], logits, -1e10)
+    lse = jax.nn.logsumexp(logits_masked, axis=-1)
+    return lse.sum()
+
+  loss_ref = ref_loss(q, k)
+  dq_ref, dk_ref = jax.grad(ref_loss, argnums=(0, 1))(q, k)
+
+  # Use make_ce_kernel factory
+  mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
+  kernel = make_ce_kernel(
+    mask_obj,
+    is_mqa=False,
+    interpret=True,
+  )
+
+  def kernel_loss(q, k):
+    lse = kernel(q, k)
+    return lse.sum()
+
+  loss_kernel = kernel_loss(q, k)
+  dq_kernel, dk_kernel = jax.grad(kernel_loss, argnums=(0, 1))(q, k)
+
+  np.testing.assert_allclose(loss_kernel, loss_ref, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(dq_kernel, dq_ref, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)
+
+
+@pytest.mark.skipif(
+  not jax.devices()[0].platform == "tpu",
+  reason="TPU test - skip on non-TPU platforms",
+)
+def test_make_ce_kernel_on_tpu():
+  """Test make_ce_kernel on TPU without interpret mode."""
+  num_heads = 1
+  num_tokens = 512
+  vocab_size = 1024
+  head_dim = 128
+  max_valid_id = 1000
+
+  key = jax.random.PRNGKey(456)
+  key_q, key_k = jax.random.split(key)
+  q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
+  k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
+
+  # Reference
+  def ref_loss(q, k):
+    logits = jnp.einsum("hsd,htd->hst", q, k)
+    vocab_ids = jnp.arange(vocab_size)
+    mask = vocab_ids <= max_valid_id
+    logits_masked = jnp.where(mask[None, None, :], logits, -1e10)
+    lse = jax.nn.logsumexp(logits_masked, axis=-1)
+    return lse.sum()
+
+  loss_ref = ref_loss(q, k)
+  dq_ref, dk_ref = jax.grad(ref_loss, argnums=(0, 1))(q, k)
+
+  # Kernel on TPU
+  mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
+  kernel = make_ce_kernel(
+    mask_obj,
+    is_mqa=False,
+    interpret=False,  # Real TPU execution
+  )
+
+  def kernel_loss(q, k):
+    lse = kernel(q, k)
     return lse.sum()
 
   loss_kernel = kernel_loss(q, k)

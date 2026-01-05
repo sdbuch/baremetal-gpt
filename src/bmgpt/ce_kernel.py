@@ -2148,6 +2148,62 @@ def _ce_bwd(
 _ce_custom.defvjp(_ce_fwd, _ce_bwd)
 
 
+@partial(
+  jax.jit,
+  static_argnames=[
+    "is_mqa",
+    "block_sizes",
+    "mask_value",
+    "attn_logits_soft_cap",
+    "mask_function",
+    "interpret",
+  ],
+)
+def _ce(
+  fwd_mask_info: mask_info_lib.MaskInfo,
+  dq_mask_info: mask_info_lib.MaskInfo | None,
+  dk_mask_info: mask_info_lib.MaskInfo | None,
+  q: jax.Array,
+  k: jax.Array,
+  segment_ids: SegmentIds | None = None,
+  sinks: jax.Array | None = None,
+  *,
+  is_mqa: bool,
+  block_sizes: BlockSizes | None,
+  mask_value: float,
+  attn_logits_soft_cap: float | None,
+  mask_function: MaskFunctionType | None,
+  interpret: bool,
+) -> jax.Array:
+  def _collapse_partial_mask_blocks(mask_info: mask_info_lib.MaskInfo | None):
+    if mask_info is None or mask_info.partial_mask_blocks is None:
+      return mask_info
+    return mask_info._replace(
+      partial_mask_blocks=mask_info.partial_mask_blocks.reshape(
+        -1, *mask_info.partial_mask_blocks.shape[-2:]
+      )
+    )
+
+  fwd_mask_info = _collapse_partial_mask_blocks(fwd_mask_info)
+  dq_mask_info = _collapse_partial_mask_blocks(dq_mask_info)
+  dk_mask_info = _collapse_partial_mask_blocks(dk_mask_info)
+  return _ce_custom(
+    fwd_mask_info,
+    dq_mask_info,
+    dk_mask_info,
+    q,
+    k,
+    segment_ids,
+    sinks,
+    mask_value=mask_value,
+    is_mqa=is_mqa,
+    block_sizes=block_sizes,
+    mask_function=mask_function,
+    attn_logits_soft_cap=attn_logits_soft_cap,
+    interpret=interpret,
+  )
+
+
 def _splash_attention_bwd(
   save_residuals: bool,
   mask_value: float,
@@ -2422,6 +2478,88 @@ class SplashAttentionKernel:
     )
 
 
+@jax.tree_util.register_pytree_node_class
+class CEKernel:
+  def __init__(
+    self,
+    fwd_mask_info: mask_info_lib.MaskInfo,
+    dq_mask_info: mask_info_lib.MaskInfo | None,
+    dk_mask_info: mask_info_lib.MaskInfo | None,
+    **kwargs,
+  ):
+    self.kwargs = kwargs
+    self.fwd_mask_info = fwd_mask_info
+    self.dq_mask_info = dq_mask_info
+    self.dk_mask_info = dk_mask_info
+
+  def __call__(self, *args, **kwargs) -> jax.Array:
+    return _ce(
+      self.fwd_mask_info,
+      self.dq_mask_info,
+      self.dk_mask_info,
+      *args,
+      **kwargs,
+      **self.kwargs,
+    )
+
+  def manual_sharding_spec(self, sharding: jax.sharding.NamedSharding):
+    """Returns a value that can be used as a shard_map partition spec for the kernel."""
+    if self.fwd_mask_info.data_next is not None:
+      block_mask_shape = self.fwd_mask_info.data_next.shape
+      try:
+        shard_shape = sharding.shard_shape(block_mask_shape)
+      except ValueError as exc:
+        raise ValueError(
+          "The sharding must divide the mask blocks evenly between devices"
+        ) from exc
+      if block_mask_shape[-1] != shard_shape[-1]:
+        raise ValueError("Sharding the kv sequence dimension is not supported")
+    spec = sharding.spec
+    assert len(spec) == 2
+    replicated = jax.sharding.PartitionSpec()
+    partial_mask_blocks_spec = (
+      spec if self.fwd_mask_info.is_dynamic_mask else replicated
+    )
+    q_sequence_spec = jax.sharding.PartitionSpec(spec[1])
+    mask_info_specs = mask_info_lib.MaskInfo(  # pytype: disable=wrong-arg-types
+      data_next=spec if self.fwd_mask_info.data_next is not None else None,
+      mask_next=spec if self.fwd_mask_info.mask_next is not None else None,
+      block_mask=spec if self.fwd_mask_info.block_mask is not None else None,
+      partial_mask_blocks=partial_mask_blocks_spec
+      if self.fwd_mask_info.partial_mask_blocks is not None
+      else None,
+      q_sequence=q_sequence_spec if self.fwd_mask_info.q_sequence is not None else None,
+    )
+    return CEKernel(
+      mask_info_specs,
+      mask_info_specs if self.dq_mask_info is not None else None,
+      mask_info_specs if self.dk_mask_info is not None else None,
+      **self.kwargs,
+    )
+
+  def tree_flatten(self):
+    return (
+      (self.fwd_mask_info, self.dq_mask_info, self.dk_mask_info),
+      self.kwargs,
+    )
+
+  @classmethod
+  def tree_unflatten(cls, kwargs, values):
+    fwd_mask_info, dq_mask_info, dk_mask_info = values
+    dq_mask_info = (
+      mask_info_lib.MaskInfo(*dq_mask_info) if dq_mask_info is not None else None
+    )
+    dk_mask_info = (
+      mask_info_lib.MaskInfo(*dk_mask_info) if dk_mask_info is not None else None
+    )
+    return CEKernel(
+      mask_info_lib.MaskInfo(*fwd_mask_info),
+      dq_mask_info,
+      dk_mask_info,
+      **kwargs,
+    )
+
+
 def _make_splash_attention(
   mask: np.ndarray | jax.Array | mask_lib.MultiHeadMask,
   *,
@@ -2520,3 +2658,60 @@ make_splash_mha_single_device = partial(
 make_splash_mqa_single_device = partial(
   make_splash_mha, is_mqa=True, head_shards=1, q_seq_shards=1
 )
+
+
+def make_ce_kernel(
+  mask: mask_lib.MultiHeadMask,
+  *,
+  block_sizes: BlockSizes | None = None,
+  is_mqa: bool = False,
+  mask_value: float = DEFAULT_MASK_VALUE,
+  attn_logits_soft_cap: float | None = None,
+  head_shards: int = 1,
+  q_seq_shards: int = 1,
+  interpret: bool = False,
+) -> CEKernel:
+  if len(mask.shape) != 3:
+    raise ValueError(f"Unexpected mask shape: {mask.shape}")
+
+  if block_sizes is None:
+    block_sizes = BlockSizes.get_default()
+
+  fwd_mask_info, mask_function = mask_info_lib._process_mask(
+    mask,
+    (block_sizes.block_q, block_sizes.block_kv),
+    is_dkv=False,
+    head_shards=head_shards,
+    q_seq_shards=q_seq_shards,
+  )
+  fwd_mask_info = tree_util.tree_map(jnp.array, fwd_mask_info)
+
+  dq_mask_info, _ = mask_info_lib._process_mask(
+    mask,
+    (block_sizes.block_q, block_sizes.block_kv),
+    is_dkv=False,
+    head_shards=head_shards,
+    q_seq_shards=q_seq_shards,
+  )
+  dq_mask_info = tree_util.tree_map(jnp.array, dq_mask_info)
+
+  dk_mask_info, _ = mask_info_lib._process_mask(
+    mask,
+    (block_sizes.block_q, block_sizes.block_kv),
+    is_dkv=True,
+    head_shards=head_shards,
+    q_seq_shards=q_seq_shards,
+  )
+  dk_mask_info = tree_util.tree_map(jnp.array, dk_mask_info)
+
+  return CEKernel(
+    fwd_mask_info,
+    dq_mask_info,
+    dk_mask_info,
+    block_sizes=block_sizes,
+    is_mqa=is_mqa,
+    mask_value=mask_value,
+    attn_logits_soft_cap=attn_logits_soft_cap,
+    mask_function=mask_function,
+    interpret=interpret,
+  )
