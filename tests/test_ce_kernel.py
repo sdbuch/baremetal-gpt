@@ -268,7 +268,7 @@ def test_ce_forward_on_tpu():
 
 
 def test_ce_backward_dq_basic():
-  """Test CE backward dQ kernel computes correct S @ K compared to reference."""
+  """Test CE backward dQ kernel computes correct (do * S) @ K compared to reference."""
   num_heads = 1
   num_tokens = 512
   vocab_size = 1024
@@ -277,9 +277,11 @@ def test_ce_backward_dq_basic():
   block_size = 128
 
   key = jax.random.PRNGKey(42)
-  key_q, key_k = jax.random.split(key)
+  key_q, key_k, key_do = jax.random.split(key, 3)
   q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
   k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
+  # Random do (g_lse) to test fused scaling
+  do = jax.random.normal(key_do, (num_heads, num_tokens), dtype=jnp.float32)
 
   # Reference computation
   logits = jnp.einsum("hsd,htd->hst", q, k)  # (heads, tokens, vocab)
@@ -288,8 +290,9 @@ def test_ce_backward_dq_basic():
   logits_masked = jnp.where(mask[None, None, :], logits, -1e10)
   # S = softmax(logits_masked)
   s = jax.nn.softmax(logits_masked, axis=-1)  # (heads, tokens, vocab)
-  # S @ K reference
-  s_times_k_ref = jnp.einsum("hst,htd->hsd", s, k)  # (heads, tokens, head_dim)
+  # (do * S) @ K reference: scale each row of S by do
+  ds = do[:, :, None] * s  # (heads, tokens, vocab)
+  dq_ref = jnp.einsum("hst,htd->hsd", ds, k)  # (heads, tokens, head_dim)
 
   # Kernel computation
   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
@@ -315,10 +318,11 @@ def test_ce_backward_dq_basic():
     interpret=True,
   )
 
-  # Then compute S @ K using backward dQ kernel
-  s_times_k_kernel = _ce_backward_dq(
+  # Then compute (d_lse * S) @ K using backward dQ kernel
+  dq_kernel = _ce_backward_dq(
     q=q,
     k=k,
+    d_lse=do,
     segment_ids=None,
     sinks=None,
     logsumexp=lse_kernel,
@@ -338,7 +342,7 @@ def test_ce_backward_dq_basic():
   # Note: 2e-2 tolerance is consistent with splash attention's precision on TPU.
   # Testing shows splash attention forward (S @ K) also requires ~1e-2 tolerance
   # due to block-wise accumulation on TPU MXUs. See test_splash_precision.py.
-  np.testing.assert_allclose(s_times_k_kernel, s_times_k_ref, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(dq_kernel, dq_ref, rtol=2e-2, atol=2e-2)
 
 
 def test_ce_backward_dq_no_padding():
@@ -351,14 +355,16 @@ def test_ce_backward_dq_no_padding():
   block_size = 128
 
   key = jax.random.PRNGKey(123)
-  key_q, key_k = jax.random.split(key)
+  key_q, key_k, key_do = jax.random.split(key, 3)
   q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
   k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
+  do = jax.random.normal(key_do, (num_heads, num_tokens), dtype=jnp.float32)
 
   # Reference: no masking
   logits = jnp.einsum("hsd,htd->hst", q, k)
   s = jax.nn.softmax(logits, axis=-1)
-  s_times_k_ref = jnp.einsum("hst,htd->hsd", s, k)
+  ds = do[:, :, None] * s
+  dq_ref = jnp.einsum("hst,htd->hsd", ds, k)
 
   # Kernel
   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
@@ -383,9 +389,10 @@ def test_ce_backward_dq_no_padding():
     interpret=True,
   )
 
-  s_times_k_kernel = _ce_backward_dq(
+  dq_kernel = _ce_backward_dq(
     q=q,
     k=k,
+    d_lse=do,
     segment_ids=None,
     sinks=None,
     logsumexp=lse_kernel,
@@ -402,7 +409,7 @@ def test_ce_backward_dq_no_padding():
   )
 
   # 2e-2 tolerance consistent with splash attention precision on TPU MXUs
-  np.testing.assert_allclose(s_times_k_kernel, s_times_k_ref, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(dq_kernel, dq_ref, rtol=2e-2, atol=2e-2)
 
 
 def test_ce_backward_dq_numerical_stability():
@@ -415,7 +422,7 @@ def test_ce_backward_dq_numerical_stability():
   block_size = 128
 
   key = jax.random.PRNGKey(999)
-  key_q, key_k = jax.random.split(key)
+  key_q, key_k, key_do = jax.random.split(key, 3)
   q = (
     jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
     * 10.0
@@ -424,6 +431,7 @@ def test_ce_backward_dq_numerical_stability():
     jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
     * 10.0
   )
+  do = jax.random.normal(key_do, (num_heads, num_tokens), dtype=jnp.float32)
 
   # Reference
   logits = jnp.einsum("hsd,htd->hst", q, k)
@@ -431,7 +439,8 @@ def test_ce_backward_dq_numerical_stability():
   mask = vocab_ids <= max_valid_id
   logits_masked = jnp.where(mask[None, None, :], logits, -1e10)
   s = jax.nn.softmax(logits_masked, axis=-1)
-  s_times_k_ref = jnp.einsum("hst,htd->hsd", s, k)
+  ds = do[:, :, None] * s
+  dq_ref = jnp.einsum("hst,htd->hsd", ds, k)
 
   # Kernel
   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
@@ -456,9 +465,10 @@ def test_ce_backward_dq_numerical_stability():
     interpret=True,
   )
 
-  s_times_k_kernel = _ce_backward_dq(
+  dq_kernel = _ce_backward_dq(
     q=q,
     k=k,
+    d_lse=do,
     segment_ids=None,
     sinks=None,
     logsumexp=lse_kernel,
@@ -474,10 +484,10 @@ def test_ce_backward_dq_numerical_stability():
     interpret=True,
   )
 
-  assert jnp.isfinite(s_times_k_kernel).all(), "Kernel produced non-finite values"
-  assert jnp.isfinite(s_times_k_ref).all(), "Reference produced non-finite values"
+  assert jnp.isfinite(dq_kernel).all(), "Kernel produced non-finite values"
+  assert jnp.isfinite(dq_ref).all(), "Reference produced non-finite values"
   # 2e-2 tolerance consistent with splash attention precision on TPU MXUs
-  np.testing.assert_allclose(s_times_k_kernel, s_times_k_ref, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(dq_kernel, dq_ref, rtol=2e-2, atol=2e-2)
 
 
 @pytest.mark.skipif(
@@ -494,9 +504,10 @@ def test_ce_backward_dq_on_tpu():
   block_size = 128
 
   key = jax.random.PRNGKey(42)
-  key_q, key_k = jax.random.split(key)
+  key_q, key_k, key_do = jax.random.split(key, 3)
   q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
   k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
+  do = jax.random.normal(key_do, (num_heads, num_tokens), dtype=jnp.float32)
 
   # Reference
   logits = jnp.einsum("hsd,htd->hst", q, k)
@@ -504,7 +515,8 @@ def test_ce_backward_dq_on_tpu():
   mask = vocab_ids <= max_valid_id
   logits_masked = jnp.where(mask[None, None, :], logits, -1e10)
   s = jax.nn.softmax(logits_masked, axis=-1)
-  s_times_k_ref = jnp.einsum("hst,htd->hsd", s, k)
+  ds = do[:, :, None] * s
+  dq_ref = jnp.einsum("hst,htd->hsd", ds, k)
 
   # Kernel on TPU
   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
@@ -529,9 +541,10 @@ def test_ce_backward_dq_on_tpu():
     interpret=False,
   )
 
-  s_times_k_kernel = _ce_backward_dq(
+  dq_kernel = _ce_backward_dq(
     q=q,
     k=k,
+    d_lse=do,
     segment_ids=None,
     sinks=None,
     logsumexp=lse_kernel,
@@ -548,7 +561,7 @@ def test_ce_backward_dq_on_tpu():
   )
 
   # 2e-2 tolerance consistent with splash attention precision on TPU MXUs
-  np.testing.assert_allclose(s_times_k_kernel, s_times_k_ref, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(dq_kernel, dq_ref, rtol=2e-2, atol=2e-2)
 
 
 # =============================================================================
@@ -557,7 +570,7 @@ def test_ce_backward_dq_on_tpu():
 
 
 def test_ce_backward_dk_basic():
-  """Test CE backward dK kernel computes correct S^T @ Q compared to reference."""
+  """Test CE backward dK kernel computes correct S^T @ d_lse_q compared to reference."""
   num_heads = 1
   num_tokens = 512
   vocab_size = 1024
@@ -566,9 +579,13 @@ def test_ce_backward_dk_basic():
   block_size = 128
 
   key = jax.random.PRNGKey(42)
-  key_q, key_k = jax.random.split(key)
+  key_q, key_k, key_d_lse = jax.random.split(key, 3)
   q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
   k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
+  # Random d_lse (upstream gradient on logsumexp)
+  d_lse = jax.random.normal(key_d_lse, (num_heads, num_tokens), dtype=jnp.float32)
+  # Pre-compute d_lse_q = d_lse[..., None] * q for the kernel
+  d_lse_q = d_lse[:, :, None] * q  # (heads, tokens, head_dim)
 
   # Reference computation
   logits = jnp.einsum("hsd,htd->hst", q, k)  # (heads, tokens, vocab)
@@ -577,8 +594,8 @@ def test_ce_backward_dk_basic():
   logits_masked = jnp.where(mask[None, None, :], logits, -1e10)
   # S = softmax(logits_masked)
   s = jax.nn.softmax(logits_masked, axis=-1)  # (heads, tokens, vocab)
-  # S^T @ Q reference
-  st_times_q_ref = jnp.einsum("hst,hsd->htd", s, q)  # (heads, vocab, head_dim)
+  # S^T @ d_lse_q reference
+  dk_ref = jnp.einsum("hst,hsd->htd", s, d_lse_q)  # (heads, vocab, head_dim)
 
   # Kernel computation
   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
@@ -608,10 +625,11 @@ def test_ce_backward_dk_basic():
     interpret=True,
   )
 
-  # Then compute S^T @ Q using backward dK kernel
-  st_times_q_kernel = _ce_backward_dk(
+  # Then compute S^T @ d_lse_q using backward dK kernel
+  dk_kernel = _ce_backward_dk(
     q=q,
     k=k,
+    d_lse_q=d_lse_q,
     segment_ids=None,
     sinks=None,
     logsumexp=lse_kernel,
@@ -630,7 +648,7 @@ def test_ce_backward_dk_basic():
 
   # Backward kernel has more numerical accumulation than forward.
   # 2e-2 tolerance is consistent with splash attention's precision on TPU MXUs.
-  np.testing.assert_allclose(st_times_q_kernel, st_times_q_ref, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)
 
 
 def test_ce_backward_dk_no_padding():
@@ -643,14 +661,16 @@ def test_ce_backward_dk_no_padding():
   block_size = 128
 
   key = jax.random.PRNGKey(123)
-  key_q, key_k = jax.random.split(key)
+  key_q, key_k, key_d_lse = jax.random.split(key, 3)
   q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
   k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
+  d_lse = jax.random.normal(key_d_lse, (num_heads, num_tokens), dtype=jnp.float32)
+  d_lse_q = d_lse[:, :, None] * q
 
   # Reference: no masking
   logits = jnp.einsum("hsd,htd->hst", q, k)
   s = jax.nn.softmax(logits, axis=-1)
-  st_times_q_ref = jnp.einsum("hst,hsd->htd", s, q)
+  dk_ref = jnp.einsum("hst,hsd->htd", s, d_lse_q)
 
   # Kernel
   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
@@ -678,9 +698,10 @@ def test_ce_backward_dk_no_padding():
     interpret=True,
   )
 
-  st_times_q_kernel = _ce_backward_dk(
+  dk_kernel = _ce_backward_dk(
     q=q,
     k=k,
+    d_lse_q=d_lse_q,
     segment_ids=None,
     sinks=None,
     logsumexp=lse_kernel,
@@ -698,7 +719,7 @@ def test_ce_backward_dk_no_padding():
   )
 
   # 2e-2 tolerance consistent with splash attention precision on TPU MXUs
-  np.testing.assert_allclose(st_times_q_kernel, st_times_q_ref, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)
 
 
 def test_ce_backward_dk_numerical_stability():
@@ -711,7 +732,7 @@ def test_ce_backward_dk_numerical_stability():
   block_size = 128
 
   key = jax.random.PRNGKey(999)
-  key_q, key_k = jax.random.split(key)
+  key_q, key_k, key_d_lse = jax.random.split(key, 3)
   q = (
     jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
     * 10.0
@@ -720,6 +741,8 @@ def test_ce_backward_dk_numerical_stability():
     jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
     * 10.0
   )
+  d_lse = jax.random.normal(key_d_lse, (num_heads, num_tokens), dtype=jnp.float32)
+  d_lse_q = d_lse[:, :, None] * q
 
   # Reference
   logits = jnp.einsum("hsd,htd->hst", q, k)
@@ -727,7 +750,7 @@ def test_ce_backward_dk_numerical_stability():
   mask = vocab_ids <= max_valid_id
   logits_masked = jnp.where(mask[None, None, :], logits, -1e10)
   s = jax.nn.softmax(logits_masked, axis=-1)
-  st_times_q_ref = jnp.einsum("hst,hsd->htd", s, q)
+  dk_ref = jnp.einsum("hst,hsd->htd", s, d_lse_q)
 
   # Kernel
   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
@@ -755,9 +778,10 @@ def test_ce_backward_dk_numerical_stability():
     interpret=True,
   )
 
-  st_times_q_kernel = _ce_backward_dk(
+  dk_kernel = _ce_backward_dk(
     q=q,
     k=k,
+    d_lse_q=d_lse_q,
     segment_ids=None,
     sinks=None,
     logsumexp=lse_kernel,
@@ -774,10 +798,10 @@ def test_ce_backward_dk_numerical_stability():
     interpret=True,
   )
 
-  assert jnp.isfinite(st_times_q_kernel).all(), "Kernel produced non-finite values"
-  assert jnp.isfinite(st_times_q_ref).all(), "Reference produced non-finite values"
+  assert jnp.isfinite(dk_kernel).all(), "Kernel produced non-finite values"
+  assert jnp.isfinite(dk_ref).all(), "Reference produced non-finite values"
   # 2e-2 tolerance consistent with splash attention precision on TPU MXUs
-  np.testing.assert_allclose(st_times_q_kernel, st_times_q_ref, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)
 
 
 @pytest.mark.skipif(
@@ -794,9 +818,11 @@ def test_ce_backward_dk_on_tpu():
   block_size = 128
 
   key = jax.random.PRNGKey(42)
-  key_q, key_k = jax.random.split(key)
+  key_q, key_k, key_d_lse = jax.random.split(key, 3)
   q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
   k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
+  d_lse = jax.random.normal(key_d_lse, (num_heads, num_tokens), dtype=jnp.float32)
+  d_lse_q = d_lse[:, :, None] * q
 
   # Reference
   logits = jnp.einsum("hsd,htd->hst", q, k)
@@ -804,7 +830,7 @@ def test_ce_backward_dk_on_tpu():
   mask = vocab_ids <= max_valid_id
   logits_masked = jnp.where(mask[None, None, :], logits, -1e10)
   s = jax.nn.softmax(logits_masked, axis=-1)
-  st_times_q_ref = jnp.einsum("hst,hsd->htd", s, q)
+  dk_ref = jnp.einsum("hst,hsd->htd", s, d_lse_q)
 
   # Kernel on TPU
   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
@@ -832,9 +858,10 @@ def test_ce_backward_dk_on_tpu():
     interpret=False,
   )
 
-  st_times_q_kernel = _ce_backward_dk(
+  dk_kernel = _ce_backward_dk(
     q=q,
     k=k,
+    d_lse_q=d_lse_q,
     segment_ids=None,
     sinks=None,
     logsumexp=lse_kernel,
@@ -852,4 +879,4 @@ def test_ce_backward_dk_on_tpu():
   )
 
   # 2e-2 tolerance consistent with splash attention precision on TPU MXUs
-  np.testing.assert_allclose(st_times_q_kernel, st_times_q_ref, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)

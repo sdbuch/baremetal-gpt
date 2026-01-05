@@ -1217,6 +1217,7 @@ def _ce_backward_dq_kernel(
   kv_segment_ids_ref,
   sinks_ref,
   logsumexp_ref,
+  d_lse_ref,
   mask_ref,
   q_sequence_ref,
   # Outputs
@@ -1232,11 +1233,14 @@ def _ce_backward_dq_kernel(
   k_layout: QKVLayout,
   mask_function: MaskFunctionType | None,
 ):
-  """CE backward dQ kernel: computes S @ K using pre-computed LSE.
+  """CE backward dQ kernel: computes (do * S) @ K using pre-computed LSE.
 
-  This is a simplified version of _flash_attention_dq_kernel that computes
-  dQ = softmax(Q @ K^T) @ K directly, without the Jacobian correction term
-  needed for attention backward (no V, dO, or di inputs).
+  This computes dQ = (g_lse * softmax(Q @ K^T)) @ K with the g_lse scaling
+  fused into the kernel via the do buffer. Mirrors splash attention's
+  pattern where ds = (dp - di) * p, but simplified for CE (no Jacobian correction).
+
+  Args:
+    do_ref: Gradient signal (g_lse), shape (1, bq). Scales the softmax before matmul.
   """
   del sinks_ref  # potentially fuse dsinks computation into the kernel later
   float32 = jnp.float32
@@ -1258,6 +1262,9 @@ def _ce_backward_dq_kernel(
     # We keep k possibly transposed, since it is RHS of dots.
     k = k_ref[...]
     logsumexp = jnp.expand_dims(logsumexp_ref[0], -1)
+    d_lse = jnp.expand_dims(
+      d_lse_ref[0], -1
+    )  # d_lse with shape (bq, 1) for broadcasting
 
     qk_dims = NT_DIM_NUMBERS if k_layout == HEAD_DIM_MINOR else NN_DIM_NUMBERS
     qk_uncapped = lax.dot_general(q, k, qk_dims, preferred_element_type=float32)
@@ -1281,10 +1288,12 @@ def _ce_backward_dq_kernel(
       mask_function=mask_function,
     )
     p = jnp.exp(qk - logsumexp)
+    # CE simplification: ds = d_lse * p (no Jacobian correction, just scale by d_lse)
+    ds = d_lse * p
 
     dq_dims = NN_DIM_NUMBERS if k_layout == HEAD_DIM_MINOR else NT_DIM_NUMBERS
     dq_scratch_ref[...] += lax.dot_general(
-      p.astype(k.dtype),
+      ds.astype(k.dtype),
       k,
       dq_dims,
       preferred_element_type=jnp.float32,
@@ -1299,6 +1308,7 @@ def _ce_backward_dq_kernel(
 def _ce_backward_dq(
   q,
   k,
+  d_lse,
   segment_ids,
   sinks,
   logsumexp,
@@ -1314,10 +1324,14 @@ def _ce_backward_dq(
   mask_function: MaskFunctionType | None,
   interpret: bool,
 ):
-  """CE backward dQ: computes S @ K using pre-computed LSE.
+  """CE backward dQ: computes (do * S) @ K using pre-computed LSE.
 
-  This is a simplified version of _splash_attention_bwd_dq that computes
-  dQ = softmax(Q @ K^T) @ K directly, without the Jacobian correction term.
+  This computes dQ = (g_lse * softmax(Q @ K^T)) @ K with the g_lse scaling
+  fused via the do buffer. Mirrors splash attention's pattern but simplified
+  for CE (no Jacobian correction).
+
+  Args:
+    do: Gradient signal (g_lse), shape (num_heads, q_seq_len). Scales the softmax.
   """
   num_q_heads, q_seq_len, head_dim_qk = q.shape
   if is_mqa:
@@ -1416,6 +1430,11 @@ def _ce_backward_dq(
   logsumexp_spec = pl.BlockSpec((None, 1, bq), logsumexp_index_map)
   assert logsumexp.ndim == len(logsumexp_spec.block_shape)
 
+  # d_lse has same shape/spec as logsumexp
+  d_lse = jnp.expand_dims(d_lse, axis=-2)
+  d_lse_spec = pl.BlockSpec((None, 1, bq), logsumexp_index_map)
+  assert d_lse.ndim == len(d_lse_spec.block_shape)
+
   in_specs = [
     q_spec,
     k_spec,
@@ -1423,6 +1442,7 @@ def _ce_backward_dq(
     kv_segment_spec,
     sinks_spec,
     logsumexp_spec,
+    d_lse_spec,
   ]
   if mask_info.partial_mask_blocks is not None:
     in_specs.append(mask_spec)
@@ -1499,6 +1519,7 @@ def _ce_backward_dq(
       kv_segment_ids,
       sinks,
       logsumexp,
+      d_lse,
       mask_info.partial_mask_blocks,
       q_sequence,
     )
@@ -1517,6 +1538,7 @@ def _ce_backward_dk_kernel(
   kv_segment_ids_ref,
   sinks_ref,
   logsumexp_ref,
+  d_lse_q_ref,
   mask_ref,
   q_sequence_ref,
   # Outputs
@@ -1536,11 +1558,17 @@ def _ce_backward_dk_kernel(
   bkv: int,
   mask_function: MaskFunctionType | None,
 ):
-  """CE backward dK kernel: computes S^T @ Q using pre-computed LSE.
+  """CE backward dK kernel: computes S^T @ d_lse_q using pre-computed LSE.
 
-  This is a simplified version of _flash_attention_dkv_kernel that computes
-  dK = softmax(Q @ K^T)^T @ Q directly, without the Jacobian correction term
-  needed for attention backward (no V, dO, or di inputs, no dV or dQ outputs).
+  This computes dK = softmax(Q @ K^T)^T @ d_lse_q where d_lse_q = d_lse[..., None] * q.
+  The d_lse scaling is pre-multiplied into the d_lse_q buffer. Mirrors splash
+  attention's pattern but simplified for CE (no Jacobian correction).
+
+  Note: q_ref is still used to compute S via Q @ K^T. d_lse_q_ref is used for
+  the final dot product S^T @ d_lse_q.
+
+  Args:
+    d_lse_q_ref: Gradient signal (d_lse * q), shape (bq, head_dim). Used in final dot product.
   """
   del sinks_ref  # potentially fuse dsinks computation into the kernel later
   HEAD_DIM_MINOR = QKVLayout.HEAD_DIM_MINOR
@@ -1589,7 +1617,8 @@ def _ce_backward_dk_kernel(
 
   def body(i, _):
     slice_k = pl.ds(i * bkv_compute, bkv_compute)
-    q = q_ref[...]  # We keep q potentially transposed, since it's always RHS
+    q = q_ref[...]  # Used for computing S via Q @ K^T
+    d_lse_q = d_lse_q_ref[...]  # Pre-computed d_lse * q for gradient scaling
 
     def _load_k(ref, layout):
       if layout == HEAD_DIM_MINOR:
@@ -1620,11 +1649,11 @@ def _ce_backward_dk_kernel(
     # Note: qk = K @ Q^T = (Q @ K^T)^T, so p = exp(qk - lse) is S^T (transposed softmax)
     p = jnp.exp(qk - logsumexp)
 
-    # CE simplification: dk = S^T @ Q directly (no Jacobian correction)
-    # p is S^T block (bkv_compute, bq), q is (bq, head_dim), result is (bkv_compute, head_dim)
+    # CE: dk = S^T @ d_lse_q where d_lse_q = d_lse * q (gradient scaling fused)
+    # p is S^T block (bkv_compute, bq), d_lse_q is (bq, head_dim), result is (bkv_compute, head_dim)
     dk_dims = NN_DIM_NUMBERS if q_layout == HEAD_DIM_MINOR else NT_DIM_NUMBERS
     dk = lax.dot_general(
-      p.astype(q.dtype), q, dk_dims, preferred_element_type=jnp.float32
+      p.astype(d_lse_q.dtype), d_lse_q, dk_dims, preferred_element_type=jnp.float32
     )
     dk = dk.astype(dk_scratch_ref.dtype) + dk_scratch_ref[slice_k, :]
     dk_scratch_ref[slice_k, :] = dk
@@ -1651,6 +1680,7 @@ def _ce_backward_dk_kernel(
 def _ce_backward_dk(
   q,
   k,
+  d_lse_q,
   segment_ids,
   sinks,
   logsumexp,
@@ -1843,6 +1873,11 @@ def _ce_backward_dk(
   logsumexp_spec = pl.BlockSpec((None, NUM_SUBLANES, bq), logsumexp_index_map)
   assert logsumexp.ndim == len(logsumexp_spec.block_shape)
 
+  # d_lse_q_spec matches q_spec since d_lse_q = d_lse[..., None] * q has same shape as q
+  d_lse_q_spec = pl.BlockSpec(
+    from_head_minor((None, bq, head_dim_qk), q_layout), q_index_map
+  )
+
   in_specs = [
     q_spec,
     k_spec,
@@ -1850,6 +1885,7 @@ def _ce_backward_dk(
     kv_segment_spec,
     sinks_spec,
     logsumexp_spec,
+    d_lse_q_spec,
   ]
   if mask_info.partial_mask_blocks is not None:
     in_specs.append(mask_spec)
@@ -1934,6 +1970,7 @@ def _ce_backward_dk(
       kv_segment_ids,
       sinks,
       logsumexp,
+      d_lse_q if q_layout == QKVLayout.HEAD_DIM_MINOR else d_lse_q.swapaxes(-1, -2),
       mask_info.partial_mask_blocks,
       q_sequence,
     )
