@@ -100,7 +100,7 @@ def main(config: Config):
     * config.train_dataset.global_batch_size
     // config.train_dataset.num_microbatches
   )
-  # train_ce_kernel = make_splash_kernel(False, 1, num_toks, 0, mesh, save_residuals=True)
+  train_ce_kernel = make_splash_kernel(False, 1, num_toks, 0, mesh, save_residuals=True)
   val_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.val_list]
   eval_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.eval_list]
   assert len(val_kernels) == len(config.val_list)

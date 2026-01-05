@@ -99,7 +99,7 @@ def make_splash_kernel(
   )
   kernel_spec = kernel.manual_sharding_spec(splash_sharding)
   if save_residuals:
-    out_specs = ((splash_spec, (jax.P(),)),)  # (out, (lse,))
+    out_specs = (splash_spec, (jax.P(),))  # (out, (lse,))
   else:
     out_specs = splash_spec
 
