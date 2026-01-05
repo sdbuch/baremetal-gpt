@@ -38,9 +38,6 @@ def fused_softmax_cross_entropy(
   kernel=None,
 ):
   """HBM-efficient softmax cross entropy loss (with splash attention!)"""
-  if not config.model.is_causal:
-    # HACK: for compat, extract CLS on noncausal transformers
-    outputs = outputs[:, :1, ...]
   # Fold batch and sequence dimensions and gather unembeddings
   b, s = outputs.shape[:2]
   outputs = outputs.reshape(b * s, -1, out_sharding=jax.P(*config.sharding.data))
