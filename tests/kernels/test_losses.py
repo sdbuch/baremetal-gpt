@@ -167,6 +167,7 @@ seeds = st.integers(min_value=0, max_value=2**31 - 1)
   deadline=None,
   suppress_health_check=[HealthCheck.too_slow],
   phases=[Phase.generate, Phase.target, Phase.shrink],
+  derandomize=True,  # Same examples on all TPU workers
 )
 def test_fused_cross_entropy_hypothesis_forward(
   batch_size: int, seq_len: int, d_model: int, vocab_size: int, seed: int
@@ -199,6 +200,7 @@ def test_fused_cross_entropy_hypothesis_forward(
   deadline=None,
   suppress_health_check=[HealthCheck.too_slow],
   phases=[Phase.generate, Phase.target, Phase.shrink],
+  derandomize=True,  # Same examples on all TPU workers
 )
 def test_fused_cross_entropy_hypothesis_backward(
   batch_size: int, seq_len: int, d_model: int, vocab_size: int, seed: int
@@ -385,12 +387,15 @@ def fused_cross_entropy_sharded(
   reason="TPU test - skip on non-TPU platforms",
 )
 def test_fused_cross_entropy_sharded():
-  batch_size = 8
+  num_devices = len(jax.devices())
+  block_size = 128
+  # num_tokens_per_shard must be >= block_size, so num_tokens >= block_size * num_devices
+  min_tokens = block_size * num_devices
   seq_len = 256
+  batch_size = max(8, (min_tokens + seq_len - 1) // seq_len)
   d_model = 128
   vocab_size = 2048
   max_valid_id = vocab_size - 128
-  block_size = 128
 
   key = jax.random.PRNGKey(42)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
@@ -403,7 +408,6 @@ def test_fused_cross_entropy_sharded():
 
   loss_ref = naive_cross_entropy(outputs, w_unemb, targets, max_valid_id)
 
-  num_devices = len(jax.devices())
   mesh = jax.make_mesh((num_devices,), ("data",), (jax.sharding.AxisType.Explicit,))
 
   with jax.set_mesh(mesh):
@@ -419,12 +423,15 @@ def test_fused_cross_entropy_sharded():
   reason="TPU test - skip on non-TPU platforms",
 )
 def test_fused_cross_entropy_sharded_backward():
-  batch_size = 4
+  num_devices = len(jax.devices())
+  block_size = 128
+  # num_tokens_per_shard must be >= block_size, so num_tokens >= block_size * num_devices
+  min_tokens = block_size * num_devices
   seq_len = 256
+  batch_size = max(4, (min_tokens + seq_len - 1) // seq_len)
   d_model = 128
   vocab_size = 1024
   max_valid_id = vocab_size - 128
-  block_size = 128
 
   key = jax.random.PRNGKey(123)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
@@ -439,7 +446,6 @@ def test_fused_cross_entropy_sharded_backward():
     lambda o, w: naive_cross_entropy(o, w, targets, max_valid_id), argnums=(0, 1)
   )(outputs, w_unemb)
 
-  num_devices = len(jax.devices())
   mesh = jax.make_mesh((num_devices,), ("data",), (jax.sharding.AxisType.Explicit,))
 
   with jax.set_mesh(mesh):
