@@ -1172,11 +1172,12 @@ def test_ce_kernel_sharded_q_seq():
     lse = sharded_kernel(kernel, q, k)
     return lse.sum()
 
-  loss_kernel = sharded_loss(q, k)
-  dq_kernel, dk_kernel = jax.grad(sharded_loss, argnums=(0, 1))(q, k)
+  # Run within mesh context for explicit axis types
+  with mesh:
+    loss_kernel = sharded_loss(q, k)
+    dq_kernel, dk_kernel = jax.grad(sharded_loss, argnums=(0, 1))(q, k)
 
   # Use process_allgather to collect sharded arrays in multi-host setup
-
   dq_kernel = multihost_utils.process_allgather(dq_kernel)
   dk_kernel = multihost_utils.process_allgather(dk_kernel)
 
