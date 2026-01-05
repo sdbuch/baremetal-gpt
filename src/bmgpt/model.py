@@ -490,7 +490,7 @@ def _transformer(
   cache: jax.Array,
   cache_params: CacheParams,
 ):
-  _, _, _embedding, _unembedding = transformer_variant_factory(config)
+  _, _, _embedding, _ = transformer_variant_factory(config)
   x_seq = _embedding(config, params.emb, tokens)
 
   @partial(jax.remat, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)

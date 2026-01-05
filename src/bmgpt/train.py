@@ -74,6 +74,8 @@ def main(config: Config):
   mesh = mesh_from_config(config)
   Logger = logger_factory(config.logger_type)
 
+  print('init done')
+
   # Randomness
   key = jax.random.key(config.seed)
   key_model, key_train, key_val, key_eval = jax.random.split(key, 4)
@@ -85,6 +87,8 @@ def main(config: Config):
   with jax.set_mesh(mesh):
     train_state = init_train_state(key_model, config)
   cache_params = CacheParams(enabled=False, size=0)
+
+  print('mesh done')
 
   # Configure forward pass (attention kernels)
   def make_splash_kernel_wrapper(dataset: DatasetConfig):
@@ -106,11 +110,15 @@ def main(config: Config):
   assert len(val_kernels) == len(config.val_list)
   assert len(eval_kernels) == len(config.eval_list)
 
+  print('kernels done')
+
   # Configure optimization
   spec = model_spec(train_state.params)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
   opt_update = opt_update_factory(config.optimizer.type)
   opt_update = partial(opt_update, config, weight_decay_mask)
+
+  print('config done')
 
   @partial(jax.jit, donate_argnums=2)
   def train_step(config: Config, batch, state: TrainState):
