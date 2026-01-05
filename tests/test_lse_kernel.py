@@ -1194,15 +1194,17 @@ def test_lse_kernel_sharded_q_seq():
 def test_lse_kernel_memory_pressure():
   """Test LSE kernel under memory pressure with large batch and vocab.
 
-  Uses BS=2M (2^21) tokens and V=128K (2^17) vocab size in q_seq sharded mode.
+  Uses BS=8M (2^23) tokens and V=128K (2^17) vocab size in q_seq sharded mode.
   This stresses memory bandwidth and tests the kernel at production-like scale.
+  The full logits matrix would be 8M × 128K = 1T elements (4TB in fp32), but
+  the kernel computes LSE via online softmax without materializing it.
   """
   num_heads = 1
   head_dim = 128
   block_size = 512  # larger blocks for efficiency at scale
 
-  # Large scale: 2M tokens, 128K vocab
-  num_tokens = 2**21  # 2M = 2,097,152
+  # Large scale: 8M tokens, 128K vocab
+  num_tokens = 2**23  # 8M = 8,388,608
   vocab_size = 2**17  # 128K = 131,072
   max_valid_id = vocab_size - 1024  # leave some padding tokens
 
