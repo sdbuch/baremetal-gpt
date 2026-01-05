@@ -16,12 +16,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
 import dataclasses
+from collections.abc import Callable, Sequence
 from typing import Any
+
 import numpy as np
 
 # mypy: ignore-errors
+
 
 class Mask:
   """A base class for splash attention masks."""
@@ -35,21 +37,21 @@ class Mask:
 
   def __bool__(self) -> bool:
     raise NotImplementedError(
-        'Conversion to bool is unsupported. Could be caused by using logical'
-        ' instead of bitwise operations on masks.'
+      "Conversion to bool is unsupported. Could be caused by using logical"
+      " instead of bitwise operations on masks."
     )
 
   def __or__(self, other: Mask) -> Mask:
     if self.shape != other.shape:
       raise ValueError(
-          f'Invalid shape for other: {other.shape}, expected: {self.shape}'
+        f"Invalid shape for other: {other.shape}, expected: {self.shape}"
       )
     return LogicalOr(self, other)
 
   def __and__(self, other: Mask) -> Mask:
     if self.shape != other.shape:
       raise ValueError(
-          f'Invalid shape for other: {other.shape}, expected: {self.shape}'
+        f"Invalid shape for other: {other.shape}, expected: {self.shape}"
       )
     return LogicalAnd(self, other)
 
@@ -74,10 +76,10 @@ def make_causal_mask(shape: tuple[int, int], offset: int = 0) -> np.ndarray:
 
 
 def make_local_attention_mask(
-    shape: tuple[int, int],
-    window_size: tuple[int | None, int | None],
-    *,
-    offset: int = 0,
+  shape: tuple[int, int],
+  window_size: tuple[int | None, int | None],
+  *,
+  offset: int = 0,
 ) -> np.ndarray:
   """Makes a local attention mask."""
   q_seq_len, kv_seq_len = shape
@@ -92,9 +94,7 @@ def make_local_attention_mask(
   return mask.astype(np.bool_)
 
 
-def make_chunk_attention_mask(
-    shape: tuple[int, int], chunk_size: int
-) -> np.ndarray:
+def make_chunk_attention_mask(shape: tuple[int, int], chunk_size: int) -> np.ndarray:
   """Makes a chunked causal attention mask.
 
   Args:
@@ -109,7 +109,7 @@ def make_chunk_attention_mask(
     ValueError: If chunk_window_size is None or not positive.
   """
   if chunk_size <= 0:
-    raise ValueError('chunk_size must be positive')
+    raise ValueError("chunk_size must be positive")
 
   q_seq_len, kv_seq_len = shape
   q_idx = np.arange(q_seq_len, dtype=np.int32)
@@ -121,9 +121,7 @@ def make_chunk_attention_mask(
   return mask
 
 
-def make_random_mask(
-    shape: tuple[int, int], sparsity: float, seed: int
-) -> np.ndarray:
+def make_random_mask(shape: tuple[int, int], sparsity: float, seed: int) -> np.ndarray:
   """Makes a random attention mask."""
   np.random.seed(seed)
   return np.random.binomial(n=1, p=1.0 - sparsity, size=shape).astype(np.bool_)
@@ -136,7 +134,7 @@ class LogicalOr(Mask):
 
   def __init__(self, left: Mask, right: Mask):
     if left.shape != right.shape:
-      raise ValueError('Masks must have the same shape')
+      raise ValueError("Masks must have the same shape")
     self.left = left
     self.right = right
 
@@ -158,7 +156,7 @@ class LogicalAnd(Mask):
 
   def __init__(self, left: Mask, right: Mask):
     if left.shape != right.shape:
-      raise ValueError('Masks must have the same shape')
+      raise ValueError("Masks must have the same shape")
     self.left = left
     self.right = right
 
@@ -181,20 +179,18 @@ class MultiHeadMask(Mask):
 
   def __post_init__(self):
     if not self.masks:
-      raise ValueError('Unsupported empty tuple of masks')
+      raise ValueError("Unsupported empty tuple of masks")
 
     shape = self.masks[0].shape
     for mask in self.masks[1:]:
       if shape != mask.shape:
-        raise ValueError(
-            f'Unexpected mask shape, got: {mask.shape}, expected: {shape}'
-        )
+        raise ValueError(f"Unexpected mask shape, got: {mask.shape}, expected: {shape}")
 
     if not all(isinstance(mask, Mask) for mask in self.masks):
-      raise ValueError('masks should be of type Mask')
+      raise ValueError("masks should be of type Mask")
 
     if any(isinstance(mask, MultiHeadMask) for mask in self.masks):
-      raise ValueError('Nesting MultiHeadMasks is not supported')
+      raise ValueError("Nesting MultiHeadMasks is not supported")
 
   @property
   def shape(self) -> tuple[int, ...]:
@@ -202,7 +198,7 @@ class MultiHeadMask(Mask):
 
   def __getitem__(self, idx) -> np.ndarray:
     if len(idx) != 3:
-      raise NotImplementedError(f'Unsupported slice: {idx}')
+      raise NotImplementedError(f"Unsupported slice: {idx}")
 
     head_slice = idx[0]
     if isinstance(head_slice, int):
@@ -248,10 +244,10 @@ class _ComputableMask(Mask):
   mask_function: Callable[..., Any]
 
   def __init__(
-      self,
-      shape: tuple[int, int],
-      mask_function: Callable[..., Any],
-      shard_count: int = 1,
+    self,
+    shape: tuple[int, int],
+    mask_function: Callable[..., Any],
+    shard_count: int = 1,
   ):
     self._shape = shape
     self.mask_function = mask_function
@@ -259,8 +255,8 @@ class _ComputableMask(Mask):
 
     if q_seq_len % (shard_count * shard_count) != 0:
       raise ValueError(
-          f'Shard count squared ({shard_count * shard_count}) must'
-          f' divide Q seq_len ({self.shape[0]}) evenly.'
+        f"Shard count squared ({shard_count * shard_count}) must"
+        f" divide Q seq_len ({self.shape[0]}) evenly."
       )
 
     self.q_sequence = np.arange(q_seq_len, dtype=np.int32)
@@ -271,11 +267,11 @@ class _ComputableMask(Mask):
 
   def __getitem__(self, idx) -> np.ndarray:
     if len(idx) != 2:
-      raise NotImplementedError(f'Unsupported slice: {idx}')
+      raise NotImplementedError(f"Unsupported slice: {idx}")
 
     q_slice, kv_slice = idx
     if not isinstance(q_slice, slice) or not isinstance(kv_slice, slice):
-      raise NotImplementedError(f'Unsupported slice: {idx}')
+      raise NotImplementedError(f"Unsupported slice: {idx}")
 
     q_slice = _fill_slice(q_slice, self.shape[0])
     kv_slice = _fill_slice(kv_slice, self.shape[1])
@@ -305,10 +301,10 @@ class CausalMask(_ComputableMask):
   offset: int
 
   def __init__(
-      self,
-      shape: tuple[int, int],
-      offset: int = 0,
-      shard_count: int = 1,
+    self,
+    shape: tuple[int, int],
+    offset: int = 0,
+    shard_count: int = 1,
   ):
     self.offset = offset
 
@@ -324,9 +320,9 @@ class CausalMask(_ComputableMask):
     mask_function = causal_mask_function
 
     super().__init__(
-        shape=shape,
-        mask_function=mask_function,
-        shard_count=shard_count,
+      shape=shape,
+      mask_function=mask_function,
+      shard_count=shard_count,
     )
 
   def __eq__(self, other: object):
@@ -334,18 +330,20 @@ class CausalMask(_ComputableMask):
       return NotImplemented
 
     return (
-        self.shape == other.shape
-        and self.offset == other.offset
-        and np.array_equal(self.q_sequence, other.q_sequence)
+      self.shape == other.shape
+      and self.offset == other.offset
+      and np.array_equal(self.q_sequence, other.q_sequence)
     )
 
   def __hash__(self):
-    return hash((
+    return hash(
+      (
         type(self),
         self.shape,
         self.offset,
         self.q_sequence.tobytes() if self.q_sequence is not None else None,
-    ))
+      )
+    )
 
 
 class ChunkedCausalMask(_ComputableMask):
@@ -363,13 +361,13 @@ class ChunkedCausalMask(_ComputableMask):
   chunk_size: int
 
   def __init__(
-      self,
-      shape: tuple[int, int],
-      chunk_size: int,
-      shard_count: int = 1,
+    self,
+    shape: tuple[int, int],
+    chunk_size: int,
+    shard_count: int = 1,
   ):
     if chunk_size <= 0:
-      raise ValueError('chunk_size must be positive')
+      raise ValueError("chunk_size must be positive")
     self.chunk_size = chunk_size
 
     # Define the mask function for chunk attention
@@ -384,9 +382,9 @@ class ChunkedCausalMask(_ComputableMask):
       return same_chunk & causal
 
     super().__init__(
-        shape=shape,
-        mask_function=chunked_causal_mask_function,
-        shard_count=shard_count,
+      shape=shape,
+      mask_function=chunked_causal_mask_function,
+      shard_count=shard_count,
     )
 
   def __eq__(self, other: object):
@@ -394,18 +392,20 @@ class ChunkedCausalMask(_ComputableMask):
       return NotImplemented
 
     return (
-        self.shape == other.shape
-        and self.chunk_size == other.chunk_size
-        and np.array_equal(self.q_sequence, other.q_sequence)
+      self.shape == other.shape
+      and self.chunk_size == other.chunk_size
+      and np.array_equal(self.q_sequence, other.q_sequence)
     )
 
   def __hash__(self):
-    return hash((
+    return hash(
+      (
         type(self),
         self.shape,
         self.chunk_size,
         self.q_sequence.tobytes() if self.q_sequence is not None else None,
-    ))
+      )
+    )
 
 
 class LocalMask(_ComputableMask):
@@ -424,11 +424,11 @@ class LocalMask(_ComputableMask):
   offset: int
 
   def __init__(
-      self,
-      shape: tuple[int, int],
-      window_size: tuple[int | None, int | None],
-      offset: int,
-      shard_count: int = 1,
+    self,
+    shape: tuple[int, int],
+    window_size: tuple[int | None, int | None],
+    offset: int,
+    shard_count: int = 1,
   ):
     self.window_size = window_size
     self.offset = offset
@@ -460,9 +460,9 @@ class LocalMask(_ComputableMask):
       return mask
 
     super().__init__(
-        shape=shape,
-        mask_function=local_mask_function,
-        shard_count=shard_count,
+      shape=shape,
+      mask_function=local_mask_function,
+      shard_count=shard_count,
     )
 
   def __eq__(self, other: object):
@@ -470,20 +470,22 @@ class LocalMask(_ComputableMask):
       return False
 
     return (
-        self.shape == other.shape
-        and self.window_size == other.window_size
-        and self.offset == other.offset
-        and np.array_equal(self.q_sequence, other.q_sequence)
+      self.shape == other.shape
+      and self.window_size == other.window_size
+      and self.offset == other.offset
+      and np.array_equal(self.q_sequence, other.q_sequence)
     )
 
   def __hash__(self):
-    return hash((
+    return hash(
+      (
         type(self),
         self.shape,
         self.window_size,
         self.offset,
         self.q_sequence.tobytes() if self.q_sequence is not None else None,
-    ))
+      )
+    )
 
 
 @dataclasses.dataclass
@@ -494,10 +496,10 @@ class NumpyMask(Mask):
 
   def __post_init__(self):
     if self.array.ndim != 2:
-      raise ValueError('Expected a 2-dim array')
+      raise ValueError("Expected a 2-dim array")
 
     if self.array.dtype != np.bool_:
-      raise ValueError('Mask must be a boolean array')
+      raise ValueError("Mask must be a boolean array")
 
   @property
   def shape(self) -> tuple[int, ...]:
@@ -535,7 +537,7 @@ class FullMask(Mask):
 
   def __post_init__(self):
     if not isinstance(self.shape, tuple):
-      raise ValueError(f'Unsupported shape type: {type(self.shape)}')
+      raise ValueError(f"Unsupported shape type: {type(self.shape)}")
 
   @property
   def shape(self) -> tuple[int, ...]:
@@ -543,10 +545,10 @@ class FullMask(Mask):
 
   def __getitem__(self, idx) -> np.ndarray:
     if len(idx) != 2:
-      raise NotImplementedError(f'Unsupported slice: {idx}')
+      raise NotImplementedError(f"Unsupported slice: {idx}")
     i, j = idx
     if not isinstance(i, slice) or not isinstance(j, slice):
-      raise NotImplementedError(f'Unsupported slice: {idx}')
+      raise NotImplementedError(f"Unsupported slice: {idx}")
     i = _fill_slice(i, self.shape[0])
     j = _fill_slice(j, self.shape[1])
     return np.ones((i.stop - i.start, j.stop - j.start), dtype=np.bool_)

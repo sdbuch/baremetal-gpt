@@ -17,16 +17,17 @@
 from __future__ import annotations
 
 import collections
-from collections.abc import Callable
 import functools
 import math
+from collections.abc import Callable
 from typing import NamedTuple
 
 import jax
-from jax._src import util as jax_util
-from bmgpt import ce_mask as mask_lib
 import jax.numpy as jnp
 import numpy as np
+from jax._src import util as jax_util
+
+from bmgpt import ce_mask as mask_lib
 
 # mypy: ignore-errors
 

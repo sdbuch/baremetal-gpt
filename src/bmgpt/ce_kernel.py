@@ -16,22 +16,21 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
 import dataclasses
 import enum
 import functools
+from collections.abc import Callable, Mapping
 from typing import Any, Literal, NamedTuple, Optional, Union, overload
 
 import jax
-from jax import ad_checkpoint
-from jax import lax
-from jax import tree_util
-from jax.experimental import pallas as pl
-from jax.experimental.pallas import tpu as pltpu
-from bmgpt import ce_mask as mask_lib
-from bmgpt import ce_mask_info as mask_info_lib
 import jax.numpy as jnp
 import numpy as np
+from jax import ad_checkpoint, lax, tree_util
+from jax.experimental import pallas as pl
+from jax.experimental.pallas import tpu as pltpu
+
+from bmgpt import ce_mask as mask_lib
+from bmgpt import ce_mask_info as mask_info_lib
 
 partial = functools.partial
 DEFAULT_MASK_VALUE = -0.7 * float(np.finfo(np.dtype("float32")).max)
