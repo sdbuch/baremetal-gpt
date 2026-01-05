@@ -122,12 +122,12 @@ def main(config: Config):
         )
       )(inputs, state.kv_cache)
       # return softmax_cross_entropy(config, params.unemb, outputs, targets)
-    def cross_entropy(logits, targets):
-      label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
-      lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
-      return (lse - label_logits).mean()
+      def cross_entropy(logits, targets):
+        label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
+        lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
+        return (lse - label_logits).mean()
 
-    return cross_entropy(logits, targets)
+      return cross_entropy(logits, targets)
 
     # Calculate gradients: use a scan for gradient accumulation
     def gradient_accum(loss__grad, microbatch):
