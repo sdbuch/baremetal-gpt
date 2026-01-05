@@ -56,6 +56,7 @@ def fused_softmax_cross_entropy(
   segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
 
   splash_sharded, kernel = shard_mapped__kernel
+  q, k, v = jax.tree.map(lambda x: x[None], (q, k, v))  # add singleton head dim
   # TODO: does the usual logit scaling make sense for outputs too?
   # _, (lse,) = splash_sharded(kernel, q / d**0.25, k / d**0.25, v, segment_ids)
   _, (lse,) = splash_sharded(kernel, q / d**0.25, k / d**0.25, v, segment_ids)
