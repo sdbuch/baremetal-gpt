@@ -1092,119 +1092,6 @@ def _ce_forward(
   return logsumexp
 
 
-@partial(
-  jax.custom_vjp,
-  nondiff_argnames=(
-    "save_residuals",
-    "mask_value",
-    "is_mqa",
-    "block_sizes",
-    "residual_checkpoint_name",
-    "mask_function",
-    "attn_logits_soft_cap",
-    "interpret",
-  ),
-)
-def _splash_attention_custom(
-  fwd_mask_info: mask_info_lib.MaskInfo,
-  dq_mask_info: mask_info_lib.MaskInfo | None,
-  dkv_mask_info: mask_info_lib.MaskInfo | None,
-  q: jax.Array,
-  k: jax.Array,
-  v: jax.Array,
-  segment_ids: SegmentIds | None,
-  sinks: jax.Array | None,
-  save_residuals: bool,
-  mask_value: float,
-  is_mqa: bool,
-  block_sizes: BlockSizes,
-  residual_checkpoint_name: str | None,
-  mask_function: MaskFunctionType | None,
-  attn_logits_soft_cap: float | None = None,
-  interpret: bool = False,
-) -> SplashCustomReturnType:
-  # The forward function does not use the dq and dkv MaskInfos, it just forwards
-  # them to the backward function as residuals. This is a way to communicate
-  # arbitrary Arrays to the backward function. Since the three MaskInfos are
-  # constants there is no overhead in passing them to the backward function as
-  # residuals. When sharding computation MaskInfos are partitioned so both the
-  # forward and the backward kernels need to work on the relevant slice. If we
-  # recomputed the backward MaskInfos in the backward function from the numpy
-  # mask then we would not work with the MaskInfo slice relevant to the current
-  # device.
-  del dq_mask_info, dkv_mask_info
-
-  return _splash_attention_forward(  # pytype: disable=wrong-arg-types
-    fwd_mask_info,
-    q,
-    k,
-    v,
-    segment_ids,
-    sinks=sinks,
-    mask_value=mask_value,
-    is_mqa=is_mqa,
-    block_sizes=block_sizes,
-    residual_checkpoint_name=residual_checkpoint_name,
-    save_residuals=save_residuals,
-    mask_function=mask_function,
-    attn_logits_soft_cap=attn_logits_soft_cap,
-    interpret=interpret,
-  )
-
-
-def _splash_attention_fwd(
-  fwd_mask_info: mask_info_lib.MaskInfo,
-  dq_mask_info: mask_info_lib.MaskInfo | None,
-  dkv_mask_info: mask_info_lib.MaskInfo | None,
-  q: jax.Array,
-  k: jax.Array,
-  v: jax.Array,
-  segment_ids: SegmentIds | None,
-  sinks: jax.Array | None,
-  save_residuals: bool,
-  mask_value: float,
-  is_mqa: bool,
-  block_sizes: BlockSizes,
-  residual_checkpoint_name: str | None,
-  mask_function: MaskFunctionType | None,
-  attn_logits_soft_cap: float | None = None,
-  interpret: bool = False,
-) -> tuple[
-  tuple[jax.Array],
-  SplashResidualsType,
-]:
-  if save_residuals:
-    raise NotImplementedError("Higher-order AD not supported")
-
-  out, (logsumexp,) = _splash_attention_forward(  # pytype: disable=wrong-arg-types
-    fwd_mask_info,
-    q,
-    k,
-    v,
-    segment_ids,
-    sinks,
-    mask_value=mask_value,
-    is_mqa=is_mqa,
-    block_sizes=block_sizes,
-    residual_checkpoint_name=residual_checkpoint_name,
-    save_residuals=True,
-    mask_function=mask_function,
-    attn_logits_soft_cap=attn_logits_soft_cap,
-    interpret=interpret,
-  )
-  return out, (
-    q,
-    k,
-    v,
-    segment_ids,
-    sinks,
-    out,
-    logsumexp,
-    dq_mask_info,
-    dkv_mask_info,
-  )
-
-
 def _ce_backward_dq_kernel(
   # Prefetched inputs
   data_next_ref,
@@ -1975,6 +1862,290 @@ def _ce_backward_dk(
       q_sequence,
     )
   return dk
+
+
+# =============================================================================
+# Custom VJP Wrappers
+# =============================================================================
+
+
+@partial(
+  jax.custom_vjp,
+  nondiff_argnames=(
+    "save_residuals",
+    "mask_value",
+    "is_mqa",
+    "block_sizes",
+    "residual_checkpoint_name",
+    "mask_function",
+    "attn_logits_soft_cap",
+    "interpret",
+  ),
+)
+def _splash_attention_custom(
+  fwd_mask_info: mask_info_lib.MaskInfo,
+  dq_mask_info: mask_info_lib.MaskInfo | None,
+  dkv_mask_info: mask_info_lib.MaskInfo | None,
+  q: jax.Array,
+  k: jax.Array,
+  v: jax.Array,
+  segment_ids: SegmentIds | None,
+  sinks: jax.Array | None,
+  save_residuals: bool,
+  mask_value: float,
+  is_mqa: bool,
+  block_sizes: BlockSizes,
+  residual_checkpoint_name: str | None,
+  mask_function: MaskFunctionType | None,
+  attn_logits_soft_cap: float | None = None,
+  interpret: bool = False,
+) -> SplashCustomReturnType:
+  del dq_mask_info, dkv_mask_info
+
+  return _splash_attention_forward(  # pytype: disable=wrong-arg-types
+    fwd_mask_info,
+    q,
+    k,
+    v,
+    segment_ids,
+    sinks=sinks,
+    mask_value=mask_value,
+    is_mqa=is_mqa,
+    block_sizes=block_sizes,
+    residual_checkpoint_name=residual_checkpoint_name,
+    save_residuals=save_residuals,
+    mask_function=mask_function,
+    attn_logits_soft_cap=attn_logits_soft_cap,
+    interpret=interpret,
+  )
+
+
+def _splash_attention_fwd(
+  fwd_mask_info: mask_info_lib.MaskInfo,
+  dq_mask_info: mask_info_lib.MaskInfo | None,
+  dkv_mask_info: mask_info_lib.MaskInfo | None,
+  q: jax.Array,
+  k: jax.Array,
+  v: jax.Array,
+  segment_ids: SegmentIds | None,
+  sinks: jax.Array | None,
+  save_residuals: bool,
+  mask_value: float,
+  is_mqa: bool,
+  block_sizes: BlockSizes,
+  residual_checkpoint_name: str | None,
+  mask_function: MaskFunctionType | None,
+  attn_logits_soft_cap: float | None = None,
+  interpret: bool = False,
+) -> tuple[
+  tuple[jax.Array],
+  SplashResidualsType,
+]:
+  if save_residuals:
+    raise NotImplementedError("Higher-order AD not supported")
+
+  out, (logsumexp,) = _splash_attention_forward(  # pytype: disable=wrong-arg-types
+    fwd_mask_info,
+    q,
+    k,
+    v,
+    segment_ids,
+    sinks,
+    mask_value=mask_value,
+    is_mqa=is_mqa,
+    block_sizes=block_sizes,
+    residual_checkpoint_name=residual_checkpoint_name,
+    save_residuals=True,
+    mask_function=mask_function,
+    attn_logits_soft_cap=attn_logits_soft_cap,
+    interpret=interpret,
+  )
+  return out, (
+    q,
+    k,
+    v,
+    segment_ids,
+    sinks,
+    out,
+    logsumexp,
+    dq_mask_info,
+    dkv_mask_info,
+  )
+
+
+CEResidualsType = tuple[
+  jax.Array,  # q
+  jax.Array,  # k
+  SegmentIds | None,  # segment_ids
+  jax.Array | None,  # sinks
+  jax.Array,  # logsumexp
+  mask_info_lib.MaskInfo,  # dq_mask_info
+  mask_info_lib.MaskInfo,  # dk_mask_info
+]
+
+
+@partial(
+  jax.custom_vjp,
+  nondiff_argnames=(
+    "mask_value",
+    "is_mqa",
+    "block_sizes",
+    "mask_function",
+    "attn_logits_soft_cap",
+    "interpret",
+  ),
+)
+def _ce_custom(
+  fwd_mask_info: mask_info_lib.MaskInfo,
+  dq_mask_info: mask_info_lib.MaskInfo,
+  dk_mask_info: mask_info_lib.MaskInfo,
+  q: jax.Array,
+  k: jax.Array,
+  segment_ids: SegmentIds | None,
+  sinks: jax.Array | None,
+  mask_value: float,
+  is_mqa: bool,
+  block_sizes: BlockSizes,
+  mask_function: MaskFunctionType | None,
+  attn_logits_soft_cap: float | None = None,
+  interpret: bool = False,
+) -> jax.Array:
+  del dq_mask_info, dk_mask_info
+
+  return _ce_forward(
+    fwd_mask_info=fwd_mask_info,
+    q=q,
+    k=k,
+    segment_ids=segment_ids,
+    sinks=sinks,
+    mask_value=mask_value,
+    is_mqa=is_mqa,
+    block_sizes=block_sizes,
+    mask_function=mask_function,
+    attn_logits_soft_cap=attn_logits_soft_cap,
+    interpret=interpret,
+  )
+
+
+def _ce_fwd(
+  fwd_mask_info: mask_info_lib.MaskInfo,
+  dq_mask_info: mask_info_lib.MaskInfo,
+  dk_mask_info: mask_info_lib.MaskInfo,
+  q: jax.Array,
+  k: jax.Array,
+  segment_ids: SegmentIds | None,
+  sinks: jax.Array | None,
+  mask_value: float,
+  is_mqa: bool,
+  block_sizes: BlockSizes,
+  mask_function: MaskFunctionType | None,
+  attn_logits_soft_cap: float | None = None,
+  interpret: bool = False,
+) -> tuple[jax.Array, CEResidualsType]:
+  lse = _ce_forward(
+    fwd_mask_info=fwd_mask_info,
+    q=q,
+    k=k,
+    segment_ids=segment_ids,
+    sinks=sinks,
+    mask_value=mask_value,
+    is_mqa=is_mqa,
+    block_sizes=block_sizes,
+    mask_function=mask_function,
+    attn_logits_soft_cap=attn_logits_soft_cap,
+    interpret=interpret,
+  )
+
+  residuals = (
+    q,
+    k,
+    segment_ids,
+    sinks,
+    lse,
+    dq_mask_info,
+    dk_mask_info,
+  )
+  return lse, residuals
+
+
+def _ce_bwd(
+  mask_value: float,
+  is_mqa: bool,
+  block_sizes: BlockSizes,
+  mask_function: MaskFunctionType | None,
+  attn_logits_soft_cap: float | None,
+  interpret: bool,
+  residuals: CEResidualsType,
+  g_lse: jax.Array,
+) -> tuple[
+  None,  # fwd_mask_info
+  None,  # dq_mask_info
+  None,  # dk_mask_info
+  jax.Array,  # dq
+  jax.Array,  # dk
+  None,  # segment_ids
+  None,  # sinks
+]:
+  q, k, segment_ids, sinks, logsumexp, dq_mask_info, dk_mask_info = residuals
+
+  bq = block_sizes.block_q
+  bkv = block_sizes.block_kv
+  bkv_compute = block_sizes.block_kv_compute or bkv
+  q_layout = block_sizes.q_layout
+  k_layout = block_sizes.k_layout
+
+  dq = _ce_backward_dq(
+    q=q,
+    k=k,
+    d_lse=g_lse,
+    segment_ids=segment_ids,
+    sinks=sinks,
+    logsumexp=logsumexp,
+    bq=bq,
+    bkv=bkv,
+    is_mqa=is_mqa,
+    mask_info=dq_mask_info,
+    mask_value=mask_value,
+    attn_logits_soft_cap=attn_logits_soft_cap,
+    q_layout=q_layout,
+    k_layout=k_layout,
+    mask_function=mask_function,
+    interpret=interpret,
+  )
+
+  d_lse_q = g_lse[:, :, None] * q
+  dk = _ce_backward_dk(
+    q=q,
+    k=k,
+    d_lse_q=d_lse_q,
+    segment_ids=segment_ids,
+    sinks=sinks,
+    logsumexp=logsumexp,
+    bq=bq,
+    bkv=bkv,
+    bkv_compute=bkv_compute,
+    is_mqa=is_mqa,
+    mask_info=dk_mask_info,
+    mask_value=mask_value,
+    attn_logits_soft_cap=attn_logits_soft_cap,
+    q_layout=q_layout,
+    k_layout=k_layout,
+    mask_function=mask_function,
+    interpret=interpret,
+  )
+
+  return (
+    None,  # fwd_mask_info
+    None,  # dq_mask_info
+    None,  # dk_mask_info
+    dq,  # q
+    dk,  # k
+    None,  # segment_ids
+    None,  # sinks
+  )
+
+
+_ce_custom.defvjp(_ce_fwd, _ce_bwd)
 
 
 def _splash_attention_bwd(

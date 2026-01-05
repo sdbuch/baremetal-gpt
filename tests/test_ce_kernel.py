@@ -10,6 +10,7 @@ from bmgpt.ce_kernel import (
   QKVLayout,
   _ce_backward_dk,
   _ce_backward_dq,
+  _ce_custom,
   _ce_forward,
 )
 from bmgpt.ce_mask import MultiHeadMask, VocabMask
@@ -879,4 +880,199 @@ def test_ce_backward_dk_on_tpu():
   )
 
   # 2e-2 tolerance consistent with splash attention precision on TPU MXUs
+  np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)
+
+
+# =============================================================================
+# CE Custom VJP Tests (full differentiable wrapper)
+# =============================================================================
+
+
+def test_ce_custom_forward():
+  """Test _ce_custom forward pass computes correct LSE."""
+  num_heads = 1
+  num_tokens = 256
+  vocab_size = 512
+  head_dim = 128
+  max_valid_id = 500
+  block_size = 128
+
+  key = jax.random.PRNGKey(42)
+  key_q, key_k = jax.random.split(key)
+  q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
+  k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
+
+  # Reference
+  logits = jnp.einsum("hsd,htd->hst", q, k)
+  vocab_ids = jnp.arange(vocab_size)
+  mask = vocab_ids <= max_valid_id
+  logits_masked = jnp.where(mask[None, None, :], logits, -1e10)
+  lse_ref = jax.nn.logsumexp(logits_masked, axis=-1)
+
+  # Kernel via custom_vjp wrapper
+  mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
+  block_sizes = BlockSizes(
+    block_q=block_size,
+    block_kv=block_size,
+    block_kv_compute=block_size,
+  )
+  fwd_mask_info, mask_fn = _process_mask(
+    mask_obj, (block_size, block_size), is_dkv=False
+  )
+  dq_mask_info, _ = _process_mask(mask_obj, (block_size, block_size), is_dkv=False)
+  dk_mask_info, _ = _process_mask(mask_obj, (block_size, block_size), is_dkv=True)
+
+  lse_kernel = _ce_custom(
+    fwd_mask_info=fwd_mask_info,
+    dq_mask_info=dq_mask_info,
+    dk_mask_info=dk_mask_info,
+    q=q,
+    k=k,
+    segment_ids=None,
+    sinks=None,
+    mask_value=-1e10,
+    is_mqa=False,
+    block_sizes=block_sizes,
+    mask_function=mask_fn,
+    attn_logits_soft_cap=None,
+    interpret=True,
+  )
+
+  np.testing.assert_allclose(lse_kernel, lse_ref, rtol=1e-4, atol=1e-4)
+
+
+def test_ce_custom_gradients():
+  """Test _ce_custom gradients via jax.grad match reference."""
+  num_heads = 1
+  num_tokens = 256
+  vocab_size = 512
+  head_dim = 128
+  max_valid_id = 500
+  block_size = 128
+
+  key = jax.random.PRNGKey(123)
+  key_q, key_k = jax.random.split(key)
+  q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
+  k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
+
+  # Reference loss and gradients
+  def ref_loss(q, k):
+    logits = jnp.einsum("hsd,htd->hst", q, k)
+    vocab_ids = jnp.arange(vocab_size)
+    mask = vocab_ids <= max_valid_id
+    logits_masked = jnp.where(mask[None, None, :], logits, -1e10)
+    lse = jax.nn.logsumexp(logits_masked, axis=-1)
+    return lse.sum()
+
+  loss_ref = ref_loss(q, k)
+  dq_ref, dk_ref = jax.grad(ref_loss, argnums=(0, 1))(q, k)
+
+  # Kernel loss and gradients
+  mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
+  block_sizes = BlockSizes(
+    block_q=block_size,
+    block_kv=block_size,
+    block_kv_compute=block_size,
+  )
+  fwd_mask_info, mask_fn = _process_mask(
+    mask_obj, (block_size, block_size), is_dkv=False
+  )
+  dq_mask_info, _ = _process_mask(mask_obj, (block_size, block_size), is_dkv=False)
+  dk_mask_info, _ = _process_mask(mask_obj, (block_size, block_size), is_dkv=True)
+
+  def kernel_loss(q, k):
+    lse = _ce_custom(
+      fwd_mask_info=fwd_mask_info,
+      dq_mask_info=dq_mask_info,
+      dk_mask_info=dk_mask_info,
+      q=q,
+      k=k,
+      segment_ids=None,
+      sinks=None,
+      mask_value=-1e10,
+      is_mqa=False,
+      block_sizes=block_sizes,
+      mask_function=mask_fn,
+      attn_logits_soft_cap=None,
+      interpret=True,
+    )
+    return lse.sum()
+
+  loss_kernel = kernel_loss(q, k)
+  dq_kernel, dk_kernel = jax.grad(kernel_loss, argnums=(0, 1))(q, k)
+
+  # Forward pass should match
+  np.testing.assert_allclose(loss_kernel, loss_ref, rtol=1e-4, atol=1e-4)
+
+  # Gradients should match (2e-2 tolerance for kernel precision)
+  np.testing.assert_allclose(dq_kernel, dq_ref, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)
+
+
+@pytest.mark.skipif(
+  not jax.devices()[0].platform == "tpu",
+  reason="TPU test - skip on non-TPU platforms",
+)
+def test_ce_custom_gradients_on_tpu():
+  """Test _ce_custom gradients on TPU without interpret mode."""
+  num_heads = 1
+  num_tokens = 512
+  vocab_size = 1024
+  head_dim = 128
+  max_valid_id = 1000
+  block_size = 128
+
+  key = jax.random.PRNGKey(456)
+  key_q, key_k = jax.random.split(key)
+  q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.float32)
+  k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.float32)
+
+  # Reference
+  def ref_loss(q, k):
+    logits = jnp.einsum("hsd,htd->hst", q, k)
+    vocab_ids = jnp.arange(vocab_size)
+    mask = vocab_ids <= max_valid_id
+    logits_masked = jnp.where(mask[None, None, :], logits, -1e10)
+    lse = jax.nn.logsumexp(logits_masked, axis=-1)
+    return lse.sum()
+
+  loss_ref = ref_loss(q, k)
+  dq_ref, dk_ref = jax.grad(ref_loss, argnums=(0, 1))(q, k)
+
+  # Kernel on TPU
+  mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
+  block_sizes = BlockSizes(
+    block_q=block_size,
+    block_kv=block_size,
+    block_kv_compute=block_size,
+  )
+  fwd_mask_info, mask_fn = _process_mask(
+    mask_obj, (block_size, block_size), is_dkv=False
+  )
+  dq_mask_info, _ = _process_mask(mask_obj, (block_size, block_size), is_dkv=False)
+  dk_mask_info, _ = _process_mask(mask_obj, (block_size, block_size), is_dkv=True)
+
+  def kernel_loss(q, k):
+    lse = _ce_custom(
+      fwd_mask_info=fwd_mask_info,
+      dq_mask_info=dq_mask_info,
+      dk_mask_info=dk_mask_info,
+      q=q,
+      k=k,
+      segment_ids=None,
+      sinks=None,
+      mask_value=-1e10,
+      is_mqa=False,
+      block_sizes=block_sizes,
+      mask_function=mask_fn,
+      attn_logits_soft_cap=None,
+      interpret=False,  # Real TPU execution
+    )
+    return lse.sum()
+
+  loss_kernel = kernel_loss(q, k)
+  dq_kernel, dk_kernel = jax.grad(kernel_loss, argnums=(0, 1))(q, k)
+
+  np.testing.assert_allclose(loss_kernel, loss_ref, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(dq_kernel, dq_ref, rtol=2e-2, atol=2e-2)
   np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)
