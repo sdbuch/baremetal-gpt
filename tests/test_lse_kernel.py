@@ -1191,6 +1191,7 @@ def test_lse_kernel_sharded_q_seq():
   not jax.devices()[0].platform == "tpu",
   reason="TPU test - skip on non-TPU platforms",
 )
+@pytest.mark.slow
 def test_lse_kernel_memory_pressure():
   """Test LSE kernel under memory pressure with large batch and vocab.
 
@@ -1198,6 +1199,8 @@ def test_lse_kernel_memory_pressure():
   This stresses memory bandwidth and tests the kernel at production-like scale.
   The full logits matrix would be 8M × 128K = 1T elements (4TB in fp32), but
   the kernel computes LSE via online softmax without materializing it.
+
+  Expected runtime: ~3-4 minutes on TPU v4-64
   """
   num_heads = 1
   head_dim = 128

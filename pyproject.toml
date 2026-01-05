@@ -70,6 +70,11 @@ ignore = [
     "E731",  # use a def, not a lambda
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+
 [dependency-groups]
 dev = [
     "datasets>=4.4.2",
