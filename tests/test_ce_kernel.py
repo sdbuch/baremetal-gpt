@@ -1143,8 +1143,8 @@ def test_ce_kernel_sharded_q_seq():
     interpret=False,
   )
 
-  # Create mesh and sharding (match splash_helpers pattern)
-  mesh = jax.sharding.Mesh(jax.devices(), ("q_seq",), axis_types=(AxisType.Explicit,))
+  # Create mesh and sharding (match config.py pattern with explicit axis types)
+  mesh = jax.make_mesh((q_seq_shards,), ("q_seq",), (jax.sharding.AxisType.Explicit,))
   q_spec = jax.P(None, "q_seq", None)  # (heads, tokens, head_dim)
   k_spec = jax.P(None, None, None)  # (heads, vocab, head_dim) - replicated
   lse_spec = jax.P(None, "q_seq")  # (heads, tokens)
@@ -1168,8 +1168,8 @@ def test_ce_kernel_sharded_q_seq():
     lse = sharded_kernel(kernel, q, k)
     return lse.sum()
 
-  # Run within mesh context for explicit axis types
-  with mesh:
+  # Use jax.set_mesh context (match train.py pattern)
+  with jax.set_mesh(mesh):
     loss_kernel = sharded_loss(q, k)
     dq_kernel, dk_kernel = jax.grad(sharded_loss, argnums=(0, 1))(q, k)
 
