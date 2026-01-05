@@ -328,7 +328,10 @@ def test_ce_backward_dq_basic():
     interpret=True,
   )
 
-  # Backward kernel has more numerical accumulation than forward
+  # Backward kernel has more numerical accumulation than forward.
+  # Note: 2e-2 tolerance is consistent with splash attention's precision on TPU.
+  # Testing shows splash attention forward (S @ K) also requires ~1e-2 tolerance
+  # due to block-wise accumulation on TPU MXUs. See test_splash_precision.py.
   np.testing.assert_allclose(s_times_k_kernel, s_times_k_ref, rtol=2e-2, atol=2e-2)
 
 
@@ -392,6 +395,7 @@ def test_ce_backward_dq_no_padding():
     interpret=True,
   )
 
+  # 2e-2 tolerance consistent with splash attention precision on TPU MXUs
   np.testing.assert_allclose(s_times_k_kernel, s_times_k_ref, rtol=2e-2, atol=2e-2)
 
 
@@ -466,6 +470,7 @@ def test_ce_backward_dq_numerical_stability():
 
   assert jnp.isfinite(s_times_k_kernel).all(), "Kernel produced non-finite values"
   assert jnp.isfinite(s_times_k_ref).all(), "Reference produced non-finite values"
+  # 2e-2 tolerance consistent with splash attention precision on TPU MXUs
   np.testing.assert_allclose(s_times_k_kernel, s_times_k_ref, rtol=2e-2, atol=2e-2)
 
 
@@ -536,4 +541,5 @@ def test_ce_backward_dq_on_tpu():
     interpret=False,
   )
 
+  # 2e-2 tolerance consistent with splash attention precision on TPU MXUs
   np.testing.assert_allclose(s_times_k_kernel, s_times_k_ref, rtol=2e-2, atol=2e-2)
