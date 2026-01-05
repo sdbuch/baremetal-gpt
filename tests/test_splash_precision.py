@@ -224,12 +224,16 @@ def test_splash_attention_s_times_k_precision():
 
 
 if __name__ == "__main__":
-  print("=" * 60)
-  print("Testing splash attention dQ precision")
-  print("=" * 60)
-  test_splash_attention_dq_precision()
+  # Skip the dQ test for now - splash attention's custom_vjp doesn't play well
+  # with jax.grad on named tuple fields. The S @ K test is what we care about
+  # for CE kernel comparison anyway.
+  #
+  # print("=" * 60)
+  # print("Testing splash attention dQ precision")
+  # print("=" * 60)
+  # test_splash_attention_dq_precision()
 
-  print("\n" + "=" * 60)
+  print("=" * 60)
   print("Testing S @ K precision (CE-style computation)")
   print("=" * 60)
   test_splash_attention_s_times_k_precision()
