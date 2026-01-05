@@ -8,6 +8,7 @@ import jax.numpy as jnp
 
 from bmgpt.config import (
   Config,
+  DatasetConfig,
   EvaluationConfig,
   EvaluatorType,
   config_post_init,
@@ -85,13 +86,16 @@ def main(config: Config):
   cache_params = CacheParams(enabled=False, size=0)
 
   # Configure forward pass (attention kernels)
-  shard_mapped__kernel = make_splash_kernel(config, config.train_dataset, 0, mesh)
-  val_kernels = []
-  eval_kernels = []
-  for evaluation in config.val_list:
-    val_kernels.append(make_splash_kernel(config, evaluation.dataset, 0, mesh))
-  for evaluation in config.eval_list:
-    eval_kernels.append(make_splash_kernel(config, evaluation.dataset, 0, mesh))
+  def make_splash_kernel_wrapper(dataset: DatasetConfig):
+    if not dataset.use_splash:
+      # None ends up calling jax-xla attention: see _attn
+      return None
+    splash_args = (config.model.is_causal, config.model.num_heads, dataset.seq_len)
+    return make_splash_kernel(*splash_args, 0, mesh)
+
+  shard_mapped__kernel = make_splash_kernel_wrapper(config.train_dataset)
+  val_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.val_list]
+  eval_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.eval_list]
   assert len(val_kernels) == len(config.val_list)
   assert len(eval_kernels) == len(config.eval_list)
 
@@ -119,7 +123,7 @@ def main(config: Config):
         # logits = logits.astype(jnp.float32)
         label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
         lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
-        return (0 - label_logits).mean()
+        return (lse - label_logits).mean()
 
       return cross_entropy(logits, targets)
 

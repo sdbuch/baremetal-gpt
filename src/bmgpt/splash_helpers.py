@@ -56,35 +56,27 @@ class FullMask(_ComputableMask):
 
 
 def make_splash_kernel(
-  config: Config,
-  config_data: DatasetConfig,
+  is_causal: bool,
+  num_heads: int,
+  seq_len: int,
   cache_capacity: int,
   mesh,
   head_shards: int = 1,
   q_seq_shards: int = 1,
 ):
-  if not config_data.use_splash:
-    # None ends up calling jax-xla attention
-    # see _attn
-    return None
   # s is Q len (seq_len @ train; variable/1 at prefill/decode)
   # t is K len (s + cache_capacity)
-  s = config_data.seq_len
+  s = seq_len
   t = s + cache_capacity
 
-  if config.model.is_causal:
+  if is_causal:
     mask = MultiHeadMask(
-      [
-        CausalMask(shape=(s, t), offset=cache_capacity)
-        for _ in range(config.model.num_heads)
-      ]
+      [CausalMask(shape=(s, t), offset=cache_capacity) for _ in range(num_heads)]
     )
   else:
-    mask = MultiHeadMask(
-      [FullMask(shape=(s, t)) for _ in range(config.model.num_heads)]
-    )
-  BLOCK_SIZE = min(config_data.seq_len, 128)
-  if config_data.seq_len % 128 != 0 or BLOCK_SIZE % 128 != 0:
+    mask = MultiHeadMask([FullMask(shape=(s, t)) for _ in range(num_heads)])
+  BLOCK_SIZE = min(seq_len, 128)
+  if seq_len % 128 != 0 or BLOCK_SIZE % 128 != 0:
     # splash attention kernel requires block size to be a multiple of 128
     raise NotImplementedError("Splash block size needs to be a multiple of 128")
   block_sizes = BlockSizes(
@@ -97,7 +89,7 @@ def make_splash_kernel(
     block_q_dq=BLOCK_SIZE,
     block_kv_dq=BLOCK_SIZE,
   )
-  splash_spec = jax.P(None, None)
+  splash_spec = jax.P(None, None)  # qkv are N x S x H
   splash_sharding = jax.sharding.NamedSharding(mesh, splash_spec)
   kernel = make_splash_mha(
     mask, head_shards=head_shards, q_seq_shards=q_seq_shards, block_sizes=block_sizes
