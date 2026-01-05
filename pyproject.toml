@@ -45,9 +45,8 @@ bmgpt = { path = ".", editable = true }
 [tool.ty.src]
 exclude = [
     "tests",
-    "src/bmgpt/ce_kernel.py",
-    "src/bmgpt/ce_mask.py",
-    "src/bmgpt/ce_mask_info.py",
+    "src/bmgpt/kernels",
+    "src/bmgpt/splash_helpers.py",
 ]
 
 [tool.ruff]

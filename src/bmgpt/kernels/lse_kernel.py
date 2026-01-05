@@ -29,8 +29,10 @@ from jax import ad_checkpoint, lax, tree_util
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
 
-from bmgpt import ce_mask as mask_lib
-from bmgpt import ce_mask_info as mask_info_lib
+from jax.experimental.pallas.ops.tpu.splash_attention import (
+  splash_attention_mask as mask_lib,
+  splash_attention_mask_info as mask_info_lib,
+)
 
 partial = functools.partial
 DEFAULT_MASK_VALUE = -0.7 * float(np.finfo(np.dtype("float32")).max)
@@ -305,7 +307,7 @@ def _apply_mask_and_soft_cap(
   return qk
 
 
-def ce_forward_kernel(
+def lse_forward_kernel(
   # Prefetched inputs
   data_next_ref,
   block_mask_ref,
@@ -333,7 +335,7 @@ def ce_forward_kernel(
   attn_logits_soft_cap: float | None,
   mask_function: MaskFunctionType | None,
 ):
-  """CE forward kernel: computes only LSE via online softmax, no V output."""
+  """LSE forward kernel: computes only LSE via online softmax, no V output."""
   float32 = jnp.float32
   HEAD_DIM_MINOR = QKVLayout.HEAD_DIM_MINOR
 
@@ -414,7 +416,7 @@ def ce_forward_kernel(
     alpha = jnp.exp(m_prev - m_next)
     l_next = l_curr + alpha * l_prev
     m_scratch_ref[...], l_scratch_ref[...] = m_next, l_next
-    # CE forward: no V @ S computation, only track m and l for LSE
+    # LSE forward: no V @ S computation, only track m and l for LSE
 
   @pl.when(should_run)
   def run():
@@ -424,7 +426,7 @@ def ce_forward_kernel(
 
   @pl.when(j == grid_width - 1)
   def end():
-    # CE forward: only compute and save logsumexp
+    # LSE forward: only compute and save logsumexp
     l = l_scratch_ref[...]
     assert logsumexp_ref.shape == (bq, NUM_LANES)
     logsumexp_ref[...] = (jnp.log(l) + m_scratch_ref[...]).astype(logsumexp_ref.dtype)
@@ -441,7 +443,7 @@ def _div(dividend: int, divisor: int):
   return lax.div(dividend, divisor)
 
 
-def _ce_forward(
+def _lse_forward(
   fwd_mask_info: mask_info_lib.MaskInfo,
   q: jax.Array,
   k: jax.Array,
@@ -454,7 +456,7 @@ def _ce_forward(
   attn_logits_soft_cap: float | None = None,
   interpret: bool = False,
 ) -> jax.Array:
-  """CE forward pass: computes only LSE via online softmax.
+  """LSE forward pass: computes only LSE via online softmax.
 
   Args:
     fwd_mask_info: Mask info for forward pass
@@ -617,7 +619,7 @@ def _ce_forward(
 
   num_scalar_prefetch = 3
 
-  # CE forward: only output m_scratch, l_scratch, and logsumexp (no o_scratch, no out)
+  # LSE forward: only output m_scratch, l_scratch, and logsumexp (no o_scratch, no out)
   def logsumexp_index_map(h, i, *_):
     return h, i, 0
 
@@ -635,7 +637,7 @@ def _ce_forward(
   kernel_name = get_kernel_name(
     dataclasses.asdict(block_sizes),
     is_mqa=is_mqa,
-    save_residuals=True,  # CE always saves LSE
+    save_residuals=True,  # LSE kernel always saves LSE
     is_segmented=segment_ids is not None,
     phase="ce_fwd",
   )
@@ -649,7 +651,7 @@ def _ce_forward(
   with jax.named_scope(kernel_name):
     all_out = pl.pallas_call(
       partial(
-        ce_forward_kernel,
+        lse_forward_kernel,
         mask_value=mask_value,
         grid_width=grid_width,
         bq=bq,
@@ -690,7 +692,7 @@ def _ce_forward(
   return logsumexp
 
 
-def _ce_backward_dq_kernel(
+def _lse_backward_dq_kernel(
   # Prefetched inputs
   data_next_ref,
   block_mask_ref,
@@ -718,11 +720,11 @@ def _ce_backward_dq_kernel(
   k_layout: QKVLayout,
   mask_function: MaskFunctionType | None,
 ):
-  """CE backward dQ kernel: computes (do * S) @ K using pre-computed LSE.
+  """LSE backward dQ kernel: computes (do * S) @ K using pre-computed LSE.
 
   This computes dQ = (g_lse * softmax(Q @ K^T)) @ K with the g_lse scaling
   fused into the kernel via the do buffer. Mirrors splash attention's
-  pattern where ds = (dp - di) * p, but simplified for CE (no Jacobian correction).
+  pattern where ds = (dp - di) * p, but simplified for LSE (no Jacobian correction).
 
   Args:
     do_ref: Gradient signal (g_lse), shape (1, bq). Scales the softmax before matmul.
@@ -770,7 +772,7 @@ def _ce_backward_dq_kernel(
       mask_function=mask_function,
     )
     p = jnp.exp(qk - logsumexp)
-    # CE simplification: ds = d_lse * p (no Jacobian correction, just scale by d_lse)
+    # LSE simplification: ds = d_lse * p (no Jacobian correction, just scale by d_lse)
     ds = d_lse * p
 
     dq_dims = NN_DIM_NUMBERS if k_layout == HEAD_DIM_MINOR else NT_DIM_NUMBERS
@@ -787,7 +789,7 @@ def _ce_backward_dq_kernel(
     dq_scratch_ref[...] = jnp.zeros_like(dq_scratch_ref)
 
 
-def _ce_backward_dq(
+def _lse_backward_dq(
   q,
   k,
   d_lse,
@@ -806,11 +808,11 @@ def _ce_backward_dq(
   mask_function: MaskFunctionType | None,
   interpret: bool,
 ):
-  """CE backward dQ: computes (do * S) @ K using pre-computed LSE.
+  """LSE backward dQ: computes (do * S) @ K using pre-computed LSE.
 
   This computes dQ = (g_lse * softmax(Q @ K^T)) @ K with the g_lse scaling
   fused via the do buffer. Mirrors splash attention's pattern but simplified
-  for CE (no Jacobian correction).
+  for LSE (no Jacobian correction).
 
   Args:
     do: Gradient signal (g_lse), shape (num_heads, q_seq_len). Scales the softmax.
@@ -952,7 +954,7 @@ def _ce_backward_dq(
   ]
 
   kernel = functools.partial(
-    _ce_backward_dq_kernel,
+    _lse_backward_dq_kernel,
     grid_width=grid_width,
     mask_value=mask_value,
     bq=bq,
@@ -1008,7 +1010,7 @@ def _ce_backward_dq(
   return dq
 
 
-def _ce_backward_dk_kernel(
+def _lse_backward_dk_kernel(
   # Prefetched inputs
   data_next_ref,
   block_mask_ref,
@@ -1040,11 +1042,11 @@ def _ce_backward_dk_kernel(
   bkv: int,
   mask_function: MaskFunctionType | None,
 ):
-  """CE backward dK kernel: computes S^T @ d_lse_q using pre-computed LSE.
+  """LSE backward dK kernel: computes S^T @ d_lse_q using pre-computed LSE.
 
   This computes dK = softmax(Q @ K^T)^T @ d_lse_q where d_lse_q = d_lse[..., None] * q.
   The d_lse scaling is pre-multiplied into the d_lse_q buffer. Mirrors splash
-  attention's pattern but simplified for CE (no Jacobian correction).
+  attention's pattern but simplified for LSE (no Jacobian correction).
 
   Note: q_ref is still used to compute S via Q @ K^T. d_lse_q_ref is used for
   the final dot product S^T @ d_lse_q.
@@ -1131,7 +1133,7 @@ def _ce_backward_dk_kernel(
     # Note: qk = K @ Q^T = (Q @ K^T)^T, so p = exp(qk - lse) is S^T (transposed softmax)
     p = jnp.exp(qk - logsumexp)
 
-    # CE: dk = S^T @ d_lse_q where d_lse_q = d_lse * q (gradient scaling fused)
+    # LSE: dk = S^T @ d_lse_q where d_lse_q = d_lse * q (gradient scaling fused)
     # p is S^T block (bkv_compute, bq), d_lse_q is (bq, head_dim), result is (bkv_compute, head_dim)
     dk_dims = NN_DIM_NUMBERS if q_layout == HEAD_DIM_MINOR else NT_DIM_NUMBERS
     dk = lax.dot_general(
@@ -1159,7 +1161,7 @@ def _ce_backward_dk_kernel(
     dk_scratch_ref[...] = jnp.zeros_like(dk_scratch_ref)
 
 
-def _ce_backward_dk(
+def _lse_backward_dk(
   q,
   k,
   d_lse_q,
@@ -1179,7 +1181,7 @@ def _ce_backward_dk(
   mask_function: MaskFunctionType | None,
   interpret: bool,
 ):
-  """CE backward dK: computes S^T @ Q using pre-computed LSE.
+  """LSE backward dK: computes S^T @ Q using pre-computed LSE.
 
   This is a simplified version of _splash_attention_bwd_dkv that computes
   dK = softmax(Q @ K^T)^T @ Q directly, without the Jacobian correction term.
@@ -1393,7 +1395,7 @@ def _ce_backward_dk(
   ]
 
   kernel = functools.partial(
-    _ce_backward_dk_kernel,
+    _lse_backward_dk_kernel,
     mask_value=mask_value,
     num_q_heads=num_q_heads,
     num_kv_heads=num_kv_heads,
@@ -1486,7 +1488,7 @@ CEResidualsType = tuple[
     "interpret",
   ),
 )
-def _ce_custom(
+def _lse_custom(
   fwd_mask_info: mask_info_lib.MaskInfo,
   dq_mask_info: mask_info_lib.MaskInfo,
   dk_mask_info: mask_info_lib.MaskInfo,
@@ -1503,7 +1505,7 @@ def _ce_custom(
 ) -> jax.Array:
   del dq_mask_info, dk_mask_info
 
-  return _ce_forward(
+  return _lse_forward(
     fwd_mask_info=fwd_mask_info,
     q=q,
     k=k,
@@ -1518,7 +1520,7 @@ def _ce_custom(
   )
 
 
-def _ce_fwd(
+def _lse_fwd(
   fwd_mask_info: mask_info_lib.MaskInfo,
   dq_mask_info: mask_info_lib.MaskInfo,
   dk_mask_info: mask_info_lib.MaskInfo,
@@ -1533,7 +1535,7 @@ def _ce_fwd(
   attn_logits_soft_cap: float | None = None,
   interpret: bool = False,
 ) -> tuple[jax.Array, CEResidualsType]:
-  lse = _ce_forward(
+  lse = _lse_forward(
     fwd_mask_info=fwd_mask_info,
     q=q,
     k=k,
@@ -1559,7 +1561,7 @@ def _ce_fwd(
   return lse, residuals
 
 
-def _ce_bwd(
+def _lse_bwd(
   mask_value: float,
   is_mqa: bool,
   block_sizes: BlockSizes,
@@ -1585,7 +1587,7 @@ def _ce_bwd(
   q_layout = block_sizes.q_layout
   k_layout = block_sizes.k_layout
 
-  dq = _ce_backward_dq(
+  dq = _lse_backward_dq(
     q=q,
     k=k,
     d_lse=g_lse,
@@ -1605,7 +1607,7 @@ def _ce_bwd(
   )
 
   d_lse_q = g_lse[:, :, None] * q
-  dk = _ce_backward_dk(
+  dk = _lse_backward_dk(
     q=q,
     k=k,
     d_lse_q=d_lse_q,
@@ -1636,7 +1638,7 @@ def _ce_bwd(
   )
 
 
-_ce_custom.defvjp(_ce_fwd, _ce_bwd)
+_lse_custom.defvjp(_lse_fwd, _lse_bwd)
 
 
 @partial(
@@ -1650,7 +1652,7 @@ _ce_custom.defvjp(_ce_fwd, _ce_bwd)
     "interpret",
   ],
 )
-def _ce(
+def _lse(
   fwd_mask_info: mask_info_lib.MaskInfo,
   dq_mask_info: mask_info_lib.MaskInfo | None,
   dk_mask_info: mask_info_lib.MaskInfo | None,
@@ -1678,7 +1680,7 @@ def _ce(
   fwd_mask_info = _collapse_partial_mask_blocks(fwd_mask_info)
   dq_mask_info = _collapse_partial_mask_blocks(dq_mask_info)
   dk_mask_info = _collapse_partial_mask_blocks(dk_mask_info)
-  return _ce_custom(
+  return _lse_custom(
     fwd_mask_info,
     dq_mask_info,
     dk_mask_info,
@@ -1696,7 +1698,7 @@ def _ce(
 
 
 @jax.tree_util.register_pytree_node_class
-class CEKernel:
+class LSEKernel:
   def __init__(
     self,
     fwd_mask_info: mask_info_lib.MaskInfo,
@@ -1710,7 +1712,7 @@ class CEKernel:
     self.dk_mask_info = dk_mask_info
 
   def __call__(self, *args, **kwargs) -> jax.Array:
-    return _ce(
+    return _lse(
       self.fwd_mask_info,
       self.dq_mask_info,
       self.dk_mask_info,
@@ -1747,7 +1749,7 @@ class CEKernel:
       else None,
       q_sequence=q_sequence_spec if self.fwd_mask_info.q_sequence is not None else None,
     )
-    return CEKernel(
+    return LSEKernel(
       mask_info_specs,
       mask_info_specs if self.dq_mask_info is not None else None,
       mask_info_specs if self.dk_mask_info is not None else None,
@@ -1769,7 +1771,7 @@ class CEKernel:
     dk_mask_info = (
       mask_info_lib.MaskInfo(*dk_mask_info) if dk_mask_info is not None else None
     )
-    return CEKernel(
+    return LSEKernel(
       mask_info_lib.MaskInfo(*fwd_mask_info),
       dq_mask_info,
       dk_mask_info,
@@ -1777,7 +1779,7 @@ class CEKernel:
     )
 
 
-def make_ce_kernel(
+def make_lse_kernel(
   mask: mask_lib.MultiHeadMask,
   *,
   block_sizes: BlockSizes | None = None,
@@ -1787,7 +1789,7 @@ def make_ce_kernel(
   head_shards: int = 1,
   q_seq_shards: int = 1,
   interpret: bool = False,
-) -> CEKernel:
+) -> LSEKernel:
   if len(mask.shape) != 3:
     raise ValueError(f"Unexpected mask shape: {mask.shape}")
 
@@ -1821,7 +1823,7 @@ def make_ce_kernel(
   )
   dk_mask_info = tree_util.tree_map(jnp.array, dk_mask_info)
 
-  return CEKernel(
+  return LSEKernel(
     fwd_mask_info,
     dq_mask_info,
     dk_mask_info,

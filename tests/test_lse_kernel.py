@@ -1,4 +1,4 @@
-"""Tests for the CE forward kernel (fused cross-entropy LSE computation)."""
+"""Tests for the LSE forward kernel (fused logsumexp computation)."""
 
 import functools
 
@@ -10,22 +10,27 @@ from jax.experimental import multihost_utils
 from jax import shard_map
 from jax.sharding import AxisType
 
-from bmgpt.ce_kernel import (
+from bmgpt.kernels.lse_kernel import (
   BlockSizes,
-  CEKernel,
+  LSEKernel,
   QKVLayout,
-  _ce_backward_dk,
-  _ce_backward_dq,
-  _ce_custom,
-  _ce_forward,
-  make_ce_kernel,
+  _lse_backward_dk,
+  _lse_backward_dq,
+  _lse_custom,
+  _lse_forward,
+  make_lse_kernel,
 )
-from bmgpt.ce_mask import MultiHeadMask, VocabMask
-from bmgpt.ce_mask_info import _process_mask
+from bmgpt.kernels.lse_mask import VocabMask
+from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_mask import (
+  MultiHeadMask,
+)
+from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_mask_info import (
+  _process_mask,
+)
 
 
-def test_ce_forward_lse_basic():
-  """Test CE forward kernel computes correct LSE compared to reference."""
+def test_lse_forward_lse_basic():
+  """Test LSE forward kernel computes correct LSE compared to reference."""
   # Config - use power-of-2 sizes, 128-aligned for TPU
   num_heads = 1
   num_tokens = 512
@@ -56,7 +61,7 @@ def test_ce_forward_lse_basic():
     block_kv_compute=block_size,
   )
   mask_info, mask_fn = _process_mask(mask_obj, (block_size, block_size), is_dkv=False)
-  lse_kernel = _ce_forward(
+  lse_kernel = _lse_forward(
     fwd_mask_info=mask_info,
     q=q,
     k=k,
@@ -73,8 +78,8 @@ def test_ce_forward_lse_basic():
   np.testing.assert_allclose(lse_kernel, lse_ref, rtol=1e-4, atol=1e-4)
 
 
-def test_ce_forward_lse_no_padding():
-  """Test CE forward with all vocab tokens valid (edge case)."""
+def test_lse_forward_lse_no_padding():
+  """Test LSE forward with all vocab tokens valid (edge case)."""
   num_heads = 1
   num_tokens = 256
   vocab_size = 512
@@ -100,7 +105,7 @@ def test_ce_forward_lse_no_padding():
     block_kv_compute=block_size,
   )
   mask_info, mask_fn = _process_mask(mask_obj, (block_size, block_size), is_dkv=False)
-  lse_kernel = _ce_forward(
+  lse_kernel = _lse_forward(
     fwd_mask_info=mask_info,
     q=q,
     k=k,
@@ -117,7 +122,7 @@ def test_ce_forward_lse_no_padding():
   np.testing.assert_allclose(lse_kernel, lse_ref, rtol=1e-4, atol=1e-4)
 
 
-def test_ce_forward_numerical_stability():
+def test_lse_forward_numerical_stability():
   """Test that kernel is numerically stable with large values."""
   num_heads = 1
   num_tokens = 256
@@ -153,7 +158,7 @@ def test_ce_forward_numerical_stability():
     block_kv_compute=block_size,
   )
   mask_info, mask_fn = _process_mask(mask_obj, (block_size, block_size), is_dkv=False)
-  lse_kernel = _ce_forward(
+  lse_kernel = _lse_forward(
     fwd_mask_info=mask_info,
     q=q,
     k=k,
@@ -173,7 +178,7 @@ def test_ce_forward_numerical_stability():
   np.testing.assert_allclose(lse_kernel, lse_ref, rtol=1e-3, atol=1e-3)
 
 
-def test_ce_forward_larger_vocab():
+def test_lse_forward_larger_vocab():
   """Test with larger vocabulary size (more realistic scenario)."""
   num_heads = 1
   num_tokens = 256
@@ -203,7 +208,7 @@ def test_ce_forward_larger_vocab():
     block_kv_compute=block_size,
   )
   mask_info, mask_fn = _process_mask(mask_obj, (block_size, block_size), is_dkv=False)
-  lse_kernel = _ce_forward(
+  lse_kernel = _lse_forward(
     fwd_mask_info=mask_info,
     q=q,
     k=k,
@@ -224,8 +229,8 @@ def test_ce_forward_larger_vocab():
   not jax.devices()[0].platform == "tpu",
   reason="TPU test - skip on non-TPU platforms",
 )
-def test_ce_forward_on_tpu():
-  """Test CE forward kernel on TPU without interpret mode."""
+def test_lse_forward_on_tpu():
+  """Test LSE forward kernel on TPU without interpret mode."""
   num_heads = 1
   num_tokens = 512
   vocab_size = 1024
@@ -253,7 +258,7 @@ def test_ce_forward_on_tpu():
     block_kv_compute=block_size,
   )
   mask_info, mask_fn = _process_mask(mask_obj, (block_size, block_size), is_dkv=False)
-  lse_kernel = _ce_forward(
+  lse_kernel = _lse_forward(
     fwd_mask_info=mask_info,
     q=q,
     k=k,
@@ -271,12 +276,12 @@ def test_ce_forward_on_tpu():
 
 
 # =============================================================================
-# CE Backward dQ Tests (S @ K computation)
+# LSE Backward dQ Tests (S @ K computation)
 # =============================================================================
 
 
-def test_ce_backward_dq_basic():
-  """Test CE backward dQ kernel computes correct (do * S) @ K compared to reference."""
+def test_lse_backward_dq_basic():
+  """Test LSE backward dQ kernel computes correct (do * S) @ K compared to reference."""
   num_heads = 1
   num_tokens = 512
   vocab_size = 1024
@@ -312,7 +317,7 @@ def test_ce_backward_dq_basic():
   mask_info, mask_fn = _process_mask(mask_obj, (block_size, block_size), is_dkv=False)
 
   # First get LSE from forward kernel
-  lse_kernel = _ce_forward(
+  lse_kernel = _lse_forward(
     fwd_mask_info=mask_info,
     q=q,
     k=k,
@@ -327,7 +332,7 @@ def test_ce_backward_dq_basic():
   )
 
   # Then compute (d_lse * S) @ K using backward dQ kernel
-  dq_kernel = _ce_backward_dq(
+  dq_kernel = _lse_backward_dq(
     q=q,
     k=k,
     d_lse=do,
@@ -353,8 +358,8 @@ def test_ce_backward_dq_basic():
   np.testing.assert_allclose(dq_kernel, dq_ref, rtol=2e-2, atol=2e-2)
 
 
-def test_ce_backward_dq_no_padding():
-  """Test CE backward dQ with all vocab tokens valid."""
+def test_lse_backward_dq_no_padding():
+  """Test LSE backward dQ with all vocab tokens valid."""
   num_heads = 1
   num_tokens = 256
   vocab_size = 512
@@ -383,7 +388,7 @@ def test_ce_backward_dq_no_padding():
   )
   mask_info, mask_fn = _process_mask(mask_obj, (block_size, block_size), is_dkv=False)
 
-  lse_kernel = _ce_forward(
+  lse_kernel = _lse_forward(
     fwd_mask_info=mask_info,
     q=q,
     k=k,
@@ -397,7 +402,7 @@ def test_ce_backward_dq_no_padding():
     interpret=True,
   )
 
-  dq_kernel = _ce_backward_dq(
+  dq_kernel = _lse_backward_dq(
     q=q,
     k=k,
     d_lse=do,
@@ -420,8 +425,8 @@ def test_ce_backward_dq_no_padding():
   np.testing.assert_allclose(dq_kernel, dq_ref, rtol=2e-2, atol=2e-2)
 
 
-def test_ce_backward_dq_numerical_stability():
-  """Test CE backward dQ is numerically stable with large values."""
+def test_lse_backward_dq_numerical_stability():
+  """Test LSE backward dQ is numerically stable with large values."""
   num_heads = 1
   num_tokens = 256
   vocab_size = 512
@@ -459,7 +464,7 @@ def test_ce_backward_dq_numerical_stability():
   )
   mask_info, mask_fn = _process_mask(mask_obj, (block_size, block_size), is_dkv=False)
 
-  lse_kernel = _ce_forward(
+  lse_kernel = _lse_forward(
     fwd_mask_info=mask_info,
     q=q,
     k=k,
@@ -473,7 +478,7 @@ def test_ce_backward_dq_numerical_stability():
     interpret=True,
   )
 
-  dq_kernel = _ce_backward_dq(
+  dq_kernel = _lse_backward_dq(
     q=q,
     k=k,
     d_lse=do,
@@ -502,8 +507,8 @@ def test_ce_backward_dq_numerical_stability():
   not jax.devices()[0].platform == "tpu",
   reason="TPU test - skip on non-TPU platforms",
 )
-def test_ce_backward_dq_on_tpu():
-  """Test CE backward dQ kernel on TPU without interpret mode."""
+def test_lse_backward_dq_on_tpu():
+  """Test LSE backward dQ kernel on TPU without interpret mode."""
   num_heads = 1
   num_tokens = 512
   vocab_size = 1024
@@ -535,7 +540,7 @@ def test_ce_backward_dq_on_tpu():
   )
   mask_info, mask_fn = _process_mask(mask_obj, (block_size, block_size), is_dkv=False)
 
-  lse_kernel = _ce_forward(
+  lse_kernel = _lse_forward(
     fwd_mask_info=mask_info,
     q=q,
     k=k,
@@ -549,7 +554,7 @@ def test_ce_backward_dq_on_tpu():
     interpret=False,
   )
 
-  dq_kernel = _ce_backward_dq(
+  dq_kernel = _lse_backward_dq(
     q=q,
     k=k,
     d_lse=do,
@@ -573,12 +578,12 @@ def test_ce_backward_dq_on_tpu():
 
 
 # =============================================================================
-# CE Backward dK Tests (S^T @ Q computation)
+# LSE Backward dK Tests (S^T @ Q computation)
 # =============================================================================
 
 
-def test_ce_backward_dk_basic():
-  """Test CE backward dK kernel computes correct S^T @ d_lse_q compared to reference."""
+def test_lse_backward_dk_basic():
+  """Test LSE backward dK kernel computes correct S^T @ d_lse_q compared to reference."""
   num_heads = 1
   num_tokens = 512
   vocab_size = 1024
@@ -619,7 +624,7 @@ def test_ce_backward_dk_basic():
   fwd_mask_info, fwd_mask_fn = _process_mask(
     mask_obj, (block_size, block_size), is_dkv=False
   )
-  lse_kernel = _ce_forward(
+  lse_kernel = _lse_forward(
     fwd_mask_info=fwd_mask_info,
     q=q,
     k=k,
@@ -634,7 +639,7 @@ def test_ce_backward_dk_basic():
   )
 
   # Then compute S^T @ d_lse_q using backward dK kernel
-  dk_kernel = _ce_backward_dk(
+  dk_kernel = _lse_backward_dk(
     q=q,
     k=k,
     d_lse_q=d_lse_q,
@@ -659,8 +664,8 @@ def test_ce_backward_dk_basic():
   np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)
 
 
-def test_ce_backward_dk_no_padding():
-  """Test CE backward dK with all vocab tokens valid."""
+def test_lse_backward_dk_no_padding():
+  """Test LSE backward dK with all vocab tokens valid."""
   num_heads = 1
   num_tokens = 256
   vocab_size = 512
@@ -692,7 +697,7 @@ def test_ce_backward_dk_no_padding():
   fwd_mask_info, fwd_mask_fn = _process_mask(
     mask_obj, (block_size, block_size), is_dkv=False
   )
-  lse_kernel = _ce_forward(
+  lse_kernel = _lse_forward(
     fwd_mask_info=fwd_mask_info,
     q=q,
     k=k,
@@ -706,7 +711,7 @@ def test_ce_backward_dk_no_padding():
     interpret=True,
   )
 
-  dk_kernel = _ce_backward_dk(
+  dk_kernel = _lse_backward_dk(
     q=q,
     k=k,
     d_lse_q=d_lse_q,
@@ -730,8 +735,8 @@ def test_ce_backward_dk_no_padding():
   np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)
 
 
-def test_ce_backward_dk_numerical_stability():
-  """Test CE backward dK is numerically stable with large values."""
+def test_lse_backward_dk_numerical_stability():
+  """Test LSE backward dK is numerically stable with large values."""
   num_heads = 1
   num_tokens = 256
   vocab_size = 512
@@ -772,7 +777,7 @@ def test_ce_backward_dk_numerical_stability():
   fwd_mask_info, fwd_mask_fn = _process_mask(
     mask_obj, (block_size, block_size), is_dkv=False
   )
-  lse_kernel = _ce_forward(
+  lse_kernel = _lse_forward(
     fwd_mask_info=fwd_mask_info,
     q=q,
     k=k,
@@ -786,7 +791,7 @@ def test_ce_backward_dk_numerical_stability():
     interpret=True,
   )
 
-  dk_kernel = _ce_backward_dk(
+  dk_kernel = _lse_backward_dk(
     q=q,
     k=k,
     d_lse_q=d_lse_q,
@@ -816,8 +821,8 @@ def test_ce_backward_dk_numerical_stability():
   not jax.devices()[0].platform == "tpu",
   reason="TPU test - skip on non-TPU platforms",
 )
-def test_ce_backward_dk_on_tpu():
-  """Test CE backward dK kernel on TPU without interpret mode."""
+def test_lse_backward_dk_on_tpu():
+  """Test LSE backward dK kernel on TPU without interpret mode."""
   num_heads = 1
   num_tokens = 512
   vocab_size = 1024
@@ -852,7 +857,7 @@ def test_ce_backward_dk_on_tpu():
   fwd_mask_info, fwd_mask_fn = _process_mask(
     mask_obj, (block_size, block_size), is_dkv=False
   )
-  lse_kernel = _ce_forward(
+  lse_kernel = _lse_forward(
     fwd_mask_info=fwd_mask_info,
     q=q,
     k=k,
@@ -866,7 +871,7 @@ def test_ce_backward_dk_on_tpu():
     interpret=False,
   )
 
-  dk_kernel = _ce_backward_dk(
+  dk_kernel = _lse_backward_dk(
     q=q,
     k=k,
     d_lse_q=d_lse_q,
@@ -891,12 +896,12 @@ def test_ce_backward_dk_on_tpu():
 
 
 # =============================================================================
-# CE Custom VJP Tests (full differentiable wrapper)
+# LSE Custom VJP Tests (full differentiable wrapper)
 # =============================================================================
 
 
-def test_ce_custom_forward():
-  """Test _ce_custom forward pass computes correct LSE."""
+def test_lse_custom_forward():
+  """Test _lse_custom forward pass computes correct LSE."""
   num_heads = 1
   num_tokens = 256
   vocab_size = 512
@@ -929,7 +934,7 @@ def test_ce_custom_forward():
   dq_mask_info, _ = _process_mask(mask_obj, (block_size, block_size), is_dkv=False)
   dk_mask_info, _ = _process_mask(mask_obj, (block_size, block_size), is_dkv=True)
 
-  lse_kernel = _ce_custom(
+  lse_kernel = _lse_custom(
     fwd_mask_info=fwd_mask_info,
     dq_mask_info=dq_mask_info,
     dk_mask_info=dk_mask_info,
@@ -948,8 +953,8 @@ def test_ce_custom_forward():
   np.testing.assert_allclose(lse_kernel, lse_ref, rtol=1e-4, atol=1e-4)
 
 
-def test_ce_custom_gradients():
-  """Test _ce_custom gradients via jax.grad match reference."""
+def test_lse_custom_gradients():
+  """Test _lse_custom gradients via jax.grad match reference."""
   num_heads = 1
   num_tokens = 256
   vocab_size = 512
@@ -988,7 +993,7 @@ def test_ce_custom_gradients():
   dk_mask_info, _ = _process_mask(mask_obj, (block_size, block_size), is_dkv=True)
 
   def kernel_loss(q, k):
-    lse = _ce_custom(
+    lse = _lse_custom(
       fwd_mask_info=fwd_mask_info,
       dq_mask_info=dq_mask_info,
       dk_mask_info=dk_mask_info,
@@ -1020,8 +1025,8 @@ def test_ce_custom_gradients():
   not jax.devices()[0].platform == "tpu",
   reason="TPU test - skip on non-TPU platforms",
 )
-def test_ce_custom_gradients_on_tpu():
-  """Test _ce_custom gradients on TPU without interpret mode."""
+def test_lse_custom_gradients_on_tpu():
+  """Test _lse_custom gradients on TPU without interpret mode."""
   num_heads = 1
   num_tokens = 512
   vocab_size = 1024
@@ -1060,7 +1065,7 @@ def test_ce_custom_gradients_on_tpu():
   dk_mask_info, _ = _process_mask(mask_obj, (block_size, block_size), is_dkv=True)
 
   def kernel_loss(q, k):
-    lse = _ce_custom(
+    lse = _lse_custom(
       fwd_mask_info=fwd_mask_info,
       dq_mask_info=dq_mask_info,
       dk_mask_info=dk_mask_info,
@@ -1086,7 +1091,7 @@ def test_ce_custom_gradients_on_tpu():
 
 
 # =============================================================================
-# CEKernel and make_ce_kernel Tests
+# LSEKernel and make_lse_kernel Tests
 # =============================================================================
 
 
@@ -1094,8 +1099,8 @@ def test_ce_custom_gradients_on_tpu():
   not jax.devices()[0].platform == "tpu",
   reason="TPU test - skip on non-TPU platforms",
 )
-def test_ce_kernel_sharded_q_seq():
-  """Test CEKernel with q_seq sharding via shard_map."""
+def test_lse_kernel_sharded_q_seq():
+  """Test LSEKernel with q_seq sharding via shard_map."""
 
   num_heads = 1
   vocab_size = 2048
@@ -1134,7 +1139,7 @@ def test_ce_kernel_sharded_q_seq():
     block_kv=block_size,
     block_kv_compute=block_size,
   )
-  kernel = make_ce_kernel(
+  kernel = make_lse_kernel(
     mask_obj,
     block_sizes=block_sizes,
     is_mqa=False,
@@ -1182,8 +1187,8 @@ def test_ce_kernel_sharded_q_seq():
   np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)
 
 
-def test_make_ce_kernel_forward():
-  """Test make_ce_kernel factory and CEKernel forward pass."""
+def test_make_lse_kernel_forward():
+  """Test make_lse_kernel factory and LSEKernel forward pass."""
   num_heads = 1
   num_tokens = 256
   vocab_size = 512
@@ -1202,9 +1207,9 @@ def test_make_ce_kernel_forward():
   logits_masked = jnp.where(mask[None, None, :], logits, -1e10)
   lse_ref = jax.nn.logsumexp(logits_masked, axis=-1)
 
-  # Use make_ce_kernel factory
+  # Use make_lse_kernel factory
   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
-  kernel = make_ce_kernel(
+  kernel = make_lse_kernel(
     mask_obj,
     is_mqa=False,
     interpret=True,
@@ -1215,8 +1220,8 @@ def test_make_ce_kernel_forward():
   np.testing.assert_allclose(lse_kernel, lse_ref, rtol=1e-4, atol=1e-4)
 
 
-def test_make_ce_kernel_gradients():
-  """Test make_ce_kernel factory with gradients via jax.grad."""
+def test_make_lse_kernel_gradients():
+  """Test make_lse_kernel factory with gradients via jax.grad."""
   num_heads = 1
   num_tokens = 256
   vocab_size = 512
@@ -1240,9 +1245,9 @@ def test_make_ce_kernel_gradients():
   loss_ref = ref_loss(q, k)
   dq_ref, dk_ref = jax.grad(ref_loss, argnums=(0, 1))(q, k)
 
-  # Use make_ce_kernel factory
+  # Use make_lse_kernel factory
   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
-  kernel = make_ce_kernel(
+  kernel = make_lse_kernel(
     mask_obj,
     is_mqa=False,
     interpret=True,
@@ -1264,8 +1269,8 @@ def test_make_ce_kernel_gradients():
   not jax.devices()[0].platform == "tpu",
   reason="TPU test - skip on non-TPU platforms",
 )
-def test_make_ce_kernel_on_tpu():
-  """Test make_ce_kernel on TPU without interpret mode."""
+def test_make_lse_kernel_on_tpu():
+  """Test make_lse_kernel on TPU without interpret mode."""
   num_heads = 1
   num_tokens = 512
   vocab_size = 1024
@@ -1291,7 +1296,7 @@ def test_make_ce_kernel_on_tpu():
 
   # Kernel on TPU
   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
-  kernel = make_ce_kernel(
+  kernel = make_lse_kernel(
     mask_obj,
     is_mqa=False,
     interpret=False,  # Real TPU execution

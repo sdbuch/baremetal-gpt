@@ -12,7 +12,7 @@ from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_mask impo
   _ComputableMask,
 )
 
-from bmgpt.ce_mask import VocabMask
+from bmgpt.kernels.lse_mask import VocabMask
 from bmgpt.config import Config, DatasetConfig
 
 
