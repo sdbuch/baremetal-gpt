@@ -93,6 +93,7 @@ def main(config: Config):
 
   # Configure forward pass (attention kernels)
   def make_splash_kernel_wrapper(dataset: DatasetConfig):
+    return None
     if not dataset.use_splash:
       # None ends up calling jax-xla attention: see _attn
       return None
@@ -127,7 +128,7 @@ def main(config: Config):
       inputs, targets = microbatch
       outputs, _ = jax.vmap(
         partial(
-          _transformer, config, None, params, cache_params=cache_params
+          _transformer, config, train_attn_kernel, params, cache_params=cache_params
         )
       )(inputs, state.kv_cache)
       return softmax_cross_entropy(config, params.unemb, outputs, targets)
