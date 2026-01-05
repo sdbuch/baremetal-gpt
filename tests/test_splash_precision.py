@@ -183,6 +183,8 @@ def test_splash_attention_s_times_k_precision():
   # Signature: (fwd_mask_info, q, k, v, segment_ids, sinks, mask_value, is_mqa,
   #             block_sizes, residual_checkpoint_name, save_residuals,
   #             mask_function, attn_logits_soft_cap, interpret)
+  # When save_residuals=True, return is (out, (logsumexp,))
+  # When save_residuals=False, return is just out
   result = splash_attention_kernel._splash_attention_forward(  # type: ignore[call-overload]
     fwd_mask_info,
     q,
@@ -194,12 +196,14 @@ def test_splash_attention_s_times_k_precision():
     False,  # is_mqa
     block_sizes,
     None,  # residual_checkpoint_name
-    True,  # save_residuals (need this to get full return type with .o)
+    False,  # save_residuals=False returns just the output
     mask_fn,
     None,  # attn_logits_soft_cap
     interpret,
   )
-  s_times_k_splash = result.o
+  s_times_k_splash = (
+    result  # When save_residuals=False, result is just the output array
+  )
 
   # Compare
   max_abs_diff = jnp.max(jnp.abs(s_times_k_splash - s_times_k_ref))
