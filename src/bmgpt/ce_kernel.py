@@ -1213,7 +1213,6 @@ def _ce_backward_dq_kernel(
   # Inputs
   q_ref,
   k_ref,
-  # CE: removed v_ref, do_ref, di_ref
   q_segment_ids_ref,
   kv_segment_ids_ref,
   sinks_ref,
@@ -1231,7 +1230,6 @@ def _ce_backward_dq_kernel(
   attn_logits_soft_cap: float | None = None,
   q_layout: QKVLayout,
   k_layout: QKVLayout,
-  # CE: removed v_layout
   mask_function: MaskFunctionType | None,
 ):
   """CE backward dQ kernel: computes S @ K using pre-computed LSE.
@@ -1260,7 +1258,6 @@ def _ce_backward_dq_kernel(
     # We keep k possibly transposed, since it is RHS of dots.
     k = k_ref[...]
     logsumexp = jnp.expand_dims(logsumexp_ref[0], -1)
-    # CE: removed do, di loading
 
     qk_dims = NT_DIM_NUMBERS if k_layout == HEAD_DIM_MINOR else NN_DIM_NUMBERS
     qk_uncapped = lax.dot_general(q, k, qk_dims, preferred_element_type=float32)
@@ -1284,12 +1281,10 @@ def _ce_backward_dq_kernel(
       mask_function=mask_function,
     )
     p = jnp.exp(qk - logsumexp)
-    # CE: removed dp, ds Jacobian correction - use p directly
-    # CE: removed attn_logits_soft_cap gradient correction
 
     dq_dims = NN_DIM_NUMBERS if k_layout == HEAD_DIM_MINOR else NT_DIM_NUMBERS
     dq_scratch_ref[...] += lax.dot_general(
-      p.astype(k.dtype),  # CE: use p instead of ds
+      p.astype(k.dtype),
       k,
       dq_dims,
       preferred_element_type=jnp.float32,
@@ -1304,7 +1299,6 @@ def _ce_backward_dq_kernel(
 def _ce_backward_dq(
   q,
   k,
-  # CE: removed v, do, di
   segment_ids,
   sinks,
   logsumexp,
@@ -1317,7 +1311,6 @@ def _ce_backward_dq(
   attn_logits_soft_cap: float | None,
   q_layout: QKVLayout,
   k_layout: QKVLayout,
-  # CE: removed v_layout
   mask_function: MaskFunctionType | None,
   interpret: bool,
 ):
@@ -1423,17 +1416,13 @@ def _ce_backward_dq(
   logsumexp_spec = pl.BlockSpec((None, 1, bq), logsumexp_index_map)
   assert logsumexp.ndim == len(logsumexp_spec.block_shape)
 
-  # CE: removed do_spec, di_spec, di handling
-
   in_specs = [
     q_spec,
     k_spec,
-    # CE: removed v_spec
     q_segment_spec,
     kv_segment_spec,
     sinks_spec,
     logsumexp_spec,
-    # CE: removed do_spec, di_spec
   ]
   if mask_info.partial_mask_blocks is not None:
     in_specs.append(mask_spec)
@@ -1469,7 +1458,6 @@ def _ce_backward_dq(
     attn_logits_soft_cap=attn_logits_soft_cap,
     q_layout=q_layout,
     k_layout=k_layout,
-    # CE: removed v_layout
     mask_function=mask_function,
   )
   num_scalar_prefetch = 3
@@ -1507,12 +1495,10 @@ def _ce_backward_dq(
       mask_info.mask_next,
       q if q_layout == QKVLayout.HEAD_DIM_MINOR else q.swapaxes(-1, -2),
       k if k_layout == QKVLayout.HEAD_DIM_MINOR else k.swapaxes(-1, -2),
-      # CE: removed v
       q_segment_ids,
       kv_segment_ids,
       sinks,
       logsumexp,
-      # CE: removed do, di
       mask_info.partial_mask_blocks,
       q_sequence,
     )
