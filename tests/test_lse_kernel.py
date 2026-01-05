@@ -1187,6 +1187,107 @@ def test_lse_kernel_sharded_q_seq():
   np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)
 
 
+@pytest.mark.skipif(
+  not jax.devices()[0].platform == "tpu",
+  reason="TPU test - skip on non-TPU platforms",
+)
+def test_lse_kernel_memory_pressure():
+  """Test LSE kernel under memory pressure with large batch and vocab.
+
+  Uses BS=2M (2^21) tokens and V=128K (2^17) vocab size in q_seq sharded mode.
+  This stresses memory bandwidth and tests the kernel at production-like scale.
+  """
+  num_heads = 1
+  head_dim = 128
+  block_size = 512  # larger blocks for efficiency at scale
+
+  # Large scale: 2M tokens, 128K vocab
+  num_tokens = 2**21  # 2M = 2,097,152
+  vocab_size = 2**17  # 128K = 131,072
+  max_valid_id = vocab_size - 1024  # leave some padding tokens
+
+  # Get number of devices for sharding
+  q_seq_shards = len(jax.devices())
+
+  # Verify num_tokens is divisible by shards * block_size
+  assert num_tokens % (q_seq_shards * block_size) == 0, (
+    f"num_tokens={num_tokens} must be divisible by "
+    f"q_seq_shards={q_seq_shards} * block_size={block_size}"
+  )
+
+  key = jax.random.PRNGKey(999)
+  key_q, key_k = jax.random.split(key)
+
+  # Use bfloat16 for memory efficiency at scale
+  q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.bfloat16)
+  k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.bfloat16)
+
+  # Sharded kernel setup
+  mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
+  block_sizes = BlockSizes(
+    block_q=block_size,
+    block_kv=block_size,
+    block_kv_compute=block_size,
+  )
+  kernel = make_lse_kernel(
+    mask_obj,
+    block_sizes=block_sizes,
+    is_mqa=False,
+    head_shards=1,
+    q_seq_shards=q_seq_shards,
+    interpret=False,
+  )
+
+  # Create mesh and sharding
+  mesh = jax.make_mesh((q_seq_shards,), ("q_seq",), (jax.sharding.AxisType.Explicit,))
+  q_spec = jax.P(None, "q_seq", None)  # (heads, tokens, head_dim)
+  k_spec = jax.P(None, None, None)  # (heads, vocab, head_dim) - replicated
+  lse_spec = jax.P(None, "q_seq")  # (heads, tokens)
+
+  # Get kernel sharding spec
+  kernel_sharding = jax.sharding.NamedSharding(mesh, jax.P(None, "q_seq"))
+  kernel_spec = kernel.manual_sharding_spec(kernel_sharding)
+
+  @functools.partial(
+    jax.shard_map,
+    mesh=mesh,
+    in_specs=(kernel_spec, q_spec, k_spec),
+    out_specs=lse_spec,
+    check_vma=False,
+  )
+  def sharded_kernel(kernel, q, k):
+    return kernel(q, k)
+
+  def sharded_loss(q, k):
+    lse = sharded_kernel(kernel, q, k)
+    return lse.sum()
+
+  # Run forward and backward under memory pressure
+  with jax.set_mesh(mesh):
+    loss = sharded_loss(q, k)
+    dq, dk = jax.grad(sharded_loss, argnums=(0, 1))(q, k)
+
+  # Collect sharded arrays
+  dq = multihost_utils.process_allgather(dq, tiled=True)
+  dk = multihost_utils.process_allgather(dk, tiled=True)
+
+  # Basic sanity checks (no reference computation due to memory constraints)
+  assert jnp.isfinite(loss), f"Loss is not finite: {loss}"
+  assert jnp.all(jnp.isfinite(dq)), "dQ contains non-finite values"
+  assert jnp.all(jnp.isfinite(dk)), "dK contains non-finite values"
+
+  # Check shapes
+  assert dq.shape == q.shape, f"dQ shape mismatch: {dq.shape} vs {q.shape}"
+  assert dk.shape == k.shape, f"dK shape mismatch: {dk.shape} vs {k.shape}"
+
+  # Log memory stats for debugging
+  print("\nMemory pressure test completed:")
+  print(f"  num_tokens: {num_tokens:,} (2^{num_tokens.bit_length() - 1})")
+  print(f"  vocab_size: {vocab_size:,} (2^{vocab_size.bit_length() - 1})")
+  print(f"  q_seq_shards: {q_seq_shards}")
+  print(f"  loss: {float(loss):.6f}")
+
+
 def test_make_lse_kernel_forward():
   """Test make_lse_kernel factory and LSEKernel forward pass."""
   num_heads = 1
