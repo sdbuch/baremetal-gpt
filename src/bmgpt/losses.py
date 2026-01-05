@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 
 from bmgpt.config import Config
-from bmgpt.model import Transformer, transformer_variant_factory
+from bmgpt.model import ClassificationHead, LMHead, transformer_variant_factory
 
 """Loss functions for training and evaluation."""
 
@@ -17,14 +17,14 @@ from bmgpt.model import Transformer, transformer_variant_factory
 
 def softmax_cross_entropy(
   config: Config,
-  params: Transformer,
+  unembedding: LMHead | ClassificationHead,
   outputs: jax.Array,
   targets: jax.Array,
   kernel=None,
 ):
   """Optax-style cross entropy loss."""
   _, _, _, _unembedding = transformer_variant_factory(config)
-  logits = jax.remat(jax.vmap(partial(_unembedding, config, params.unemb)))(outputs)
+  logits = jax.remat(jax.vmap(partial(_unembedding, config, unembedding)))(outputs)
   label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
   lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
   return (lse - label_logits).mean()
@@ -32,7 +32,7 @@ def softmax_cross_entropy(
 
 def fused_softmax_cross_entropy(
   config: Config,
-  params: Transformer,
+  unembedding: LMHead | ClassificationHead,
   outputs: jax.Array,
   targets: jax.Array,
   kernel=None,
@@ -44,10 +44,11 @@ def fused_softmax_cross_entropy(
   # Fold batch and sequence dimensions and gather unembeddings
   b, s = outputs.shape[:2]
   outputs = outputs.reshape(b * s, -1, out_sharding=jax.P(*config.sharding.data))
-  w_unemb = jax.sharding.reshard(params.unemb.w, out_shardings=jax.P())
+  w_unemb = jax.sharding.reshard(unembedding.w, out_shardings=jax.P())
   # lse from splash_attention
-  _, _, _, _unembedding = transformer_variant_factory(config)
-  logits = jax.remat(_unembedding)(config, params.unemb, outputs)
-  label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
-  lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
-  return (lse - label_logits).mean()
+
+  # _, _, _, _unembedding = transformer_variant_factory(config)
+  # logits = jax.remat(_unembedding)(config, params.unemb, outputs)
+  # label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
+  # lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
+  # return (lse - label_logits).mean()
