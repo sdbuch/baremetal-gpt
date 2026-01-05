@@ -111,6 +111,7 @@ def make_splash_kernel(
     kv_spec = jax.P(None, None)
     out_specs = (q_spec, (q_spec,))  # (out, (lse,))
   else:
+    # No head/sequence sharding by default
     q_spec = jax.P(None, None)
     kv_spec = q_spec
     out_specs = q_spec
@@ -129,3 +130,41 @@ def make_splash_kernel(
     return kernel(q, k, v, segment_ids=segment_ids)
 
   return (splash_sharded, kernel)
+
+
+def forward_kernels_from_config(config: Config, mesh):
+  """Top-level wrapper for making the kernels we need for train.py"""
+  def make_splash_kernel_wrapper(dataset: DatasetConfig):
+    if not dataset.use_splash:
+      # None ends up calling jax-xla attention: see _attn
+      return None
+    splash_args = (config.model.is_causal, config.model.num_heads, dataset.seq_len)
+    return make_splash_kernel(*splash_args, 0, mesh)
+
+  train_attn_kernel = make_splash_kernel_wrapper(config.train_dataset)
+  num_toks = (
+    config.train_dataset.seq_len
+    * config.train_dataset.global_batch_size
+    // config.train_dataset.num_microbatches
+  )
+  if config.sharding.data and config.sharding.data[0]:
+    data_axis_name = config.sharding.data[0]
+    num_data_shards = config.sharding.mesh_shape[
+      config.sharding.mesh_axis_names.index(data_axis_name)
+    ]
+  else:
+    num_data_shards = 1
+  train_ce_kernel = make_splash_kernel(
+    False,
+    1,
+    num_toks,
+    config.model.num_vocab - num_toks,
+    mesh,
+    save_residuals=True,
+    q_seq_shards=num_data_shards,
+  )
+  val_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.val_list]
+  eval_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.eval_list]
+  assert len(val_kernels) == len(config.val_list)
+  assert len(eval_kernels) == len(config.eval_list)
+  return train_attn_kernel, train_ce_kernel, val_kernels, eval_kernels

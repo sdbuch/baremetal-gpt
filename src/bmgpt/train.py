@@ -8,11 +8,8 @@ import jax.numpy as jnp
 
 from bmgpt.config import (
   Config,
-  DatasetConfig,
   EvaluationConfig,
-  EvaluatorType,
   config_post_init,
-  forward_kernels_from_config,
   mesh_from_config,
   register_configs,
 )
@@ -28,12 +25,8 @@ from bmgpt.model import (
   init_transformer,
   model_spec,
 )
-from bmgpt.optimizers import (
-  grad_norm_and_clip,
-  init_adam_state,
-  opt_update_factory,
-)
-from bmgpt.splash_helpers import make_splash_kernel
+from bmgpt.optimizers import grad_norm_and_clip, init_adam_state, opt_update_factory
+from bmgpt.splash_helpers import forward_kernels_from_config
 
 register_configs()
 
