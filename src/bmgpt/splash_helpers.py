@@ -24,9 +24,6 @@ class FullMask(_ComputableMask):
     shard_count: int = 1,
   ):
     def full_mask_function(q_ids, kv_ids):
-      # When evaluating the mask in _process_mask we typically work with numpy
-      # array views.
-      # Avoid the addition when possible to avoid instantiating an actual array.
       return (q_ids >= kv_ids) | (kv_ids > q_ids)
 
     mask_function = full_mask_function
@@ -55,44 +52,94 @@ class FullMask(_ComputableMask):
     )
 
 
+class VocabMask(_ComputableMask):
+  """Mask that allows attention only to valid vocabulary tokens (with fused xent)"""
+
+  def __init__(
+    self,
+    shape: tuple[int, int],
+    max_valid_id: int,  # 128258 for DCLM
+    shard_count: int = 1,
+  ):
+    self.max_valid_id = max_valid_id
+
+    def vocab_mask_function(q_ids, kv_ids):
+      return kv_ids <= max_valid_id
+
+    super().__init__(
+      shape=shape,
+      mask_function=vocab_mask_function,
+      shard_count=shard_count,
+    )
+
+  def __eq__(self, other: object):
+    if not isinstance(other, type(self)):
+      return NotImplemented
+    return (
+      self.shape == other.shape
+      and self.max_valid_id == other.max_valid_id
+      and np.array_equal(self.q_sequence, other.q_sequence)
+    )
+
+  def __hash__(self):
+    return hash(
+      (
+        type(self),
+        self.shape,
+        self.max_valid_id,
+        self.q_sequence.tobytes() if self.q_sequence is not None else None,
+      )
+    )
+
+
 def make_splash_kernel(
-  is_causal: bool,
   num_heads: int,
-  seq_len: int,
+  q_seq_len: int,
   cache_capacity: int,
   mesh,
   save_residuals: bool = False,
-  data_sharding: list[str | None] = [None],
+  data_sharding: list[str | None] = [None],  # following only used if previous is True
   q_seq_shards: int = 1,
+  block_size: int = 128,
+  max_valid_id: int | None = None,
 ):
+  """Currently only supports two modes: causal transformer + fused xent"""
   # s is Q len (seq_len @ train; variable/1 at prefill/decode)
   # t is K len (s + cache_capacity)
   # NOTE: if save_residuals is True, assume we're doing fused cross entropy
-  s = seq_len
+  s = q_seq_len
   t = s + cache_capacity
 
   # mask
-  if is_causal:
+  if save_residuals:
+    # fused cross entropy
+    # BUG: a JAX bug means a simple full mask doesn't work!
+    # VocabMask is a workaround -- it *requires* the vocab to have unused tokens
+    # (so pad embeddings if necessary)
+    if not max_valid_id:
+      raise ValueError("max_valid_id needs to be set and >0 for save_residuals=True")
+    mask = MultiHeadMask(
+      [VocabMask(shape=(s, t), max_valid_id=max_valid_id) for _ in range(num_heads)]
+    )
+  else:
+    # attention
     mask = MultiHeadMask(
       [CausalMask(shape=(s, t), offset=cache_capacity) for _ in range(num_heads)]
     )
-  else:
-    mask = MultiHeadMask([FullMask(shape=(s, t)) for _ in range(num_heads)])
 
   # kernel
-  BLOCK_SIZE = min(seq_len, 128)
-  if seq_len % 128 != 0 or BLOCK_SIZE % 128 != 0:
+  if block_size % 128 != 0:
     # splash attention kernel requires block size to be a multiple of 128
     raise NotImplementedError("Splash block size needs to be a multiple of 128")
   block_sizes = BlockSizes(
-    block_q=BLOCK_SIZE,
-    block_kv=BLOCK_SIZE,
-    block_kv_compute=BLOCK_SIZE,
-    block_q_dkv=BLOCK_SIZE,
-    block_kv_dkv=BLOCK_SIZE,
-    block_kv_dkv_compute=BLOCK_SIZE,
-    block_q_dq=BLOCK_SIZE,
-    block_kv_dq=BLOCK_SIZE,
+    block_q=block_size,
+    block_kv=block_size,
+    block_kv_compute=block_size,
+    block_q_dkv=block_size,
+    block_kv_dkv=block_size,
+    block_kv_dkv_compute=block_size,
+    block_q_dq=block_size,
+    block_kv_dq=block_size,
   )
   kernel = make_splash_mha(
     mask,
@@ -134,14 +181,17 @@ def make_splash_kernel(
 
 def forward_kernels_from_config(config: Config, mesh):
   """Top-level wrapper for making the kernels we need for train.py"""
+
   def make_splash_kernel_wrapper(dataset: DatasetConfig):
     if not dataset.use_splash:
       # None ends up calling jax-xla attention: see _attn
       return None
-    splash_args = (config.model.is_causal, config.model.num_heads, dataset.seq_len)
+    splash_args = (config.model.num_heads, dataset.seq_len)
     return make_splash_kernel(*splash_args, 0, mesh)
 
+  # model splash attention kernel
   train_attn_kernel = make_splash_kernel_wrapper(config.train_dataset)
+  # fused cross entropy loss kernel (via attn!)
   num_toks = (
     config.train_dataset.seq_len
     * config.train_dataset.global_batch_size
@@ -154,15 +204,16 @@ def forward_kernels_from_config(config: Config, mesh):
     ]
   else:
     num_data_shards = 1
+  ce_kernel_kwargs = {
+    "save_residuals": True,
+    "q_seq_shards": num_data_shards,
+    "block_size": 512,
+    "max_valid_id": config.train_dataset.max_valid_token_id,
+  }
   train_ce_kernel = make_splash_kernel(
-    False,
-    1,
-    num_toks,
-    config.model.num_vocab - num_toks,
-    mesh,
-    save_residuals=True,
-    q_seq_shards=num_data_shards,
+    1, num_toks, config.model.num_vocab - num_toks, mesh, **ce_kernel_kwargs
   )
+  # val and test splash attention kernels
   val_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.val_list]
   eval_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.eval_list]
   assert len(val_kernels) == len(config.val_list)
