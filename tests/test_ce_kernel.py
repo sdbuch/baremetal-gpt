@@ -1096,18 +1096,17 @@ def test_ce_kernel_sharded_q_seq():
   from jax.experimental.shard_map import shard_map
 
   num_heads = 1
-  num_tokens = 1024  # Must be divisible by q_seq_shards * block_size
   vocab_size = 2048
   head_dim = 128
   max_valid_id = 2000
+  block_size = 128
 
   # Get number of devices for sharding
   q_seq_shards = len(jax.devices())
 
-  # Ensure num_tokens is divisible by q_seq_shards
-  assert num_tokens % q_seq_shards == 0, (
-    f"{num_tokens=} must be divisible by {q_seq_shards=}"
-  )
+  # num_tokens must be divisible by q_seq_shards * block_size
+  # so each shard gets at least one full block
+  num_tokens = q_seq_shards * block_size
 
   key = jax.random.PRNGKey(789)
   key_q, key_k = jax.random.split(key)
@@ -1128,8 +1127,14 @@ def test_ce_kernel_sharded_q_seq():
 
   # Sharded kernel
   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
+  block_sizes = BlockSizes(
+    block_q=block_size,
+    block_kv=block_size,
+    block_kv_compute=block_size,
+  )
   kernel = make_ce_kernel(
     mask_obj,
+    block_sizes=block_sizes,
     is_mqa=False,
     head_shards=1,
     q_seq_shards=q_seq_shards,
