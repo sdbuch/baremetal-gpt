@@ -1,3 +1,5 @@
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 
@@ -22,7 +24,7 @@ def softmax_cross_entropy(
 ):
   """Optax-style cross entropy loss."""
   _, _, _, _unembedding = transformer_variant_factory(config)
-  logits = jax.remat(_unembedding)(config, params.unemb, outputs)
+  logits = jax.remat(jax.vmap(partial(_unembedding, config, params.unemb)))(outputs)
   label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
   lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
   return (lse - label_logits).mean()
