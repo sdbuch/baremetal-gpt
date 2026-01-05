@@ -490,7 +490,7 @@ def _transformer(
   cache: jax.Array,
   cache_params: CacheParams,
 ):
-  _, _, _embedding, _ = transformer_variant_factory(config)
+  _, _, _embedding, _unembedding = transformer_variant_factory(config)
   x_seq = _embedding(config, params.emb, tokens)
 
   @partial(jax.remat, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)
@@ -499,6 +499,8 @@ def _transformer(
     return _block(config, shard_mapped__kernel, params, x_seq, cache_in, cache_params)
 
   out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache))
+
+  out = jax.remat(_unembedding)(config, params.unemb, out)
 
   return out, cache_out
 

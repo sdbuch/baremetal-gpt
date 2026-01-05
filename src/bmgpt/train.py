@@ -66,7 +66,6 @@ def main(config: Config):
   try:
     # Launch distributed and register configs
     jax.distributed.initialize()
-    print('distributed initialized')
     jax.tree_util.register_static(type(config))
   except RuntimeError:
     # This implies the distributed backend has already been initialized
@@ -74,8 +73,6 @@ def main(config: Config):
   config_post_init(config)
   mesh = mesh_from_config(config)
   Logger = logger_factory(config.logger_type)
-
-  print('init done')
 
   # Randomness
   key = jax.random.key(config.seed)
@@ -89,11 +86,8 @@ def main(config: Config):
     train_state = init_train_state(key_model, config)
   cache_params = CacheParams(enabled=False, size=0)
 
-  print('mesh done')
-
   # Configure forward pass (attention kernels)
   def make_splash_kernel_wrapper(dataset: DatasetConfig):
-    return None
     if not dataset.use_splash:
       # None ends up calling jax-xla attention: see _attn
       return None
@@ -112,26 +106,28 @@ def main(config: Config):
   assert len(val_kernels) == len(config.val_list)
   assert len(eval_kernels) == len(config.eval_list)
 
-  print('kernels done')
-
   # Configure optimization
   spec = model_spec(train_state.params)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
   opt_update = opt_update_factory(config.optimizer.type)
   opt_update = partial(opt_update, config, weight_decay_mask)
 
-  print('config done')
-
   @partial(jax.jit, donate_argnums=2)
   def train_step(config: Config, batch, state: TrainState):
     def loss_fn(params: Transformer, microbatch: tuple[jax.Array, jax.Array]):
       inputs, targets = microbatch
-      outputs, _ = jax.vmap(
+      logits, _ = jax.vmap(
         partial(
           _transformer, config, train_attn_kernel, params, cache_params=cache_params
         )
       )(inputs, state.kv_cache)
-      return softmax_cross_entropy(config, params.unemb, outputs, targets)
+      # return softmax_cross_entropy(config, params.unemb, outputs, targets)
+    def cross_entropy(logits, targets):
+      label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
+      lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
+      return (lse - label_logits).mean()
+
+    return cross_entropy(logits, targets)
 
     # Calculate gradients: use a scan for gradient accumulation
     def gradient_accum(loss__grad, microbatch):
@@ -202,5 +198,4 @@ def eval_loop(
 
 
 if __name__ == "__main__":
-  print('main entry')
   main()
