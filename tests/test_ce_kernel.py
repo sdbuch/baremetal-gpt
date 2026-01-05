@@ -1174,8 +1174,8 @@ def test_ce_kernel_sharded_q_seq():
     dq_kernel, dk_kernel = jax.grad(sharded_loss, argnums=(0, 1))(q, k)
 
   # Use process_allgather to collect sharded arrays in multi-host setup
-  dq_kernel = multihost_utils.process_allgather(dq_kernel)
-  dk_kernel = multihost_utils.process_allgather(dk_kernel)
+  dq_kernel = multihost_utils.process_allgather(dq_kernel, tiled=True)
+  dk_kernel = multihost_utils.process_allgather(dk_kernel, tiled=True)
 
   np.testing.assert_allclose(loss_kernel, loss_ref, rtol=1e-4, atol=1e-4)
   np.testing.assert_allclose(dq_kernel, dq_ref, rtol=2e-2, atol=2e-2)
