@@ -66,6 +66,7 @@ def main(config: Config):
   try:
     # Launch distributed and register configs
     jax.distributed.initialize()
+    print('distributed initialized')
     jax.tree_util.register_static(type(config))
   except RuntimeError:
     # This implies the distributed backend has already been initialized
