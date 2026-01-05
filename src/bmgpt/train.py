@@ -100,10 +100,13 @@ def main(config: Config):
           _transformer, config, train_attn_kernel, params, cache_params=cache_params
         )
       )(inputs, state.kv_cache)
-      return fused_softmax_cross_entropy(
-        config, params.unemb, outputs, targets, train_lse_kernel
-      )
-      # return softmax_cross_entropy(config, params.unemb, outputs, targets)
+      if config.used_fused_xent_loss:
+        loss = fused_softmax_cross_entropy(
+          config, params.unemb, outputs, targets, train_lse_kernel
+        )
+      else:
+        loss = softmax_cross_entropy(config, params.unemb, outputs, targets)
+      return loss
 
     # Calculate gradients: use a scan for gradient accumulation
     def gradient_accum(loss__grad, microbatch):
@@ -116,7 +119,6 @@ def main(config: Config):
     loss = loss / config.train_dataset.num_microbatches
     grad = jax.tree.map(lambda x: x / config.train_dataset.num_microbatches, grad)
 
-    # loss, grad = jax.value_and_grad(loss_fn)(state.params)
     # Update parameters
     grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
     update_tree = jax.tree.map(opt_update, state.params, grad_clipped, state.opt_state)
