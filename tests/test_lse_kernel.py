@@ -1211,19 +1211,34 @@ def test_lse_kernel_memory_pressure():
   # Get number of devices for sharding
   q_seq_shards = len(jax.devices())
 
+  # First, verify naive JAX implementation OOMs at this scale
+  key = jax.random.PRNGKey(999)
+  key_q, key_k = jax.random.split(key)
+  q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.bfloat16)
+  k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.bfloat16)
+
+  @jax.jit
+  def naive_lse(q, k):
+    """Naive LSE that materializes full logits matrix - should OOM."""
+    logits = jnp.einsum("hsd,htd->hst", q, k)  # 8M x 128K = 1T elements!
+    return jax.nn.logsumexp(logits, axis=-1).sum()
+
+  try:
+    _ = naive_lse(q, k).block_until_ready()
+    naive_oom = False
+  except Exception as e:
+    naive_oom = True
+    print(f"\nNaive LSE OOM as expected: {type(e).__name__}")
+
+  assert naive_oom, "Naive LSE should OOM at 8M x 128K scale but didn't!"
+
   # Verify num_tokens is divisible by shards * block_size
   assert num_tokens % (q_seq_shards * block_size) == 0, (
     f"num_tokens={num_tokens} must be divisible by "
     f"q_seq_shards={q_seq_shards} * block_size={block_size}"
   )
 
-  key = jax.random.PRNGKey(999)
-  key_q, key_k = jax.random.split(key)
-
-  # Use bfloat16 for memory efficiency at scale
-  q = jax.random.normal(key_q, (num_heads, num_tokens, head_dim), dtype=jnp.bfloat16)
-  k = jax.random.normal(key_k, (num_heads, vocab_size, head_dim), dtype=jnp.bfloat16)
-
+  # Now test that our kernel handles this scale (reuse q, k from above)
   # Sharded kernel setup
   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
   block_sizes = BlockSizes(
