@@ -43,7 +43,12 @@ module-name = "bmgpt"
 bmgpt = { path = ".", editable = true }
 
 [tool.ty.src]
-exclude = ["tests"]
+exclude = [
+    "tests",
+    "src/bmgpt/ce_kernel.py",
+    "src/bmgpt/ce_mask.py",
+    "src/bmgpt/ce_mask_info.py",
+]
 
 [tool.ruff]
 line-length = 88
