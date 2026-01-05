@@ -488,6 +488,56 @@ class LocalMask(_ComputableMask):
     )
 
 
+class VocabMask(_ComputableMask):
+  """Mask for CE kernel - masks out padding vocab tokens beyond max_valid_id.
+
+  This mask allows attention only to valid vocabulary tokens, used with fused
+  cross-entropy to handle padded vocabularies (e.g., vocab padded to power of 2).
+
+  Attributes:
+    max_valid_id: Maximum valid vocabulary token ID (inclusive). Tokens with
+      IDs > max_valid_id will be masked out.
+  """
+
+  max_valid_id: int
+
+  def __init__(
+    self,
+    shape: tuple[int, int],
+    max_valid_id: int,
+    shard_count: int = 1,
+  ):
+    self.max_valid_id = max_valid_id
+
+    def vocab_mask_function(q_ids, kv_ids):
+      return kv_ids <= max_valid_id
+
+    super().__init__(
+      shape=shape,
+      mask_function=vocab_mask_function,
+      shard_count=shard_count,
+    )
+
+  def __eq__(self, other: object):
+    if not isinstance(other, type(self)):
+      return NotImplemented
+    return (
+      self.shape == other.shape
+      and self.max_valid_id == other.max_valid_id
+      and np.array_equal(self.q_sequence, other.q_sequence)
+    )
+
+  def __hash__(self):
+    return hash(
+      (
+        type(self),
+        self.shape,
+        self.max_valid_id,
+        self.q_sequence.tobytes() if self.q_sequence is not None else None,
+      )
+    )
+
+
 @dataclasses.dataclass
 class NumpyMask(Mask):
   """A mask backed by a dense numpy array."""

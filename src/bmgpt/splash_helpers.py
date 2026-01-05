@@ -12,6 +12,7 @@ from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_mask impo
   _ComputableMask,
 )
 
+from bmgpt.ce_mask import VocabMask
 from bmgpt.config import Config, DatasetConfig
 
 
@@ -47,46 +48,6 @@ class FullMask(_ComputableMask):
       (
         type(self),
         self.shape,
-        self.q_sequence.tobytes() if self.q_sequence is not None else None,
-      )
-    )
-
-
-class VocabMask(_ComputableMask):
-  """Mask that allows attention only to valid vocabulary tokens (with fused xent)"""
-
-  def __init__(
-    self,
-    shape: tuple[int, int],
-    max_valid_id: int,  # 128258 for DCLM
-    shard_count: int = 1,
-  ):
-    self.max_valid_id = max_valid_id
-
-    def vocab_mask_function(q_ids, kv_ids):
-      return kv_ids <= max_valid_id
-
-    super().__init__(
-      shape=shape,
-      mask_function=vocab_mask_function,
-      shard_count=shard_count,
-    )
-
-  def __eq__(self, other: object):
-    if not isinstance(other, type(self)):
-      return NotImplemented
-    return (
-      self.shape == other.shape
-      and self.max_valid_id == other.max_valid_id
-      and np.array_equal(self.q_sequence, other.q_sequence)
-    )
-
-  def __hash__(self):
-    return hash(
-      (
-        type(self),
-        self.shape,
-        self.max_valid_id,
         self.q_sequence.tobytes() if self.q_sequence is not None else None,
       )
     )
