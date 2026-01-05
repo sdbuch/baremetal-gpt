@@ -1143,32 +1143,28 @@ def test_ce_kernel_sharded_q_seq():
     interpret=False,
   )
 
-  # Create mesh and sharding (use Explicit axis type for shard_map)
+  # Create mesh and sharding (match splash_helpers pattern)
   mesh = jax.sharding.Mesh(jax.devices(), ("q_seq",), axis_types=(AxisType.Explicit,))
-  q_spec = jax.sharding.PartitionSpec(None, "q_seq", None)  # (heads, tokens, head_dim)
-  k_spec = jax.sharding.PartitionSpec(
-    None, None, None
-  )  # (heads, vocab, head_dim) - replicated
-  lse_spec = jax.sharding.PartitionSpec(None, "q_seq")  # (heads, tokens)
+  q_spec = jax.P(None, "q_seq", None)  # (heads, tokens, head_dim)
+  k_spec = jax.P(None, None, None)  # (heads, vocab, head_dim) - replicated
+  lse_spec = jax.P(None, "q_seq")  # (heads, tokens)
 
   # Get kernel sharding spec
-  kernel_sharding = jax.sharding.NamedSharding(
-    mesh, jax.sharding.PartitionSpec(None, "q_seq")
-  )
+  kernel_sharding = jax.sharding.NamedSharding(mesh, jax.P(None, "q_seq"))
   kernel_spec = kernel.manual_sharding_spec(kernel_sharding)
 
-  @jax.jit
-  def sharded_loss(q, k):
-    @functools.partial(
-      shard_map,
-      mesh=mesh,
-      in_specs=(kernel_spec, q_spec, k_spec),
-      out_specs=lse_spec,
-      check_vma=False,
-    )
-    def sharded_kernel(kernel, q, k):
-      return kernel(q, k)
+  # shard_mapped kernel (following splash_helpers pattern)
+  @functools.partial(
+    jax.shard_map,
+    mesh=mesh,
+    in_specs=(kernel_spec, q_spec, k_spec),
+    out_specs=lse_spec,
+    check_vma=False,
+  )
+  def sharded_kernel(kernel, q, k):
+    return kernel(q, k)
 
+  def sharded_loss(q, k):
     lse = sharded_kernel(kernel, q, k)
     return lse.sum()
 
