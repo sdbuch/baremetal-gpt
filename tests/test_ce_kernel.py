@@ -6,6 +6,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from jax.experimental import multihost_utils
+from jax import shard_map
+from jax.sharding import AxisType
 
 from bmgpt.ce_kernel import (
   BlockSizes,
@@ -1093,7 +1096,6 @@ def test_ce_custom_gradients_on_tpu():
 )
 def test_ce_kernel_sharded_q_seq():
   """Test CEKernel with q_seq sharding via shard_map."""
-  from jax.experimental.shard_map import shard_map
 
   num_heads = 1
   vocab_size = 2048
@@ -1141,8 +1143,8 @@ def test_ce_kernel_sharded_q_seq():
     interpret=False,
   )
 
-  # Create mesh and sharding
-  mesh = jax.sharding.Mesh(jax.devices(), ("q_seq",))
+  # Create mesh and sharding (use Explicit axis type for shard_map)
+  mesh = jax.sharding.Mesh(jax.devices(), ("q_seq",), axis_types=(AxisType.Explicit,))
   q_spec = jax.sharding.PartitionSpec(None, "q_seq", None)  # (heads, tokens, head_dim)
   k_spec = jax.sharding.PartitionSpec(
     None, None, None
@@ -1162,7 +1164,7 @@ def test_ce_kernel_sharded_q_seq():
       mesh=mesh,
       in_specs=(kernel_spec, q_spec, k_spec),
       out_specs=lse_spec,
-      check_rep=False,
+      check_vma=False,
     )
     def sharded_kernel(kernel, q, k):
       return kernel(q, k)
@@ -1172,6 +1174,11 @@ def test_ce_kernel_sharded_q_seq():
 
   loss_kernel = sharded_loss(q, k)
   dq_kernel, dk_kernel = jax.grad(sharded_loss, argnums=(0, 1))(q, k)
+
+  # Use process_allgather to collect sharded arrays in multi-host setup
+
+  dq_kernel = multihost_utils.process_allgather(dq_kernel)
+  dk_kernel = multihost_utils.process_allgather(dk_kernel)
 
   np.testing.assert_allclose(loss_kernel, loss_ref, rtol=1e-4, atol=1e-4)
   np.testing.assert_allclose(dq_kernel, dq_ref, rtol=2e-2, atol=2e-2)
