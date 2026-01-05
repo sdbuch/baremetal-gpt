@@ -6,6 +6,8 @@ import jax.numpy as jnp
 from hydra.core.config_store import ConfigStore
 from omegaconf import MISSING
 
+from bmgpt.splash_helpers import make_splash_kernel
+
 
 class DType(Enum):
   """Different data types we can use. models.py"""
@@ -187,7 +189,7 @@ class ShardingConfig:
   wup: list[str | None] = MISSING  # D x F
   wdown: list[str | None] = MISSING  # F x D
   wemb: list[str | None] = MISSING  # V x D
-  wunemb: list[str | None] = MISSING # D x V
+  wunemb: list[str | None] = MISSING  # D x V
   # Activation sharding specs
   data: list[str | None] = MISSING  # M (accum_steps x micro_bs = global_bs)
   mlp_hidden: list[str | None] = MISSING  # F
@@ -231,6 +233,43 @@ def mesh_from_config(config: Config):
     len(config.sharding.mesh_shape) * (jax.sharding.AxisType.Explicit,),
   )
   return mesh
+
+
+def forward_kernels_from_config(config: Config, mesh):
+  def make_splash_kernel_wrapper(dataset: DatasetConfig):
+    if not dataset.use_splash:
+      # None ends up calling jax-xla attention: see _attn
+      return None
+    splash_args = (config.model.is_causal, config.model.num_heads, dataset.seq_len)
+    return make_splash_kernel(*splash_args, 0, mesh)
+
+  train_attn_kernel = make_splash_kernel_wrapper(config.train_dataset)
+  num_toks = (
+    config.train_dataset.seq_len
+    * config.train_dataset.global_batch_size
+    // config.train_dataset.num_microbatches
+  )
+  if config.sharding.data and config.sharding.data[0]:
+    data_axis_name = config.sharding.data[0]
+    num_data_shards = config.sharding.mesh_shape[
+      config.sharding.mesh_axis_names.index(data_axis_name)
+    ]
+  else:
+    num_data_shards = 1
+  train_ce_kernel = make_splash_kernel(
+    False,
+    1,
+    num_toks,
+    config.model.num_vocab - num_toks,
+    mesh,
+    save_residuals=True,
+    q_seq_shards=num_data_shards,
+  )
+  val_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.val_list]
+  eval_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.eval_list]
+  assert len(val_kernels) == len(config.val_list)
+  assert len(eval_kernels) == len(config.eval_list)
+  return train_attn_kernel, train_ce_kernel, val_kernels, eval_kernels
 
 
 def config_post_init(config: Config):

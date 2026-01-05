@@ -62,18 +62,24 @@ def make_splash_kernel(
   cache_capacity: int,
   mesh,
   save_residuals: bool = False,
+  data_sharding: list[str | None] = [None],
+  q_seq_shards: int = 1,
 ):
   # s is Q len (seq_len @ train; variable/1 at prefill/decode)
   # t is K len (s + cache_capacity)
+  # NOTE: if save_residuals is True, assume we're doing fused cross entropy
   s = seq_len
   t = s + cache_capacity
 
+  # mask
   if is_causal:
     mask = MultiHeadMask(
       [CausalMask(shape=(s, t), offset=cache_capacity) for _ in range(num_heads)]
     )
   else:
     mask = MultiHeadMask([FullMask(shape=(s, t)) for _ in range(num_heads)])
+
+  # kernel
   BLOCK_SIZE = min(seq_len, 128)
   if seq_len % 128 != 0 or BLOCK_SIZE % 128 != 0:
     # splash attention kernel requires block size to be a multiple of 128
@@ -88,25 +94,34 @@ def make_splash_kernel(
     block_q_dq=BLOCK_SIZE,
     block_kv_dq=BLOCK_SIZE,
   )
-  splash_spec = jax.P(None, None)  # qkv are N x S x H
-  splash_sharding = jax.sharding.NamedSharding(mesh, splash_spec)
   kernel = make_splash_mha(
     mask,
     head_shards=1,
-    q_seq_shards=1,
+    q_seq_shards=q_seq_shards,
     block_sizes=block_sizes,
     save_residuals=save_residuals,
   )
-  kernel_spec = kernel.manual_sharding_spec(splash_sharding)
-  if save_residuals:
-    out_specs = (splash_spec, (jax.P(),))  # (out, (lse,))
-  else:
-    out_specs = splash_spec
 
+  # sharding: can shard q_seq_len and head_dim, kv_seq_len cannot
+  # q is N x S x H
+  # k is N x T x H
+  # v is N x T x H'
+  if save_residuals:
+    q_spec = jax.P(None, *data_sharding)
+    kv_spec = jax.P(None, None)
+    out_specs = (q_spec, (q_spec,))  # (out, (lse,))
+  else:
+    q_spec = jax.P(None, None)
+    kv_spec = q_spec
+    out_specs = q_spec
+  splash_sharding = jax.sharding.NamedSharding(mesh, q_spec)
+  kernel_spec = kernel.manual_sharding_spec(splash_sharding)
+
+  # shard_mapped kernel
   @partial(
     jax.shard_map,
     mesh=mesh,
-    in_specs=(kernel_spec, splash_spec, splash_spec, splash_spec, jax.P()),
+    in_specs=(kernel_spec, q_spec, kv_spec, kv_spec, jax.P()),
     out_specs=out_specs,
     check_vma=False,
   )

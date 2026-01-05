@@ -12,6 +12,7 @@ from bmgpt.config import (
   EvaluationConfig,
   EvaluatorType,
   config_post_init,
+  forward_kernels_from_config,
   mesh_from_config,
   register_configs,
 )
@@ -87,26 +88,9 @@ def main(config: Config):
   cache_params = CacheParams(enabled=False, size=0)
 
   # Configure forward pass (attention kernels)
-  def make_splash_kernel_wrapper(dataset: DatasetConfig):
-    if not dataset.use_splash:
-      # None ends up calling jax-xla attention: see _attn
-      return None
-    splash_args = (config.model.is_causal, config.model.num_heads, dataset.seq_len)
-    return make_splash_kernel(*splash_args, 0, mesh)
-
-  train_attn_kernel = make_splash_kernel_wrapper(config.train_dataset)
-  # num_toks = (
-  #   config.train_dataset.seq_len
-  #   * config.train_dataset.global_batch_size
-  #   // config.train_dataset.num_microbatches
-  # )
-  train_ce_kernel = make_splash_kernel(
-    False, 1, 2048, 0, mesh, save_residuals=False
+  train_attn_kernel, train_ce_kernel, val_kernels, eval_kernels = (
+    forward_kernels_from_config(config, mesh)
   )
-  val_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.val_list]
-  eval_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.eval_list]
-  assert len(val_kernels) == len(config.val_list)
-  assert len(eval_kernels) == len(config.eval_list)
 
   # Configure optimization
   spec = model_spec(train_state.params)
