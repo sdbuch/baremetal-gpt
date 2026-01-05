@@ -98,7 +98,7 @@ def get_kernel_name(
   phase: str,
 ) -> str:
   """Returns a unique name for all SplashAttention kernel variants."""
-  assert phase in ("dq", "dkv", "fwd", "ce_fwd", "ce_dq")
+  assert phase in ("dq", "dkv", "fwd", "ce_fwd", "ce_dq", "ce_dk")
   # Saving residuals is supported only for the fwd and ce_fwd phases.
   assert not save_residuals or phase in ("fwd", "ce_fwd")
   residuals = ""
@@ -1505,7 +1505,7 @@ def _ce_backward_dq(
   return dq
 
 
-def _flash_attention_dkv_kernel(
+def _ce_backward_dk_kernel(
   # Prefetched inputs
   data_next_ref,
   block_mask_ref,
@@ -1513,22 +1513,15 @@ def _flash_attention_dkv_kernel(
   # Inputs
   q_ref,
   k_ref,
-  v_ref,
   q_segment_ids_ref,
   kv_segment_ids_ref,
   sinks_ref,
   logsumexp_ref,
-  do_ref,
-  di_ref,
   mask_ref,
   q_sequence_ref,
   # Outputs
-  dq_scratch_ref,
   dk_scratch_ref,
-  dv_scratch_ref,
-  dq_ref,
   dk_ref,
-  dv_ref,
   *,
   num_q_heads: int,
   num_kv_heads: int,
@@ -1540,10 +1533,15 @@ def _flash_attention_dkv_kernel(
   attn_logits_soft_cap: float | None,
   q_layout: QKVLayout,
   k_layout: QKVLayout,
-  v_layout: QKVLayout,
   bkv: int,
   mask_function: MaskFunctionType | None,
 ):
+  """CE backward dK kernel: computes S^T @ Q using pre-computed LSE.
+
+  This is a simplified version of _flash_attention_dkv_kernel that computes
+  dK = softmax(Q @ K^T)^T @ Q directly, without the Jacobian correction term
+  needed for attention backward (no V, dO, or di inputs, no dV or dQ outputs).
+  """
   del sinks_ref  # potentially fuse dsinks computation into the kernel later
   HEAD_DIM_MINOR = QKVLayout.HEAD_DIM_MINOR
   kv_index, q_head_index, q_index = (
@@ -1578,7 +1576,6 @@ def _flash_attention_dkv_kernel(
   @pl.when(should_initialize)
   def init():
     dk_scratch_ref[...] = jnp.zeros_like(dk_scratch_ref)
-    dv_scratch_ref[...] = jnp.zeros_like(dv_scratch_ref)
 
   _, _, should_run, should_not_mask = _next_nonzero(
     q_head_index,
@@ -1594,16 +1591,13 @@ def _flash_attention_dkv_kernel(
     slice_k = pl.ds(i * bkv_compute, bkv_compute)
     q = q_ref[...]  # We keep q potentially transposed, since it's always RHS
 
-    def _load_kv(ref, layout):
+    def _load_k(ref, layout):
       if layout == HEAD_DIM_MINOR:
         return ref[slice_k, :]
       return ref[:, slice_k].T
 
-    k = _load_kv(k_ref, k_layout)
-    v = _load_kv(v_ref, v_layout)
+    k = _load_k(k_ref, k_layout)
     logsumexp = logsumexp_ref[:1, :]
-    do = do_ref[...]
-    di = di_ref[:1, :]
 
     qk_dims = NT_DIM_NUMBERS if q_layout == HEAD_DIM_MINOR else NN_DIM_NUMBERS
     qk_uncapped = lax.dot_general(k, q, qk_dims, preferred_element_type=jnp.float32)
@@ -1623,57 +1617,22 @@ def _flash_attention_dkv_kernel(
       k_in_lanes=False,
       mask_function=mask_function,
     )
+    # Note: qk = K @ Q^T = (Q @ K^T)^T, so p = exp(qk - lse) is S^T (transposed softmax)
     p = jnp.exp(qk - logsumexp)
-    dv = lax.dot(p.astype(do.dtype), do, preferred_element_type=jnp.float32)
-    dv = dv.astype(dv_scratch_ref.dtype) + dv_scratch_ref[slice_k, :]
-    dv_scratch_ref[slice_k, :] = dv
 
-    dp = lax.dot_general(
-      v,
-      do,
-      NT_DIM_NUMBERS,
-      preferred_element_type=jnp.float32,
-    )
-    ds = (dp - di) * p
-    if attn_logits_soft_cap is not None:
-      normalized = qk_uncapped / attn_logits_soft_cap
-      d = jnp.tanh(normalized)
-      g = ds * (1 - d)
-      ds = g + g * d
+    # CE simplification: dk = S^T @ Q directly (no Jacobian correction)
+    # p is S^T block (bkv_compute, bq), q is (bq, head_dim), result is (bkv_compute, head_dim)
     dk_dims = NN_DIM_NUMBERS if q_layout == HEAD_DIM_MINOR else NT_DIM_NUMBERS
     dk = lax.dot_general(
-      ds.astype(do.dtype), q, dk_dims, preferred_element_type=jnp.float32
+      p.astype(q.dtype), q, dk_dims, preferred_element_type=jnp.float32
     )
     dk = dk.astype(dk_scratch_ref.dtype) + dk_scratch_ref[slice_k, :]
     dk_scratch_ref[slice_k, :] = dk
-    if dq_scratch_ref is not None or dq_ref is not None:
-      dq = lax.dot_general(
-        ds.T.astype(k.dtype),
-        k,
-        NN_DIM_NUMBERS,
-        preferred_element_type=jnp.float32,
-      )
-      if dq_scratch_ref is not None:
-        # Compute block size != memory block size
-        dq_scratch_ref[...] += dq
-      else:
-        # Compute block size == memory block size
-        assert dq_ref is not None
-        dq_ref[...] = dq.astype(dq_ref.dtype)
-
-  if dq_scratch_ref is not None:
-    dq_scratch_ref[...] = jnp.zeros_like(dq_scratch_ref)
-  elif dq_scratch_ref is None and dq_ref is not None:
-    dq_ref[...] = jnp.zeros_like(dq_ref)
 
   @pl.when(should_run)
   def run():
     num_iters = k_ref.shape[0 if k_layout is HEAD_DIM_MINOR else 1] // bkv_compute
     lax.fori_loop(0, num_iters, body, None, unroll=True)
-
-  if dq_scratch_ref is not None:
-    assert dq_ref is not None
-    dq_ref[...] = dq_scratch_ref[...].astype(dq_ref.dtype)
 
   should_write = q_index == grid_width - 1
   if is_mqa:
@@ -1686,23 +1645,15 @@ def _flash_attention_dkv_kernel(
   @pl.when(should_write)
   def end():
     dk_ref[...] = dk_scratch_ref[...].astype(dk_ref.dtype)
-    dv_ref[...] = dv_scratch_ref[...].astype(dv_ref.dtype)
-    if dq_scratch_ref is not None:
-      dq_scratch_ref[...] = jnp.zeros_like(dq_scratch_ref)
-
     dk_scratch_ref[...] = jnp.zeros_like(dk_scratch_ref)
-    dv_scratch_ref[...] = jnp.zeros_like(dv_scratch_ref)
 
 
-def _splash_attention_bwd_dkv(
+def _ce_backward_dk(
   q,
   k,
-  v,
   segment_ids,
   sinks,
   logsumexp,
-  do,
-  di,
   *,
   bq: int,
   bkv: int,
@@ -1711,15 +1662,17 @@ def _splash_attention_bwd_dkv(
   mask_info: mask_info_lib.MaskInfo,
   mask_value: float,
   attn_logits_soft_cap: float | None,
-  use_fused_bwd_kernel: bool,
   q_layout: QKVLayout,
   k_layout: QKVLayout,
-  v_layout: QKVLayout,
   mask_function: MaskFunctionType | None,
   interpret: bool,
 ):
+  """CE backward dK: computes S^T @ Q using pre-computed LSE.
+
+  This is a simplified version of _splash_attention_bwd_dkv that computes
+  dK = softmax(Q @ K^T)^T @ Q directly, without the Jacobian correction term.
+  """
   num_q_heads, q_seq_len, head_dim_qk = q.shape
-  head_dim_v = v.shape[-1]
   if is_mqa:
     num_kv_heads, kv_seq_len = 1, k.shape[0]
   else:
@@ -1740,12 +1693,6 @@ def _splash_attention_bwd_dkv(
       f" multiple of the number of 'query' heads ({num_q_heads})"
     )
 
-  if k.shape[:-1] != v.shape[:-1]:
-    raise ValueError(
-      f"Expected 'key' {k.shape} and 'value' {v.shape} to have the same "
-      "leading dimensions."
-    )
-
   q_heads_per_kv_head = num_q_heads // num_kv_heads
 
   if mask_info.data_next is not None:
@@ -1758,27 +1705,6 @@ def _splash_attention_bwd_dkv(
     num_q_heads,
     grid_width,
   )
-
-  def o_index_map(
-    kv_index,
-    head_index,
-    q_index,
-    data_next_ref,
-    block_mask_ref,
-    mask_next_ref=None,
-  ):
-    next_i, *_ = _next_nonzero(
-      head_index,
-      q_index,
-      kv_index,
-      data_next_ref,
-      block_mask_ref,
-      mask_next_ref,
-      next_i=True,
-    )
-    return head_index, next_i, 0
-
-  o_spec = pl.BlockSpec((None, bq, head_dim_v), o_index_map)
 
   def q_index_map(
     kv_index,
@@ -1813,44 +1739,12 @@ def _splash_attention_bwd_dkv(
     k_index_map,
   )
 
-  def v_index_map(kv_index, head_index, *_):
-    prefix = () if is_mqa else (_div(head_index, q_heads_per_kv_head),)
-    return from_head_minor((*prefix, kv_index, 0), v_layout)
-
-  v_spec = pl.BlockSpec(
-    from_head_minor(
-      (bkv, head_dim_v) if is_mqa else (None, bkv, head_dim_v),
-      v_layout,
-    ),
-    v_index_map,
-  )
-
-  if use_fused_bwd_kernel:
-
-    def dq_index_map(kv_index, head_index, q_index, *_):
-      return (kv_index, head_index, q_index, 0)
-
-    dq_spec = pl.BlockSpec((None, None, bq, head_dim_qk), dq_index_map)
-    dq_shape = jax.ShapeDtypeStruct((kv_seq_len // bkv, *q.shape), q.dtype)
-    if bkv == bkv_compute:
-      dq_scratch_spec = dq_scratch_shape = None
-    else:
-      dq_scratch_spec = pl.BlockSpec((bq, head_dim_qk), lambda *_: (0, 0))
-      dq_scratch_shape = jax.ShapeDtypeStruct((bq, head_dim_qk), jnp.float32)
-  else:
-    dq_spec = dq_shape = dq_scratch_spec = dq_scratch_shape = None
-
   def dkv_index_map(kv_index, head_index, *_):
     prefix = () if is_mqa else (_div(head_index, q_heads_per_kv_head),)
     return (*prefix, kv_index, 0)
 
   dk_spec = pl.BlockSpec(
     (bkv, head_dim_qk) if is_mqa else (None, bkv, head_dim_qk),
-    dkv_index_map,
-  )
-
-  dv_spec = pl.BlockSpec(
-    (bkv, head_dim_v) if is_mqa else (None, bkv, head_dim_v),
     dkv_index_map,
   )
 
@@ -1923,8 +1817,6 @@ def _splash_attention_bwd_dkv(
   else:
     sinks_spec = None
 
-  do_spec = o_spec
-
   def logsumexp_index_map(
     kv_index,
     head_index,
@@ -1944,28 +1836,20 @@ def _splash_attention_bwd_dkv(
     )
     return head_index, 0, next_i
 
-  assert logsumexp.shape == di.shape == (num_q_heads, q_seq_len)
+  assert logsumexp.shape == (num_q_heads, q_seq_len)
   # TODO(apaszke): Remove the sublane expansion once Mosaic has all retilings
   logsumexp_shape = (num_q_heads, NUM_SUBLANES, q_seq_len)
   logsumexp = jnp.broadcast_to(jnp.expand_dims(logsumexp, -2), logsumexp_shape)
   logsumexp_spec = pl.BlockSpec((None, NUM_SUBLANES, bq), logsumexp_index_map)
   assert logsumexp.ndim == len(logsumexp_spec.block_shape)
 
-  # TODO(apaszke): Remove the sublane expansion once Mosaic has all retilings
-  di = jnp.broadcast_to(jnp.expand_dims(di, -2), logsumexp_shape)
-  di_spec = pl.BlockSpec((None, NUM_SUBLANES, bq), logsumexp_index_map)
-  assert di.ndim == len(di_spec.block_shape)
-
   in_specs = [
     q_spec,
     k_spec,
-    v_spec,
     q_segment_spec,
     kv_segment_spec,
     sinks_spec,
     logsumexp_spec,
-    do_spec,
-    di_spec,
   ]
   if mask_info.partial_mask_blocks is not None:
     in_specs.append(mask_spec)
@@ -1982,24 +1866,16 @@ def _splash_attention_bwd_dkv(
     in_specs.append(None)
 
   out_shapes = [
-    dq_scratch_shape,
     jax.ShapeDtypeStruct((bkv, head_dim_qk), jnp.float32),
-    jax.ShapeDtypeStruct((bkv, head_dim_v), jnp.float32),
-    dq_shape,
     jax.ShapeDtypeStruct(k.shape, k.dtype),
-    jax.ShapeDtypeStruct(v.shape, v.dtype),
   ]
   out_specs = [
-    dq_scratch_spec,
     pl.BlockSpec((bkv, head_dim_qk), lambda *_: (0, 0)),
-    pl.BlockSpec((bkv, head_dim_v), lambda *_: (0, 0)),
-    dq_spec,
     dk_spec,
-    dv_spec,
   ]
 
   kernel = functools.partial(
-    _flash_attention_dkv_kernel,
+    _ce_backward_dk_kernel,
     mask_value=mask_value,
     num_q_heads=num_q_heads,
     num_kv_heads=num_kv_heads,
@@ -2010,7 +1886,6 @@ def _splash_attention_bwd_dkv(
     attn_logits_soft_cap=attn_logits_soft_cap,
     q_layout=q_layout,
     k_layout=k_layout,
-    v_layout=v_layout,
     bkv=bkv,
     mask_function=mask_function,
   )
@@ -2018,20 +1893,19 @@ def _splash_attention_bwd_dkv(
 
   kernel_name = get_kernel_name(
     dict(
-      block_q_dkv=bq,
-      block_kv_dkv=bkv,
-      block_kv_dkv_compute=bkv_compute,
+      block_q_dk=bq,
+      block_kv_dk=bkv,
+      block_kv_dk_compute=bkv_compute,
       q_layout=q_layout,
       k_layout=k_layout,
-      v_layout=v_layout,
     ),
     is_mqa=is_mqa,
     save_residuals=False,
     is_segmented=segment_ids is not None,
-    phase="dkv",
+    phase="ce_dk",
   )
   with jax.named_scope(kernel_name):
-    _, _, _, dq_unreduced, dk, dv = pl.pallas_call(
+    _, dk = pl.pallas_call(
       kernel,
       grid_spec=pltpu.PrefetchScalarGridSpec(
         num_scalar_prefetch=num_scalar_prefetch,
@@ -2044,7 +1918,7 @@ def _splash_attention_bwd_dkv(
       # 1) for kv_seq_len, the splash attention prefetch schedule assumes no
       #    megacore
       # 2) for heads, we are reducing over heads
-      # 3) for q_seq_len, we are reducing over it to compute dkv
+      # 3) for q_seq_len, we are reducing over it to compute dk
       compiler_params=pltpu.CompilerParams(
         dimension_semantics=("arbitrary", "arbitrary", "arbitrary"),
       ),
@@ -2056,23 +1930,14 @@ def _splash_attention_bwd_dkv(
       mask_info.mask_next,
       q if q_layout == QKVLayout.HEAD_DIM_MINOR else q.swapaxes(-1, -2),
       k if k_layout == QKVLayout.HEAD_DIM_MINOR else k.swapaxes(-1, -2),
-      v if v_layout == QKVLayout.HEAD_DIM_MINOR else v.swapaxes(-1, -2),
       q_segment_ids,
       kv_segment_ids,
       sinks,
       logsumexp,
-      do,
-      di,
       mask_info.partial_mask_blocks,
       q_sequence,
     )
-  if use_fused_bwd_kernel:
-    assert dq_unreduced is not None
-    dq = dq_unreduced.sum(axis=0)
-  else:
-    assert dq_unreduced is None
-    dq = None
-  return dq, dk, dv
+  return dk
 
 
 def _splash_attention_bwd(
