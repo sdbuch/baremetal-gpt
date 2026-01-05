@@ -1430,3 +1430,161 @@ def test_make_lse_kernel_on_tpu():
   np.testing.assert_allclose(loss_kernel, loss_ref, rtol=1e-4, atol=1e-4)
   np.testing.assert_allclose(dq_kernel, dq_ref, rtol=2e-2, atol=2e-2)
   np.testing.assert_allclose(dk_kernel, dk_ref, rtol=2e-2, atol=2e-2)
+
+
+# =============================================================================
+# Fused Cross-Entropy Loss Tests
+# =============================================================================
+
+
+def test_fused_cross_entropy_matches_naive():
+  """Test fused cross-entropy loss matches naive implementation.
+
+  Compares the fused LSE-based cross-entropy computation against the naive
+  approach that materializes full logits. This validates the math:
+    loss = mean(logsumexp(outputs @ w.T) - (outputs @ w.T)[targets])
+         = mean(lse - label_logits)
+  """
+  batch_size = 4
+  seq_len = 32
+  d_model = 128
+  vocab_size = 512  # small for interpret mode
+  max_valid_id = vocab_size - 1  # all tokens valid
+
+  key = jax.random.PRNGKey(42)
+  key_out, key_w, key_tgt = jax.random.split(key, 3)
+
+  # Simulate model outputs and unembedding weights
+  outputs = jax.random.normal(
+    key_out, (batch_size, seq_len, d_model), dtype=jnp.float32
+  )
+  w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
+  targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, vocab_size)
+
+  # === Naive cross-entropy (materializes full logits) ===
+  def naive_cross_entropy(outputs, w_unemb, targets):
+    # Full logits: (B, S, V)
+    logits = jnp.einsum("bsd,vd->bsv", outputs, w_unemb)
+    # Label logits: (B, S)
+    label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1).squeeze(-1)
+    # LSE: (B, S)
+    lse = jax.nn.logsumexp(logits, axis=-1)
+    return (lse - label_logits).mean()
+
+  # === Fused cross-entropy (uses LSE kernel) ===
+  def fused_cross_entropy(outputs, w_unemb, targets):
+    b, s = outputs.shape[:2]
+    # Flatten batch and seq
+    outputs_flat = outputs.reshape(b * s, -1)
+    targets_flat = targets.ravel()
+
+    # LSE via kernel (add head dim)
+    q = outputs_flat[None]  # (1, B*S, D)
+    k = w_unemb[None]  # (1, V, D)
+
+    # Create kernel
+    mask_obj = MultiHeadMask([VocabMask((b * s, vocab_size), max_valid_id)])
+    block_sizes = BlockSizes(
+      block_q=128,
+      block_kv=128,
+      block_kv_compute=128,
+    )
+    kernel = make_lse_kernel(
+      mask_obj,
+      block_sizes=block_sizes,
+      is_mqa=False,
+      interpret=True,
+    )
+    lse = kernel(q, k).squeeze(0)  # (B*S,)
+
+    # Label logits via gather
+    per_token_unembs = w_unemb[targets_flat]  # (B*S, D)
+    label_logits = jnp.sum(outputs_flat * per_token_unembs, axis=-1)  # (B*S,)
+
+    return (lse - label_logits).mean()
+
+  # Compare forward pass
+  loss_naive = naive_cross_entropy(outputs, w_unemb, targets)
+  loss_fused = fused_cross_entropy(outputs, w_unemb, targets)
+
+  np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-4, atol=1e-4)
+
+  # Compare gradients
+  grad_naive = jax.grad(naive_cross_entropy, argnums=(0, 1))(outputs, w_unemb, targets)
+  grad_fused = jax.grad(fused_cross_entropy, argnums=(0, 1))(outputs, w_unemb, targets)
+
+  np.testing.assert_allclose(grad_fused[0], grad_naive[0], rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(grad_fused[1], grad_naive[1], rtol=2e-2, atol=2e-2)
+
+
+@pytest.mark.skipif(
+  not jax.devices()[0].platform == "tpu",
+  reason="TPU test - skip on non-TPU platforms",
+)
+def test_fused_cross_entropy_on_tpu():
+  """Test fused cross-entropy on TPU at larger scale."""
+  batch_size = 8
+  seq_len = 128
+  d_model = 128
+  vocab_size = 2048
+  max_valid_id = vocab_size - 128  # some padding tokens
+
+  key = jax.random.PRNGKey(123)
+  key_out, key_w, key_tgt = jax.random.split(key, 3)
+
+  outputs = jax.random.normal(
+    key_out, (batch_size, seq_len, d_model), dtype=jnp.float32
+  )
+  w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
+  targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
+
+  # Naive reference
+  def naive_cross_entropy(outputs, w_unemb, targets):
+    logits = jnp.einsum("bsd,vd->bsv", outputs, w_unemb)
+    # Mask out invalid vocab tokens for fair comparison
+    vocab_ids = jnp.arange(vocab_size)
+    mask = vocab_ids <= max_valid_id
+    logits = jnp.where(mask[None, None, :], logits, -1e10)
+    label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1).squeeze(-1)
+    lse = jax.nn.logsumexp(logits, axis=-1)
+    return (lse - label_logits).mean()
+
+  # Fused with real TPU kernel
+  def fused_cross_entropy(outputs, w_unemb, targets):
+    b, s = outputs.shape[:2]
+    outputs_flat = outputs.reshape(b * s, -1)
+    targets_flat = targets.ravel()
+
+    q = outputs_flat[None]
+    k = w_unemb[None]
+
+    mask_obj = MultiHeadMask([VocabMask((b * s, vocab_size), max_valid_id)])
+    block_sizes = BlockSizes(
+      block_q=128,
+      block_kv=128,
+      block_kv_compute=128,
+    )
+    kernel = make_lse_kernel(
+      mask_obj,
+      block_sizes=block_sizes,
+      is_mqa=False,
+      interpret=False,  # Real TPU
+    )
+    lse = kernel(q, k).squeeze(0)
+
+    per_token_unembs = w_unemb[targets_flat]
+    label_logits = jnp.sum(outputs_flat * per_token_unembs, axis=-1)
+
+    return (lse - label_logits).mean()
+
+  loss_naive = naive_cross_entropy(outputs, w_unemb, targets)
+  loss_fused = fused_cross_entropy(outputs, w_unemb, targets)
+
+  np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-4, atol=1e-4)
+
+  # Test gradients
+  grad_naive = jax.grad(naive_cross_entropy, argnums=(0, 1))(outputs, w_unemb, targets)
+  grad_fused = jax.grad(fused_cross_entropy, argnums=(0, 1))(outputs, w_unemb, targets)
+
+  np.testing.assert_allclose(grad_fused[0], grad_naive[0], rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(grad_fused[1], grad_naive[1], rtol=2e-2, atol=2e-2)
