@@ -208,7 +208,7 @@ def forward_kernels_from_config(config: Config, mesh):
   lse_kernel_kwargs = {
     "data_sharding": config.sharding.data,
     "q_seq_shards": num_data_shards,
-    "block_size": 128,
+    "block_size": 512,
     "max_valid_id": config.train_dataset.max_valid_token_id,
   }
   train_lse_kernel = make_lse_kernel_sharded(
