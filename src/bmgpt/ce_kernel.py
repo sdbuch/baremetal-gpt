@@ -98,13 +98,13 @@ def get_kernel_name(
   phase: str,
 ) -> str:
   """Returns a unique name for all SplashAttention kernel variants."""
-  assert phase == "dq" or phase == "dkv" or phase == "fwd"
-  # Saving residuals is supported only for the fwd phase.
-  assert not save_residuals or phase == "fwd"
+  assert phase in ("dq", "dkv", "fwd", "ce_fwd")
+  # Saving residuals is supported only for the fwd and ce_fwd phases.
+  assert not save_residuals or phase in ("fwd", "ce_fwd")
   residuals = ""
   if save_residuals:
     residuals = "_residuals"
-  elif phase == "fwd":
+  elif phase in ("fwd", "ce_fwd"):
     residuals = "_no_residuals"
   attention_type = "mqa" if is_mqa else "mha"
   segments = "_segmented" if is_segmented else ""
