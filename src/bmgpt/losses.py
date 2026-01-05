@@ -1,0 +1,51 @@
+import jax
+import jax.numpy as jnp
+
+from bmgpt.config import Config
+from bmgpt.model import Transformer, transformer_variant_factory
+
+"""Loss functions for training and evaluation."""
+
+# API: inputs = (outputs, targets)
+#  outputs: model outputs (NOT logits!)
+#  targets: token labels (int32)
+# Both are batched as (B, S, ...)
+# Shardings according to config.py (ShardingConfig)
+
+
+def softmax_cross_entropy(
+  config: Config,
+  params: Transformer,
+  outputs: jax.Array,
+  targets: jax.Array,
+  kernel=None,
+):
+  """Optax-style cross entropy loss."""
+  _, _, _, _unembedding = transformer_variant_factory(config)
+  logits = jax.remat(_unembedding)(config, params.unemb, outputs)
+  label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
+  lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
+  return (lse - label_logits).mean()
+
+
+def fused_softmax_cross_entropy(
+  config: Config,
+  params: Transformer,
+  outputs: jax.Array,
+  targets: jax.Array,
+  kernel=None,
+):
+  """HBM-efficient softmax cross entropy loss (with splash attention!)"""
+  if not config.model.is_causal:
+    # HACK: for compat, extract CLS on noncausal transformers
+    outputs = outputs[:, :1, ...]
+  # Fold batch and sequence dimensions and gather unembeddings
+  b, s = outputs.shape[:2]
+  outputs = outputs.reshape(b * s, -1, out_sharding=jax.P(*config.sharding.data))
+  w_unemb = jax.sharding.reshard(params.unemb.w, out_shardings=jax.P())
+  # lse from splash_attention
+  _, _, _, _unembedding = transformer_variant_factory(config)
+  logits = jax.remat(_unembedding)(config, params.unemb, outputs)
+  label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
+  lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
+  return (lse - label_logits).mean()

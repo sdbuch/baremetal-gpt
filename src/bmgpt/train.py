@@ -18,6 +18,7 @@ from bmgpt.config import (
 from bmgpt.data import get_distributed_batch_iter
 from bmgpt.evaluators import evaluator_factory
 from bmgpt.loggers import Logger, logger_factory
+from bmgpt.losses import fused_softmax_cross_entropy, softmax_cross_entropy
 from bmgpt.model import (
   CacheParams,
   Transformer,
@@ -93,7 +94,13 @@ def main(config: Config):
     splash_args = (config.model.is_causal, config.model.num_heads, dataset.seq_len)
     return make_splash_kernel(*splash_args, 0, mesh)
 
-  shard_mapped__kernel = make_splash_kernel_wrapper(config.train_dataset)
+  train_attn_kernel = make_splash_kernel_wrapper(config.train_dataset)
+  num_toks = (
+    config.train_dataset.seq_len
+    * config.train_dataset.global_batch_size
+    // config.train_dataset.num_microbatches
+  )
+  train_ce_kernel = make_splash_kernel(False, 1, num_toks, 0, mesh, save_residuals=True)
   val_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.val_list]
   eval_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.eval_list]
   assert len(val_kernels) == len(config.val_list)
@@ -117,18 +124,7 @@ def main(config: Config):
           _transformer, config, shard_mapped__kernel, params, cache_params=cache_params
         )
       )(inputs, state.kv_cache)
-
-      # @partial(jax.remat, policy=jax.checkpoint_policies.nothing_saveable)
-      def cross_entropy(logits, targets):
-        # logits = logits.astype(jnp.float32)
-        label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
-        lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
-        return (lse - label_logits).mean()
-
-      return cross_entropy(logits, targets)
-
-      # logprobs = jax.nn.log_softmax(logits, axis=-1)
-      # return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
+      return softmax_cross_entropy(config, state.params, logits, targets)
 
     # Calculate gradients: use a scan for gradient accumulation
     def gradient_accum(loss__grad, microbatch):

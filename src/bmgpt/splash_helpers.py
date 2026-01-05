@@ -61,8 +61,7 @@ def make_splash_kernel(
   seq_len: int,
   cache_capacity: int,
   mesh,
-  head_shards: int = 1,
-  q_seq_shards: int = 1,
+  save_residuals: bool = False,
 ):
   # s is Q len (seq_len @ train; variable/1 at prefill/decode)
   # t is K len (s + cache_capacity)
@@ -92,15 +91,23 @@ def make_splash_kernel(
   splash_spec = jax.P(None, None)  # qkv are N x S x H
   splash_sharding = jax.sharding.NamedSharding(mesh, splash_spec)
   kernel = make_splash_mha(
-    mask, head_shards=head_shards, q_seq_shards=q_seq_shards, block_sizes=block_sizes
+    mask,
+    head_shards=1,
+    q_seq_shards=1,
+    block_sizes=block_sizes,
+    save_residuals=save_residuals,
   )
   kernel_spec = kernel.manual_sharding_spec(splash_sharding)
+  if save_residuals:
+    out_specs = ((splash_spec, (jax.P(),)),)  # (out, (lse,))
+  else:
+    out_specs = splash_spec
 
   @partial(
     jax.shard_map,
     mesh=mesh,
     in_specs=(kernel_spec, splash_spec, splash_spec, splash_spec, jax.P()),
-    out_specs=splash_spec,
+    out_specs=out_specs,
     check_vma=False,
   )
   def splash_sharded(kernel, q, k, v, segment_ids):
