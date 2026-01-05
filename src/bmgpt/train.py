@@ -112,16 +112,13 @@ def main(config: Config):
   opt_update = opt_update_factory(config.optimizer.type)
   opt_update = partial(opt_update, config, weight_decay_mask)
 
-  # # Cast to compute_dtype
-  # params = jax.tree.map(lambda x: x.astype(config.model.param_dtype.value), params)
-
   @partial(jax.jit, donate_argnums=2)
   def train_step(config: Config, batch, state: TrainState):
     def loss_fn(params: Transformer, microbatch: tuple[jax.Array, jax.Array]):
       inputs, targets = microbatch
       logits, _ = jax.vmap(
         partial(
-          _transformer, config, shard_mapped__kernel, params, cache_params=cache_params
+          _transformer, config, train_attn_kernel, params, cache_params=cache_params
         )
       )(inputs, state.kv_cache)
       return softmax_cross_entropy(config, state.params, logits, targets)
