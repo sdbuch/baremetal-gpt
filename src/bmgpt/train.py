@@ -127,7 +127,7 @@ def main(config: Config):
       inputs, targets = microbatch
       outputs, _ = jax.vmap(
         partial(
-          _transformer, config, train_attn_kernel, params, cache_params=cache_params
+          _transformer, config, None, params, cache_params=cache_params
         )
       )(inputs, state.kv_cache)
       return softmax_cross_entropy(config, params.unemb, outputs, targets)
@@ -201,4 +201,5 @@ def eval_loop(
 
 
 if __name__ == "__main__":
+  print('main entry')
   main()
