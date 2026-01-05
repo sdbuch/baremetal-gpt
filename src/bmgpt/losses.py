@@ -2,6 +2,9 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+from jax.experimental.pallas.ops.tpu.splash_attention import (
+  SegmentIds,
+)
 
 from bmgpt.config import Config
 from bmgpt.model import ClassificationHead, LMHead, transformer_variant_factory
@@ -20,7 +23,7 @@ def softmax_cross_entropy(
   unembedding: LMHead | ClassificationHead,
   outputs: jax.Array,
   targets: jax.Array,
-  kernel=None,
+  shard_mapped__kernel=None,
 ):
   """Optax-style cross entropy loss."""
   _, _, _, _unembedding = transformer_variant_factory(config)
@@ -35,7 +38,7 @@ def fused_softmax_cross_entropy(
   unembedding: LMHead | ClassificationHead,
   outputs: jax.Array,
   targets: jax.Array,
-  kernel=None,
+  shard_mapped__kernel,
 ):
   """HBM-efficient softmax cross entropy loss (with splash attention!)"""
   # Fold batch and sequence dimensions and gather unembeddings
@@ -43,6 +46,21 @@ def fused_softmax_cross_entropy(
   outputs = outputs.reshape(b * s, -1, out_sharding=jax.P(*config.sharding.data))
   w_unemb = jax.sharding.reshard(unembedding.w, out_shardings=jax.P())
   # lse from splash_attention
+  q = outputs
+  k = w_unemb.mT
+  seq_len_q, seq_len_kv, d = q.shape[0], k.shape[0], q.shape[1]
+  v = jnp.zeros((seq_len_kv, 1), dtype=jnp.bfloat16)
+
+  q_segment_ids = jnp.zeros((seq_len_q,))
+  kv_segment_ids = jnp.zeros((seq_len_kv,))
+  segment_ids = SegmentIds(q=q_segment_ids, kv=kv_segment_ids)
+
+  splash_sharded, kernel = shard_mapped__kernel
+  # TODO: does the usual logit scaling make sense for outputs too?
+  # _, (lse,) = splash_sharded(kernel, q / d**0.25, k / d**0.25, v, segment_ids)
+  _, (lse,) = splash_sharded(kernel, q / d**0.25, k / d**0.25, v, segment_ids)
+
+  print(lse.shape)
 
   # _, _, _, _unembedding = transformer_variant_factory(config)
   # logits = jax.remat(_unembedding)(config, params.unemb, outputs)

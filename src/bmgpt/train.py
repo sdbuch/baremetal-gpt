@@ -100,6 +100,9 @@ def main(config: Config):
           _transformer, config, train_attn_kernel, params, cache_params=cache_params
         )
       )(inputs, state.kv_cache)
+      out = fused_softmax_cross_entropy(
+        config, params.unemb, outputs, targets, train_ce_kernel
+      )
       return softmax_cross_entropy(config, params.unemb, outputs, targets)
 
     # Calculate gradients: use a scan for gradient accumulation
