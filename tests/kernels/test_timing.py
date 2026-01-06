@@ -112,7 +112,7 @@ def scanned_cross_entropy(
 
   Args:
     outputs: (B, S, D) or (N, D) input activations
-    w_unemb: (V, D) unembedding weights
+    w_unemb: (V, D) unembedding weights (may be sharded, will be replicated internally)
     targets: (B, S) or (N,) target token indices
     block_size_v: Block size for vocab dimension scan
     data_sharding: Optional sharding spec for data dimension (e.g., ["fsdp"])
@@ -120,6 +120,9 @@ def scanned_cross_entropy(
   Returns:
     Scalar mean cross entropy loss
   """
+  # Replicate weights (matches fused_softmax_cross_entropy behavior)
+  w_unemb = jax.sharding.reshard(w_unemb, out_shardings=jax.P())
+
   # Flatten if needed
   if outputs.ndim == 3:
     b, s, d = outputs.shape
@@ -470,14 +473,11 @@ def test_timing_forward_pass(block_size_v: int):
       time_iters=20,
     )
 
-    # For scanned reference, need to reshard weights (match kernel behavior)
-    w_unemb_replicated = jax.sharding.reshard(w_unemb, out_shardings=jax.P())
-
-    # Time scanned reference
+    # Time scanned reference (reshards weights internally to match fused)
     time_scanned, loss_scanned = time_fn(
       loss_fn_scanned,
       outputs,
-      w_unemb_replicated,
+      w_unemb,
       targets,
       warmup_iters=5,
       time_iters=20,
@@ -510,15 +510,16 @@ def test_timing_forward_pass(block_size_v: int):
   reason="Timing tests use production kernels (no interpret mode)",
 )
 def test_timing_sweep_vocab_sizes():
-  """Sweep over vocabulary sizes to see scaling behavior."""
+  """Sweep over vocabulary sizes to see scaling behavior at production scale."""
   num_devices = jax.device_count()
   kernel_block_size = 128
-  seq_len = 256
-  batch_size = 32 * 8
+  seq_len = 2048
+  batch_size = 512
   d_model = 768
   block_size_v = 512  # Fixed scan block size
 
-  vocab_sizes = [2048, 4096, 8192, 16384, 32768]
+  # Production-scale vocab sizes up to 128K (and 256K to test OOM boundary)
+  vocab_sizes = [8192, 16384, 32768, 65536, 131072, 262144]
 
   print(f"\n{'=' * 70}")
   print("Vocabulary Size Sweep")
@@ -592,11 +593,10 @@ def test_timing_sweep_vocab_sizes():
         warmup_iters=3,
         time_iters=10,
       )
-      w_unemb_replicated = jax.sharding.reshard(w_unemb, out_shardings=jax.P())
       time_scanned, _ = time_fn(
         loss_fn_scanned,
         outputs,
-        w_unemb_replicated,
+        w_unemb,
         targets,
         warmup_iters=3,
         time_iters=10,
@@ -615,32 +615,34 @@ def test_timing_sweep_vocab_sizes():
   reason="Timing tests use production kernels (no interpret mode)",
 )
 def test_timing_sweep_batch_sizes():
-  """Sweep over batch sizes (N = batch * seq_len) to see scaling behavior."""
+  """Sweep over batch sizes (N = batch * seq_len) to see scaling behavior at production scale."""
   num_devices = jax.device_count()
   kernel_block_size = 128
   d_model = 768
-  vocab_size = 8192
+  # Proportionally smaller vocab (32K vs 128K in vocab sweep) to allow larger batch/seq
+  vocab_size = 32768
   max_valid_id = vocab_size - 128
   block_size_v = 512
 
-  # Various (batch, seq_len) combinations giving different N
+  # Production-scale (batch, seq_len) combinations
+  # Target: 512 batch, 2K seq (from vocab sweep) - vary around this
   batch_seq_configs = [
-    (32, 128),
-    (32, 256),
-    (32, 512),
-    (64, 256),
-    (64, 512),
-    (128, 256),
-    (256, 256),
+    (128, 1024),
+    (256, 1024),
+    (256, 2048),
+    (512, 1024),
+    (512, 2048),
+    (1024, 1024),
+    (1024, 2048),
   ]
 
-  print(f"\n{'=' * 80}")
-  print("Batch/Sequence Size Sweep")
-  print(f"{'=' * 80}")
+  print(f"\n{'=' * 85}")
+  print("Batch/Sequence Size Sweep (Production Scale)")
+  print(f"{'=' * 85}")
   print(
-    f"{'(B, S)':>12} | {'N':>10} | {'Fused (ms)':>12} | {'Scanned (ms)':>14} | {'Speedup':>8}"
+    f"{'(B, S)':>14} | {'N':>10} | {'Fused (ms)':>12} | {'Scanned (ms)':>14} | {'Speedup':>8}"
   )
-  print(f"{'-' * 80}")
+  print(f"{'-' * 85}")
 
   for batch_size, seq_len in batch_seq_configs:
     n_tokens = batch_size * seq_len
@@ -705,11 +707,10 @@ def test_timing_sweep_batch_sizes():
         warmup_iters=3,
         time_iters=10,
       )
-      w_unemb_replicated = jax.sharding.reshard(w_unemb, out_shardings=jax.P())
       time_scanned, _ = time_fn(
         loss_fn_scanned,
         outputs,
-        w_unemb_replicated,
+        w_unemb,
         targets,
         warmup_iters=3,
         time_iters=10,
@@ -717,7 +718,7 @@ def test_timing_sweep_batch_sizes():
 
     speedup = time_scanned / time_fused
     print(
-      f"({batch_size:>3}, {seq_len:>3}) | {n_tokens:>10} | {time_fused * 1000:>12.3f} | {time_scanned * 1000:>14.3f} | {speedup:>7.2f}x"
+      f"({batch_size:>5}, {seq_len:>4}) | {n_tokens:>10} | {time_fused * 1000:>12.3f} | {time_scanned * 1000:>14.3f} | {speedup:>7.2f}x"
     )
 
-  print(f"{'=' * 80}")
+  print(f"{'=' * 85}")
