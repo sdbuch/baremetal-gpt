@@ -433,7 +433,7 @@ def test_fused_cross_entropy_sharded():
   # num_tokens_per_shard must be >= block_size, so num_tokens >= block_size * num_devices
   min_tokens = block_size * num_devices
   seq_len = 256
-  batch_size = max(8, (min_tokens + seq_len - 1) // seq_len)
+  batch_size = max(num_devices, (min_tokens + seq_len - 1) // seq_len)
   d_model = 128
   vocab_size = 2048
   max_valid_id = vocab_size - 128
@@ -470,7 +470,7 @@ def test_fused_cross_entropy_sharded_backward():
   # num_tokens_per_shard must be >= block_size, so num_tokens >= block_size * num_devices
   min_tokens = block_size * num_devices
   seq_len = 256
-  batch_size = max(4, (min_tokens + seq_len - 1) // seq_len)
+  batch_size = max(num_devices, (min_tokens + seq_len - 1) // seq_len)
   d_model = 128
   vocab_size = 1024
   max_valid_id = vocab_size - 128
@@ -569,7 +569,7 @@ def test_losses_integration_forward():
   block_size = 128
   min_tokens = block_size * num_devices
   seq_len = 256
-  batch_size = max(2, (min_tokens + seq_len - 1) // seq_len)
+  batch_size = max(num_devices, (min_tokens + seq_len - 1) // seq_len)
   d_model = 128
   vocab_size = 512
   max_valid_id = vocab_size - 128
@@ -643,7 +643,7 @@ def test_losses_integration_backward():
   block_size = 128
   min_tokens = block_size * num_devices
   seq_len = 256
-  batch_size = max(2, (min_tokens + seq_len - 1) // seq_len)
+  batch_size = max(num_devices, (min_tokens + seq_len - 1) // seq_len)
   d_model = 128
   vocab_size = 512
   max_valid_id = vocab_size - 128
@@ -736,7 +736,7 @@ def test_losses_integration_parametrized(base_batch_size, seq_len, d_model, voca
   block_size = 128
   min_tokens = block_size * num_devices
   # Scale batch size to meet minimum token requirement
-  batch_size = max(base_batch_size, (min_tokens + seq_len - 1) // seq_len)
+  batch_size = max(num_devices, base_batch_size, (min_tokens + seq_len - 1) // seq_len)
   max_valid_id = vocab_size - 128
 
   config = make_test_config(
@@ -800,7 +800,7 @@ def test_losses_integration_tpu_sharded():
   block_size = 128
   min_tokens = block_size * num_devices
   seq_len = 256
-  batch_size = max(8, (min_tokens + seq_len - 1) // seq_len)
+  batch_size = max(num_devices, (min_tokens + seq_len - 1) // seq_len)
   d_model = 128
   vocab_size = 2048
   max_valid_id = vocab_size - 128
