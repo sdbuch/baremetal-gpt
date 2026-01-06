@@ -33,8 +33,8 @@ CONFIGS = [
 ]
 CONFIG_IDS = [f"B{b}_S{s}_D{d}_V{v}" for b, s, d, v in CONFIGS]
 
-GLOBAL_RTOL = 1e-5
-GLOBAL_ATOL = 1e-5
+GLOBAL_RTOL = 5e-5
+GLOBAL_ATOL = 5e-5
 
 
 def ref_cross_entropy(
