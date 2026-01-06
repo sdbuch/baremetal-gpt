@@ -512,7 +512,7 @@ def test_timing_forward_pass(block_size_v: int):
 def test_timing_sweep_vocab_sizes():
   """Sweep over vocabulary sizes to see scaling behavior at production scale."""
   num_devices = jax.device_count()
-  kernel_block_size = 128
+  kernel_block_size = 512
   seq_len = 2048
   batch_size = 512
   d_model = 768
@@ -591,8 +591,8 @@ def test_timing_sweep_vocab_sizes():
         unemb,
         outputs,
         targets,
-        warmup_iters=3,
-        time_iters=10,
+        warmup_iters=1,
+        time_iters=2,
       )
       print(" fused done...", end="", flush=True)
       time_scanned, _ = time_fn(
@@ -600,8 +600,8 @@ def test_timing_sweep_vocab_sizes():
         outputs,
         w_unemb,
         targets,
-        warmup_iters=3,
-        time_iters=10,
+        warmup_iters=1,
+        time_iters=2,
       )
       print(" scanned done")
 
@@ -620,7 +620,7 @@ def test_timing_sweep_vocab_sizes():
 def test_timing_sweep_batch_sizes():
   """Sweep over batch sizes (N = batch * seq_len) to see scaling behavior at production scale."""
   num_devices = jax.device_count()
-  kernel_block_size = 128
+  kernel_block_size = 512
   d_model = 768
   # Proportionally smaller vocab (32K vs 128K in vocab sweep) to allow larger batch/seq
   vocab_size = 32768
@@ -708,8 +708,8 @@ def test_timing_sweep_batch_sizes():
         unemb,
         outputs,
         targets,
-        warmup_iters=3,
-        time_iters=10,
+        warmup_iters=1,
+        time_iters=2,
       )
       print(" fused done...", end="", flush=True)
       time_scanned, _ = time_fn(
@@ -717,8 +717,8 @@ def test_timing_sweep_batch_sizes():
         outputs,
         w_unemb,
         targets,
-        warmup_iters=3,
-        time_iters=10,
+        warmup_iters=1,
+        time_iters=2,
       )
       print(" scanned done")
 
