@@ -547,7 +547,13 @@ def make_test_config(
   reason="Integration tests use production kernels (no interpret mode)",
 )
 def test_losses_integration_forward():
-  batch_size, seq_len, d_model, vocab_size = 2, 256, 128, 512
+  num_devices = len(jax.devices())
+  block_size = 128
+  min_tokens = block_size * num_devices
+  seq_len = 256
+  batch_size = max(2, (min_tokens + seq_len - 1) // seq_len)
+  d_model = 128
+  vocab_size = 512
   max_valid_id = vocab_size - 128
 
   config = make_test_config(
@@ -556,11 +562,11 @@ def test_losses_integration_forward():
     d_model,
     vocab_size,
     max_valid_id,
-    data_sharding=[None],
-    mesh_shape=[1],
+    data_sharding=["data"],
+    mesh_shape=[num_devices],
     mesh_axis_names=["data"],
   )
-  mesh = jax.make_mesh([1], ["data"], (jax.sharding.AxisType.Explicit,))
+  mesh = jax.make_mesh([num_devices], ["data"], (jax.sharding.AxisType.Explicit,))
 
   key = jax.random.PRNGKey(42)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
@@ -580,8 +586,8 @@ def test_losses_integration_forward():
     k_seq_len=vocab_size,
     mesh=mesh,
     data_sharding=config.sharding.data,
-    q_seq_shards=1,
-    block_size=128,
+    q_seq_shards=num_devices,
+    block_size=block_size,
     max_valid_id=max_valid_id,
   )
 
@@ -637,20 +643,21 @@ def test_losses_integration_backward():
     max_valid_id=max_valid_id,
   )
 
-  def naive_loss(o, w):
-    return softmax_cross_entropy(config, LMHead(w=w, bias=bias), o, targets)
+  def ref_loss(o, w):
+    return naive_cross_entropy(o, w, targets, max_valid_id)
 
   def fused_loss(o, w):
     return fused_softmax_cross_entropy(
       config, LMHead(w=w, bias=bias), o, targets, shard_mapped__kernel
     )
 
+  grad_ref = jax.grad(ref_loss, argnums=(0, 1))(outputs, w_unemb)
+
   with jax.set_mesh(mesh):
-    grad_naive = jax.grad(naive_loss, argnums=(0, 1))(outputs, w_unemb)
     grad_fused = jax.grad(fused_loss, argnums=(0, 1))(outputs, w_unemb)
 
-  np.testing.assert_allclose(grad_fused[0], grad_naive[0], rtol=2e-2, atol=2e-2)
-  np.testing.assert_allclose(grad_fused[1], grad_naive[1], rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(grad_fused[0], grad_ref[0], rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(grad_fused[1], grad_ref[1], rtol=2e-2, atol=2e-2)
 
 
 INTEGRATION_CONFIGS = [
@@ -709,13 +716,14 @@ def test_losses_integration_parametrized(batch_size, seq_len, d_model, vocab_siz
     max_valid_id=max_valid_id,
   )
 
+  loss_ref = naive_cross_entropy(outputs, w_unemb, targets, max_valid_id)
+
   with jax.set_mesh(mesh):
-    loss_naive = softmax_cross_entropy(config, unemb, outputs, targets)
     loss_fused = fused_softmax_cross_entropy(
       config, unemb, outputs, targets, shard_mapped__kernel
     )
 
-  np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=1e-4, atol=1e-4)
 
 
 @pytest.mark.skipif(
@@ -767,10 +775,11 @@ def test_losses_integration_tpu_sharded():
     max_valid_id=max_valid_id,
   )
 
+  loss_ref = naive_cross_entropy(outputs, w_unemb, targets, max_valid_id)
+
   with jax.set_mesh(mesh):
-    loss_naive = softmax_cross_entropy(config, unemb, outputs, targets)
     loss_fused = fused_softmax_cross_entropy(
       config, unemb, outputs, targets, shard_mapped__kernel
     )
 
-  np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=1e-4, atol=1e-4)
