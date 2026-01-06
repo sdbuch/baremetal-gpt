@@ -728,3 +728,240 @@ def test_timing_sweep_batch_sizes():
     )
 
   print(f"{'=' * 85}")
+
+
+# =============================================================================
+# Forward-Backward Timing Tests
+# =============================================================================
+
+
+@pytest.mark.skipif(
+  not jax.devices()[0].platform == "tpu",
+  reason="Timing tests use production kernels (no interpret mode)",
+)
+def test_timing_fwd_bwd_sweep_vocab_sizes():
+  """Sweep vocab sizes comparing forward-backward passes."""
+  num_devices = jax.device_count()
+  kernel_block_size = 512
+  seq_len = 2048
+  batch_size = 512
+  d_model = 768
+  block_size_v = 512
+
+  # Test at production scale
+  vocab_sizes = [8192, 16384, 32768, 65536, 131072]
+
+  print(f"\n{'=' * 85}")
+  print("Forward-Backward Timing: Vocabulary Size Sweep")
+  print(f"{'=' * 85}")
+  print(
+    f"{'Vocab Size':>12} | {'Fused (ms)':>12} | {'Scanned (ms)':>14} | {'Speedup':>8}"
+  )
+  print(f"{'-' * 85}", flush=True)
+
+  for vocab_size in vocab_sizes:
+    print(f"  [Compiling vocab_size={vocab_size}]...", end="", flush=True)
+    max_valid_id = vocab_size - 128
+
+    config = make_test_config(
+      batch_size,
+      seq_len,
+      d_model,
+      vocab_size,
+      max_valid_id,
+      data_sharding=["fsdp"],
+      mesh_shape=[num_devices],
+      mesh_axis_names=["fsdp"],
+    )
+    mesh = jax.make_mesh([num_devices], ["fsdp"], (jax.sharding.AxisType.Explicit,))
+
+    key = jax.random.PRNGKey(42)
+    key_out, key_w, key_tgt = jax.random.split(key, 3)
+
+    outputs = jax.random.normal(
+      key_out, (batch_size, seq_len, d_model), dtype=jnp.bfloat16
+    )
+    w_unemb = 0.02 * jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.bfloat16)
+    bias = jnp.zeros(vocab_size, dtype=jnp.bfloat16)
+    targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
+
+    # Pre-shard inputs
+    batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
+    targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
+    weight_sharding = jax.NamedSharding(mesh, jax.P(None, "fsdp"))
+    outputs = jax.device_put(outputs, batch_sharding)
+    targets = jax.device_put(targets, targets_sharding)
+    w_unemb = jax.device_put(w_unemb, weight_sharding)
+
+    unemb = LMHead(w=w_unemb, bias=bias)
+
+    num_tokens = batch_size * seq_len
+    shard_mapped__kernel = make_lse_kernel_sharded(
+      q_seq_len=num_tokens,
+      k_seq_len=vocab_size,
+      mesh=mesh,
+      data_sharding=config.sharding.data,
+      q_seq_shards=num_devices,
+      block_size=kernel_block_size,
+      max_valid_id=max_valid_id,
+    )
+
+    # Create grad functions (gradient w.r.t. outputs)
+    def fused_loss(outputs, unemb, targets):
+      return fused_softmax_cross_entropy(
+        config, unemb, outputs, targets, shard_mapped__kernel=shard_mapped__kernel
+      )
+
+    def scanned_loss(outputs, w_unemb, targets):
+      return scanned_cross_entropy(
+        outputs, w_unemb, targets, block_size_v=block_size_v, data_sharding=["fsdp"]
+      )
+
+    # JIT the value_and_grad functions
+    fused_fwd_bwd = jax.jit(jax.value_and_grad(fused_loss))
+    scanned_fwd_bwd = jax.jit(jax.value_and_grad(scanned_loss))
+
+    with jax.set_mesh(mesh):
+      time_fused, _ = time_fn(
+        fused_fwd_bwd,
+        outputs,
+        unemb,
+        targets,
+        warmup_iters=1,
+        time_iters=2,
+      )
+      print(" fused done...", end="", flush=True)
+      time_scanned, _ = time_fn(
+        scanned_fwd_bwd,
+        outputs,
+        w_unemb,
+        targets,
+        warmup_iters=1,
+        time_iters=2,
+      )
+      print(" scanned done")
+
+    speedup = time_scanned / time_fused
+    print(
+      f"{vocab_size:>12} | {time_fused * 1000:>12.3f} | {time_scanned * 1000:>14.3f} | {speedup:>7.2f}x"
+    )
+
+  print(f"{'=' * 85}")
+
+
+@pytest.mark.skipif(
+  not jax.devices()[0].platform == "tpu",
+  reason="Timing tests use production kernels (no interpret mode)",
+)
+def test_timing_fwd_bwd_sweep_batch_sizes():
+  """Sweep batch sizes comparing forward-backward passes."""
+  num_devices = jax.device_count()
+  kernel_block_size = 512
+  d_model = 768
+  vocab_size = 32768
+  max_valid_id = vocab_size - 128
+  block_size_v = 512
+
+  # Production-scale batch/seq combinations
+  batch_seq_configs = [
+    (128, 1024),
+    (256, 1024),
+    (256, 2048),
+    (512, 1024),
+    (512, 2048),
+    (1024, 1024),
+  ]
+
+  print(f"\n{'=' * 90}")
+  print("Forward-Backward Timing: Batch/Sequence Size Sweep")
+  print(f"{'=' * 90}")
+  print(
+    f"{'(B, S)':>14} | {'N':>10} | {'Fused (ms)':>12} | {'Scanned (ms)':>14} | {'Speedup':>8}"
+  )
+  print(f"{'-' * 90}", flush=True)
+
+  for batch_size, seq_len in batch_seq_configs:
+    print(f"  [Compiling B={batch_size}, S={seq_len}]...", end="", flush=True)
+    n_tokens = batch_size * seq_len
+
+    config = make_test_config(
+      batch_size,
+      seq_len,
+      d_model,
+      vocab_size,
+      max_valid_id,
+      data_sharding=["fsdp"],
+      mesh_shape=[num_devices],
+      mesh_axis_names=["fsdp"],
+    )
+    mesh = jax.make_mesh([num_devices], ["fsdp"], (jax.sharding.AxisType.Explicit,))
+
+    key = jax.random.PRNGKey(42)
+    key_out, key_w, key_tgt = jax.random.split(key, 3)
+
+    outputs = jax.random.normal(
+      key_out, (batch_size, seq_len, d_model), dtype=jnp.bfloat16
+    )
+    w_unemb = 0.02 * jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.bfloat16)
+    bias = jnp.zeros(vocab_size, dtype=jnp.bfloat16)
+    targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
+
+    # Pre-shard inputs
+    batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
+    targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
+    weight_sharding = jax.NamedSharding(mesh, jax.P(None, "fsdp"))
+    outputs = jax.device_put(outputs, batch_sharding)
+    targets = jax.device_put(targets, targets_sharding)
+    w_unemb = jax.device_put(w_unemb, weight_sharding)
+
+    unemb = LMHead(w=w_unemb, bias=bias)
+
+    shard_mapped__kernel = make_lse_kernel_sharded(
+      q_seq_len=n_tokens,
+      k_seq_len=vocab_size,
+      mesh=mesh,
+      data_sharding=config.sharding.data,
+      q_seq_shards=num_devices,
+      block_size=kernel_block_size,
+      max_valid_id=max_valid_id,
+    )
+
+    def fused_loss(outputs, unemb, targets):
+      return fused_softmax_cross_entropy(
+        config, unemb, outputs, targets, shard_mapped__kernel=shard_mapped__kernel
+      )
+
+    def scanned_loss(outputs, w_unemb, targets):
+      return scanned_cross_entropy(
+        outputs, w_unemb, targets, block_size_v=block_size_v, data_sharding=["fsdp"]
+      )
+
+    fused_fwd_bwd = jax.jit(jax.value_and_grad(fused_loss))
+    scanned_fwd_bwd = jax.jit(jax.value_and_grad(scanned_loss))
+
+    with jax.set_mesh(mesh):
+      time_fused, _ = time_fn(
+        fused_fwd_bwd,
+        outputs,
+        unemb,
+        targets,
+        warmup_iters=1,
+        time_iters=2,
+      )
+      print(" fused done...", end="", flush=True)
+      time_scanned, _ = time_fn(
+        scanned_fwd_bwd,
+        outputs,
+        w_unemb,
+        targets,
+        warmup_iters=1,
+        time_iters=2,
+      )
+      print(" scanned done")
+
+    speedup = time_scanned / time_fused
+    print(
+      f"({batch_size:>5}, {seq_len:>4}) | {n_tokens:>10} | {time_fused * 1000:>12.3f} | {time_scanned * 1000:>14.3f} | {speedup:>7.2f}x"
+    )
+
+  print(f"{'=' * 90}")
