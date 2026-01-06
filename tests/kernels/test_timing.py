@@ -106,6 +106,7 @@ def scanned_cross_entropy(
   w_unemb: jax.Array,
   targets: jax.Array,
   block_size_v: int = 128,
+  data_sharding: list[str | None] | None = None,
 ) -> jax.Array:
   """Cross entropy using scanned logsumexp reference.
 
@@ -114,6 +115,7 @@ def scanned_cross_entropy(
     w_unemb: (V, D) unembedding weights
     targets: (B, S) or (N,) target token indices
     block_size_v: Block size for vocab dimension scan
+    data_sharding: Optional sharding spec for data dimension (e.g., ["fsdp"])
 
   Returns:
     Scalar mean cross entropy loss
@@ -121,8 +123,12 @@ def scanned_cross_entropy(
   # Flatten if needed
   if outputs.ndim == 3:
     b, s, d = outputs.shape
-    outputs_flat = outputs.reshape(b * s, d)
-    targets_flat = targets.ravel()
+    if data_sharding:
+      outputs_flat = outputs.reshape(b * s, d, out_sharding=jax.P(*data_sharding, None))
+      targets_flat = targets.ravel(out_sharding=jax.P(*data_sharding))
+    else:
+      outputs_flat = outputs.reshape(b * s, d)
+      targets_flat = targets.ravel()
   else:
     outputs_flat = outputs
     targets_flat = targets
@@ -130,8 +136,13 @@ def scanned_cross_entropy(
   # Compute LSE via blocked scan
   lse = scanned_logsumexp_blocked(outputs_flat, w_unemb, block_size_v)
 
-  # Compute label logits
-  per_token_unembs = w_unemb[targets_flat]
+  # Compute label logits - use explicit out_sharding for gather when sharded
+  if data_sharding:
+    per_token_unembs = w_unemb.at[targets_flat].get(
+      out_sharding=jax.P(*data_sharding, None)
+    )
+  else:
+    per_token_unembs = w_unemb[targets_flat]
   label_logits = jnp.sum(outputs_flat * per_token_unembs, axis=-1)
 
   return (lse - label_logits).mean()
@@ -444,7 +455,9 @@ def test_timing_forward_pass(block_size_v: int):
     )
   )
 
-  loss_fn_scanned = jax.jit(partial(scanned_cross_entropy, block_size_v=block_size_v))
+  loss_fn_scanned = jax.jit(
+    partial(scanned_cross_entropy, block_size_v=block_size_v, data_sharding=["fsdp"])
+  )
 
   with jax.set_mesh(mesh):
     # Time fused kernel
@@ -566,7 +579,9 @@ def test_timing_sweep_vocab_sizes():
         fused_softmax_cross_entropy, config, shard_mapped__kernel=shard_mapped__kernel
       )
     )
-    loss_fn_scanned = jax.jit(partial(scanned_cross_entropy, block_size_v=block_size_v))
+    loss_fn_scanned = jax.jit(
+      partial(scanned_cross_entropy, block_size_v=block_size_v, data_sharding=["fsdp"])
+    )
 
     with jax.set_mesh(mesh):
       time_fused, _ = time_fn(
@@ -677,7 +692,9 @@ def test_timing_sweep_batch_sizes():
         fused_softmax_cross_entropy, config, shard_mapped__kernel=shard_mapped__kernel
       )
     )
-    loss_fn_scanned = jax.jit(partial(scanned_cross_entropy, block_size_v=block_size_v))
+    loss_fn_scanned = jax.jit(
+      partial(scanned_cross_entropy, block_size_v=block_size_v, data_sharding=["fsdp"])
+    )
 
     with jax.set_mesh(mesh):
       time_fused, _ = time_fn(
