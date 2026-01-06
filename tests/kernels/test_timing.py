@@ -527,9 +527,10 @@ def test_timing_sweep_vocab_sizes():
   print(
     f"{'Vocab Size':>12} | {'Fused (ms)':>12} | {'Scanned (ms)':>14} | {'Speedup':>8}"
   )
-  print(f"{'-' * 70}")
+  print(f"{'-' * 70}", flush=True)
 
   for vocab_size in vocab_sizes:
+    print(f"  [Compiling vocab_size={vocab_size}]...", end="", flush=True)
     max_valid_id = vocab_size - 128
 
     config = make_test_config(
@@ -593,6 +594,7 @@ def test_timing_sweep_vocab_sizes():
         warmup_iters=3,
         time_iters=10,
       )
+      print(" fused done...", end="", flush=True)
       time_scanned, _ = time_fn(
         loss_fn_scanned,
         outputs,
@@ -601,6 +603,7 @@ def test_timing_sweep_vocab_sizes():
         warmup_iters=3,
         time_iters=10,
       )
+      print(" scanned done")
 
     speedup = time_scanned / time_fused
     print(
@@ -642,9 +645,10 @@ def test_timing_sweep_batch_sizes():
   print(
     f"{'(B, S)':>14} | {'N':>10} | {'Fused (ms)':>12} | {'Scanned (ms)':>14} | {'Speedup':>8}"
   )
-  print(f"{'-' * 85}")
+  print(f"{'-' * 85}", flush=True)
 
   for batch_size, seq_len in batch_seq_configs:
+    print(f"  [Compiling B={batch_size}, S={seq_len}]...", end="", flush=True)
     n_tokens = batch_size * seq_len
 
     config = make_test_config(
@@ -707,6 +711,7 @@ def test_timing_sweep_batch_sizes():
         warmup_iters=3,
         time_iters=10,
       )
+      print(" fused done...", end="", flush=True)
       time_scanned, _ = time_fn(
         loss_fn_scanned,
         outputs,
@@ -715,6 +720,7 @@ def test_timing_sweep_batch_sizes():
         warmup_iters=3,
         time_iters=10,
       )
+      print(" scanned done")
 
     speedup = time_scanned / time_fused
     print(
