@@ -24,7 +24,11 @@ def softmax_cross_entropy(
 ):
   """Optax-style cross entropy loss."""
   _, _, _, _unembedding = transformer_variant_factory(config)
-  logits = jax.remat(jax.vmap(partial(_unembedding, config, unembedding)))(outputs)
+  logits = jax.vmap(partial(_unembedding, config, unembedding))(outputs)
+  valid_ids_mask = (
+    jnp.arange(config.model.num_vocab) <= config.train_dataset.max_valid_token_id
+  )
+  logits = jnp.where(valid_ids_mask, logits, -jnp.inf)
   label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
   lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
   return (lse - label_logits).mean()

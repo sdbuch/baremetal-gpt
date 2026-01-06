@@ -4,3 +4,4 @@ split: TRAIN
 seq_len: 49  # 4x4 patches
 global_batch_size: 128
 epochs_to_loop: 5
+max_valid_token_id: 9

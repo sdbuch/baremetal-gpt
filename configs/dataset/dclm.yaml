@@ -3,4 +3,4 @@ path: "data/dclm"
 split: TRAIN
 seq_len: 2048  # this is the max seq length
 global_batch_size: 512
-max_valid_token_id: 128258
+max_valid_token_id: 128255
