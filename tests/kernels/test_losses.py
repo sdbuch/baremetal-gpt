@@ -487,12 +487,15 @@ def test_fused_cross_entropy_sharded_backward():
   mesh = jax.make_mesh((num_devices,), ("fsdp",), (jax.sharding.AxisType.Explicit,))
 
   # Pre-shard inputs along batch dimension (matching train.py data flow)
+  # wunemb (V, D) is sharded along D on 'fsdp' axis
   batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
   targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
+  weight_sharding = jax.NamedSharding(mesh, jax.P(None, "fsdp"))
   outputs = jax.device_put(outputs, batch_sharding)
   targets = jax.device_put(targets, targets_sharding)
+  w_unemb = jax.device_put(w_unemb, weight_sharding)
 
-  # Reference uses naive implementation (unsharded)
+  # Reference uses naive implementation
   grad_ref = jax.grad(
     lambda o, w: naive_cross_entropy(o, w, targets, max_valid_id), argnums=(0, 1)
   )(outputs, w_unemb)
@@ -598,10 +601,13 @@ def test_losses_integration_forward():
 
   # Pre-shard inputs along batch dimension (matching train.py data flow)
   # In production, model outputs arrive at the loss already sharded along B
+  # wunemb (V, D) is sharded along D on 'fsdp' axis
   batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
   targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
+  weight_sharding = jax.NamedSharding(mesh, jax.P(None, "fsdp"))
   outputs = jax.device_put(outputs, batch_sharding)
   targets = jax.device_put(targets, targets_sharding)
+  w_unemb = jax.device_put(w_unemb, weight_sharding)
 
   unemb = LMHead(w=w_unemb, bias=bias)
 
@@ -671,10 +677,13 @@ def test_losses_integration_backward():
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
   # Pre-shard inputs along batch dimension (matching train.py data flow)
+  # wunemb (V, D) is sharded along D on 'fsdp' axis
   batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
   targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
+  weight_sharding = jax.NamedSharding(mesh, jax.P(None, "fsdp"))
   outputs = jax.device_put(outputs, batch_sharding)
   targets = jax.device_put(targets, targets_sharding)
+  w_unemb = jax.device_put(w_unemb, weight_sharding)
 
   unemb = LMHead(w=w_unemb, bias=bias)
 
