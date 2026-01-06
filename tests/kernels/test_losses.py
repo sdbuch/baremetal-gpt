@@ -357,11 +357,17 @@ def fused_cross_entropy_sharded(
   block_size: int = 128,
   interpret: bool = True,
 ) -> jax.Array:
+  """Sharded fused cross-entropy matching FSDP setup.
+
+  In FSDP:
+  - data (B*S x D) is sharded along the token dimension
+  - w_unemb (V x D) is sharded along D but resharded to replicated for kernel
+  """
   b, s = outputs.shape[:2]
   vocab_size = w_unemb.shape[0]
   num_tokens = b * s
 
-  data_sharding = jax.NamedSharding(mesh, jax.P("data"))
+  data_sharding = jax.NamedSharding(mesh, jax.P("fsdp"))
   replicated = jax.NamedSharding(mesh, jax.P())
 
   outputs_flat = outputs.reshape(num_tokens, -1)
@@ -369,12 +375,14 @@ def fused_cross_entropy_sharded(
   targets_flat = targets.ravel()
   targets_flat = jax.device_put(targets_flat, data_sharding)
 
+  # In losses.py, w_unemb is resharded to replicated before kernel call
   w_unemb_replicated = jax.device_put(w_unemb, replicated)
 
   q = outputs_flat[None]
   k = w_unemb_replicated[None]
 
-  num_devices = len(jax.devices())
+  # Use global device count for multi-host
+  num_devices = jax.device_count()
   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
   block_sizes = BlockSizes(
     block_q=block_size,
@@ -390,10 +398,10 @@ def fused_cross_entropy_sharded(
     interpret=interpret,
   )
 
-  q_spec = jax.P(None, "data", None)
+  q_spec = jax.P(None, "fsdp", None)
   k_spec = jax.P(None, None, None)
-  lse_spec = jax.P(None, "data")
-  kernel_sharding = jax.NamedSharding(mesh, jax.P(None, "data"))
+  lse_spec = jax.P(None, "fsdp")
+  kernel_sharding = jax.NamedSharding(mesh, jax.P(None, "fsdp"))
   kernel_spec = kernel.manual_sharding_spec(kernel_sharding)
 
   @functools.partial(
@@ -419,7 +427,8 @@ def fused_cross_entropy_sharded(
   reason="TPU test - skip on non-TPU platforms",
 )
 def test_fused_cross_entropy_sharded():
-  num_devices = len(jax.devices())
+  # Use global device count for multi-host FSDP setup
+  num_devices = jax.device_count()
   block_size = 128
   # num_tokens_per_shard must be >= block_size, so num_tokens >= block_size * num_devices
   min_tokens = block_size * num_devices
@@ -440,7 +449,7 @@ def test_fused_cross_entropy_sharded():
 
   loss_ref = naive_cross_entropy(outputs, w_unemb, targets, max_valid_id)
 
-  mesh = jax.make_mesh((num_devices,), ("data",), (jax.sharding.AxisType.Explicit,))
+  mesh = jax.make_mesh((num_devices,), ("fsdp",), (jax.sharding.AxisType.Explicit,))
 
   with jax.set_mesh(mesh):
     loss_sharded = fused_cross_entropy_sharded(
@@ -455,7 +464,8 @@ def test_fused_cross_entropy_sharded():
   reason="TPU test - skip on non-TPU platforms",
 )
 def test_fused_cross_entropy_sharded_backward():
-  num_devices = len(jax.devices())
+  # Use global device count for multi-host FSDP setup
+  num_devices = jax.device_count()
   block_size = 128
   # num_tokens_per_shard must be >= block_size, so num_tokens >= block_size * num_devices
   min_tokens = block_size * num_devices
@@ -478,7 +488,7 @@ def test_fused_cross_entropy_sharded_backward():
     lambda o, w: naive_cross_entropy(o, w, targets, max_valid_id), argnums=(0, 1)
   )(outputs, w_unemb)
 
-  mesh = jax.make_mesh((num_devices,), ("data",), (jax.sharding.AxisType.Explicit,))
+  mesh = jax.make_mesh((num_devices,), ("fsdp",), (jax.sharding.AxisType.Explicit,))
 
   with jax.set_mesh(mesh):
     grad_sharded = jax.grad(
@@ -547,7 +557,8 @@ def make_test_config(
   reason="Integration tests use production kernels (no interpret mode)",
 )
 def test_losses_integration_forward():
-  num_devices = len(jax.devices())
+  # Use global device count for multi-host FSDP setup
+  num_devices = jax.device_count()
   block_size = 128
   min_tokens = block_size * num_devices
   seq_len = 256
@@ -562,11 +573,11 @@ def test_losses_integration_forward():
     d_model,
     vocab_size,
     max_valid_id,
-    data_sharding=["data"],
+    data_sharding=["fsdp"],
     mesh_shape=[num_devices],
-    mesh_axis_names=["data"],
+    mesh_axis_names=["fsdp"],
   )
-  mesh = jax.make_mesh([num_devices], ["data"], (jax.sharding.AxisType.Explicit,))
+  mesh = jax.make_mesh([num_devices], ["fsdp"], (jax.sharding.AxisType.Explicit,))
 
   key = jax.random.PRNGKey(42)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
@@ -605,7 +616,14 @@ def test_losses_integration_forward():
   reason="Integration tests use production kernels (no interpret mode)",
 )
 def test_losses_integration_backward():
-  batch_size, seq_len, d_model, vocab_size = 2, 256, 128, 512
+  # Use global device count for multi-host FSDP setup
+  num_devices = jax.device_count()
+  block_size = 128
+  min_tokens = block_size * num_devices
+  seq_len = 256
+  batch_size = max(2, (min_tokens + seq_len - 1) // seq_len)
+  d_model = 128
+  vocab_size = 512
   max_valid_id = vocab_size - 128
 
   config = make_test_config(
@@ -614,11 +632,11 @@ def test_losses_integration_backward():
     d_model,
     vocab_size,
     max_valid_id,
-    data_sharding=[None],
-    mesh_shape=[1],
-    mesh_axis_names=["data"],
+    data_sharding=["fsdp"],
+    mesh_shape=[num_devices],
+    mesh_axis_names=["fsdp"],
   )
-  mesh = jax.make_mesh([1], ["data"], (jax.sharding.AxisType.Explicit,))
+  mesh = jax.make_mesh([num_devices], ["fsdp"], (jax.sharding.AxisType.Explicit,))
 
   key = jax.random.PRNGKey(123)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
@@ -638,8 +656,8 @@ def test_losses_integration_backward():
     k_seq_len=vocab_size,
     mesh=mesh,
     data_sharding=config.sharding.data,
-    q_seq_shards=1,
-    block_size=128,
+    q_seq_shards=num_devices,
+    block_size=block_size,
     max_valid_id=max_valid_id,
   )
 
@@ -674,11 +692,17 @@ INTEGRATION_CONFIG_IDS = [f"B{b}_S{s}_D{d}_V{v}" for b, s, d, v in INTEGRATION_C
   reason="Integration tests use production kernels (no interpret mode)",
 )
 @pytest.mark.parametrize(
-  "batch_size,seq_len,d_model,vocab_size",
+  "base_batch_size,seq_len,d_model,vocab_size",
   INTEGRATION_CONFIGS,
   ids=INTEGRATION_CONFIG_IDS,
 )
-def test_losses_integration_parametrized(batch_size, seq_len, d_model, vocab_size):
+def test_losses_integration_parametrized(base_batch_size, seq_len, d_model, vocab_size):
+  # Use global device count for multi-host FSDP setup
+  num_devices = jax.device_count()
+  block_size = 128
+  min_tokens = block_size * num_devices
+  # Scale batch size to meet minimum token requirement
+  batch_size = max(base_batch_size, (min_tokens + seq_len - 1) // seq_len)
   max_valid_id = vocab_size - 128
 
   config = make_test_config(
@@ -687,11 +711,11 @@ def test_losses_integration_parametrized(batch_size, seq_len, d_model, vocab_siz
     d_model,
     vocab_size,
     max_valid_id,
-    data_sharding=[None],
-    mesh_shape=[1],
-    mesh_axis_names=["data"],
+    data_sharding=["fsdp"],
+    mesh_shape=[num_devices],
+    mesh_axis_names=["fsdp"],
   )
-  mesh = jax.make_mesh([1], ["data"], (jax.sharding.AxisType.Explicit,))
+  mesh = jax.make_mesh([num_devices], ["fsdp"], (jax.sharding.AxisType.Explicit,))
 
   key = jax.random.PRNGKey(42)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
@@ -711,8 +735,8 @@ def test_losses_integration_parametrized(batch_size, seq_len, d_model, vocab_siz
     k_seq_len=vocab_size,
     mesh=mesh,
     data_sharding=config.sharding.data,
-    q_seq_shards=1,
-    block_size=128,
+    q_seq_shards=num_devices,
+    block_size=block_size,
     max_valid_id=max_valid_id,
   )
 
@@ -731,7 +755,8 @@ def test_losses_integration_parametrized(batch_size, seq_len, d_model, vocab_siz
   reason="TPU test - skip on non-TPU platforms",
 )
 def test_losses_integration_tpu_sharded():
-  num_devices = len(jax.devices())
+  # Use global device count for multi-host FSDP setup
+  num_devices = jax.device_count()
   block_size = 128
   min_tokens = block_size * num_devices
   seq_len = 256
@@ -746,11 +771,11 @@ def test_losses_integration_tpu_sharded():
     d_model,
     vocab_size,
     max_valid_id,
-    data_sharding=["data"],
+    data_sharding=["fsdp"],
     mesh_shape=[num_devices],
-    mesh_axis_names=["data"],
+    mesh_axis_names=["fsdp"],
   )
-  mesh = jax.make_mesh([num_devices], ["data"], (jax.sharding.AxisType.Explicit,))
+  mesh = jax.make_mesh([num_devices], ["fsdp"], (jax.sharding.AxisType.Explicit,))
 
   key = jax.random.PRNGKey(42)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
