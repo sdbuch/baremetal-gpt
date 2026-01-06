@@ -529,7 +529,11 @@ def make_test_config(
   data_sharding: list[str | None],
   mesh_shape: list[int],
   mesh_axis_names: list[str],
+  wunemb_sharding: list[str | None] | None = None,
 ) -> Config:
+  # Default wunemb sharding matches FSDP config: [None, "fsdp"] for (V, D)
+  if wunemb_sharding is None:
+    wunemb_sharding = [None, mesh_axis_names[0]] if mesh_axis_names else [None, None]
   return Config(
     seed=42,
     used_fused_xent_loss=True,
@@ -557,7 +561,7 @@ def make_test_config(
       wup=[None, None],
       wdown=[None, None],
       wemb=[None, None],
-      wunemb=[None, None],
+      wunemb=wunemb_sharding,
       data=data_sharding,
       mlp_hidden=[None],
       res_stream=[None],
