@@ -80,8 +80,7 @@ class DatasetConfig:
   seq_len: int = MISSING
   max_valid_token_id: int = MISSING  # for fused CE (should be strictly less vocab_size)
 
-  # Batch size parameters
-  # effective bs: microbatch_size = global_batch_size / num_microbatches
+  # microbatch_size = global_batch_size / num_microbatches
   global_batch_size: int = MISSING
   num_microbatches: int = 1
 
@@ -169,14 +168,10 @@ class InferenceConfig:
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class ShardingConfig:
-  """
-  Model sharding params (args to jax.P)-- list of mesh_axis_names els or None
+  """Model sharding params (args to jax.P)-- list of mesh_axis_names els or None.
 
-  See data.py and model.py for usage (and notation used in comments). Key points:
-    - model.py has a vmap-first design structure.
-      So activation shardings are as "deep as possible" (eg no batch/seq axis for MLPs)
-    - Explicit AxisType is used
-    - configs/ directory has sensible defaults (dp, fsdp)
+  Note: activation shardings go as deep as possible (no batch/seq for MLPs).
+  See configs/ directory for examples (dp, fsdp).
   """
 
   # NOTE: technically jax.P can merge axes, e.g. (('x', 'y')), but hydra rejects this
@@ -245,7 +240,6 @@ def config_post_init(config: Config):
   num_hosts = jax.process_count()
 
   def check_batch_size_division(dataset: DatasetConfig):
-    # Check microbatch size is shardable
     assert dataset.global_batch_size % dataset.num_microbatches == 0, (
       f"Number of gradient accumulation steps must divide global batch size {dataset}"
     )
