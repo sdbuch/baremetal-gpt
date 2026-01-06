@@ -1,4 +1,5 @@
 import functools
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -584,10 +585,10 @@ def test_losses_integration_forward():
   block_size = 128
   min_tokens = block_size * num_devices
   seq_len = 256
-  batch_size = max(num_devices, (min_tokens + seq_len - 1) // seq_len)
-  d_model = 128
-  vocab_size = 512
-  max_valid_id = vocab_size - 128
+  batch_size = 32 * 8
+  d_model = 768
+  vocab_size = 2 * 4096
+  max_valid_id = vocab_size - 256
 
   config = make_test_config(
     batch_size,
@@ -605,10 +606,10 @@ def test_losses_integration_forward():
   key_out, key_w, key_tgt = jax.random.split(key, 3)
 
   outputs = jax.random.normal(
-    key_out, (batch_size, seq_len, d_model), dtype=jnp.float32
+    key_out, (batch_size, seq_len, d_model), dtype=jnp.bfloat16
   )
-  w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
-  bias = jnp.zeros(vocab_size, dtype=jnp.float32)
+  w_unemb = 0.02 * jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.bfloat16)
+  bias = jnp.zeros(vocab_size, dtype=jnp.bfloat16)
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
   # Pre-shard inputs along batch dimension (matching train.py data flow)
@@ -634,22 +635,25 @@ def test_losses_integration_forward():
     max_valid_id=max_valid_id,
   )
 
-  with jax.set_mesh(mesh):
-    loss_naive = softmax_cross_entropy(config, unemb, outputs, targets)
-    loss_fused = fused_softmax_cross_entropy(
-      config, unemb, outputs, targets, shard_mapped__kernel
+  loss_fn_ref = jax.jit(partial(softmax_cross_entropy, config))
+  loss_fn_fused = jax.jit(
+    partial(
+      fused_softmax_cross_entropy, config, shard_mapped__kernel=shard_mapped__kernel
     )
+  )
+
+  with jax.set_mesh(mesh):
+    loss_ref = loss_fn_ref(unemb, outputs, targets)
+    loss_fused = loss_fn_fused(unemb, outputs, targets)
 
   # Debug: print values to understand numerical differences
+  print(f"\n[DEBUG] loss_ref={float(loss_ref):.8f}, loss_fused={float(loss_fused):.8f}")
   print(
-    f"\n[DEBUG] loss_naive={float(loss_naive):.8f}, loss_fused={float(loss_fused):.8f}"
-  )
-  print(
-    f"[DEBUG] diff={float(loss_fused - loss_naive):.8e}, rel_diff={float((loss_fused - loss_naive) / loss_naive):.8e}"
+    f"[DEBUG] diff={float(loss_fused - loss_ref):.8e}, rel_diff={float((loss_fused - loss_ref) / loss_ref):.8e}"
   )
 
   # Tolerance allows for numerical precision differences between implementations
-  np.testing.assert_allclose(loss_fused, loss_naive, rtol=2e-4, atol=2e-4)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=2e-4, atol=2e-4)
 
 
 @pytest.mark.skipif(
