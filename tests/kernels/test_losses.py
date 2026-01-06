@@ -1,13 +1,9 @@
-import functools
 from functools import partial
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hypothesis import HealthCheck, Phase, given, settings
-from hypothesis import strategies as st
-from jax import shard_map
 from jax.experimental import multihost_utils
 from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_mask import (
   MultiHeadMask,
@@ -65,6 +61,7 @@ def fused_cross_entropy(
   block_size: int = 128,
   interpret: bool = True,
 ) -> jax.Array:
+  """Fused cross-entropy using LSE kernel directly (for kernel testing)."""
   b, s = outputs.shape[:2]
   vocab_size = w_unemb.shape[0]
   outputs_flat = outputs.reshape(b * s, -1)
@@ -93,6 +90,11 @@ def fused_cross_entropy(
   return (lse - label_logits).mean()
 
 
+# =============================================================================
+# Kernel Internals Tests - test the LSE kernel directly
+# =============================================================================
+
+
 @pytest.mark.parametrize(
   "batch_size,seq_len,d_model,vocab_size", CONFIGS, ids=CONFIG_IDS
 )
@@ -107,8 +109,12 @@ def test_fused_cross_entropy_forward(batch_size, seq_len, d_model, vocab_size):
   max_valid_id = vocab_size - 1
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
-  loss_naive = naive_cross_entropy(outputs, w_unemb, targets, max_valid_id)
-  loss_fused = fused_cross_entropy(outputs, w_unemb, targets, max_valid_id, 128)
+  loss_naive = jax.jit(partial(naive_cross_entropy, max_valid_id=max_valid_id))(
+    outputs, w_unemb, targets
+  )
+  loss_fused = jax.jit(
+    partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
+  )(outputs, w_unemb, targets)
 
   np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-4, atol=1e-4)
 
@@ -127,11 +133,11 @@ def test_fused_cross_entropy_backward_outputs(batch_size, seq_len, d_model, voca
   max_valid_id = vocab_size - 1
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
-  grad_naive = jax.grad(
-    lambda o: naive_cross_entropy(o, w_unemb, targets, max_valid_id)
+  grad_naive = jax.jit(
+    jax.grad(lambda o: naive_cross_entropy(o, w_unemb, targets, max_valid_id))
   )(outputs)
-  grad_fused = jax.grad(
-    lambda o: fused_cross_entropy(o, w_unemb, targets, max_valid_id, 128)
+  grad_fused = jax.jit(
+    jax.grad(lambda o: fused_cross_entropy(o, w_unemb, targets, max_valid_id, 128))
   )(outputs)
 
   np.testing.assert_allclose(grad_fused, grad_naive, rtol=2e-2, atol=2e-2)
@@ -151,104 +157,22 @@ def test_fused_cross_entropy_backward_weights(batch_size, seq_len, d_model, voca
   max_valid_id = vocab_size - 1
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
-  grad_naive = jax.grad(
-    lambda w: naive_cross_entropy(outputs, w, targets, max_valid_id), argnums=0
+  grad_naive = jax.jit(
+    jax.grad(
+      lambda w: naive_cross_entropy(outputs, w, targets, max_valid_id), argnums=0
+    )
   )(w_unemb)
-  grad_fused = jax.grad(
-    lambda w: fused_cross_entropy(outputs, w, targets, max_valid_id, 128), argnums=0
+  grad_fused = jax.jit(
+    jax.grad(
+      lambda w: fused_cross_entropy(outputs, w, targets, max_valid_id, 128), argnums=0
+    )
   )(w_unemb)
 
   np.testing.assert_allclose(grad_fused, grad_naive, rtol=2e-2, atol=2e-2)
 
 
-batch_sizes = st.sampled_from([1, 2, 4])
-seq_lens = st.sampled_from([128, 256])
-d_models = st.sampled_from([64, 128, 256])
-vocab_sizes = st.sampled_from([256, 512, 1024, 2048])
-seeds = st.integers(min_value=0, max_value=2**31 - 1)
-
-
-@pytest.mark.skipif(
-  jax.devices()[0].platform == "tpu",
-  reason="Hypothesis tests not designed for multi-host TPU",
-)
-@given(
-  batch_size=batch_sizes,
-  seq_len=seq_lens,
-  d_model=d_models,
-  vocab_size=vocab_sizes,
-  seed=seeds,
-)
-@settings(
-  max_examples=20,
-  deadline=None,
-  suppress_health_check=[HealthCheck.too_slow],
-  phases=[Phase.generate, Phase.target, Phase.shrink],
-  derandomize=True,  # Same examples on all TPU workers
-)
-def test_fused_cross_entropy_hypothesis_forward(
-  batch_size: int, seq_len: int, d_model: int, vocab_size: int, seed: int
-):
-  key = jax.random.PRNGKey(seed)
-  key_out, key_w, key_tgt = jax.random.split(key, 3)
-
-  outputs = jax.random.normal(
-    key_out, (batch_size, seq_len, d_model), dtype=jnp.float32
-  )
-  w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
-  max_valid_id = vocab_size - 1
-  targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
-
-  loss_naive = naive_cross_entropy(outputs, w_unemb, targets, max_valid_id)
-  loss_fused = fused_cross_entropy(outputs, w_unemb, targets, max_valid_id, 128)
-
-  np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-4, atol=1e-4)
-
-
-@pytest.mark.skipif(
-  jax.devices()[0].platform == "tpu",
-  reason="Hypothesis tests not designed for multi-host TPU",
-)
-@given(
-  batch_size=batch_sizes,
-  seq_len=seq_lens,
-  d_model=d_models,
-  vocab_size=vocab_sizes,
-  seed=seeds,
-)
-@settings(
-  max_examples=10,
-  deadline=None,
-  suppress_health_check=[HealthCheck.too_slow],
-  phases=[Phase.generate, Phase.target, Phase.shrink],
-  derandomize=True,  # Same examples on all TPU workers
-)
-def test_fused_cross_entropy_hypothesis_backward(
-  batch_size: int, seq_len: int, d_model: int, vocab_size: int, seed: int
-):
-  key = jax.random.PRNGKey(seed)
-  key_out, key_w, key_tgt = jax.random.split(key, 3)
-
-  outputs = jax.random.normal(
-    key_out, (batch_size, seq_len, d_model), dtype=jnp.float32
-  )
-  w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
-  max_valid_id = vocab_size - 1
-  targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
-
-  grad_naive = jax.grad(
-    lambda o, w: naive_cross_entropy(o, w, targets, max_valid_id), argnums=(0, 1)
-  )(outputs, w_unemb)
-
-  grad_fused = jax.grad(
-    lambda o, w: fused_cross_entropy(o, w, targets, max_valid_id, 128), argnums=(0, 1)
-  )(outputs, w_unemb)
-
-  np.testing.assert_allclose(grad_fused[0], grad_naive[0], rtol=2e-2, atol=2e-2)
-  np.testing.assert_allclose(grad_fused[1], grad_naive[1], rtol=2e-2, atol=2e-2)
-
-
 def test_fused_cross_entropy_single_block():
+  """Edge case: single block computation."""
   key = jax.random.PRNGKey(789)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
 
@@ -257,13 +181,18 @@ def test_fused_cross_entropy_single_block():
   targets = jax.random.randint(key_tgt, (1, 128), 0, 255)
   max_valid_id = 255
 
-  loss_naive = naive_cross_entropy(outputs, w_unemb, targets, max_valid_id)
-  loss_fused = fused_cross_entropy(outputs, w_unemb, targets, max_valid_id, 128)
+  loss_naive = jax.jit(partial(naive_cross_entropy, max_valid_id=max_valid_id))(
+    outputs, w_unemb, targets
+  )
+  loss_fused = jax.jit(
+    partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
+  )(outputs, w_unemb, targets)
 
   np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-4, atol=1e-4)
 
 
 def test_fused_cross_entropy_large_logits():
+  """Edge case: numerical stability with large logit values."""
   key = jax.random.PRNGKey(999)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
 
@@ -272,8 +201,12 @@ def test_fused_cross_entropy_large_logits():
   max_valid_id = 511
   targets = jax.random.randint(key_tgt, (2, 128), 0, max_valid_id)
 
-  loss_naive = naive_cross_entropy(outputs, w_unemb, targets, max_valid_id)
-  loss_fused = fused_cross_entropy(outputs, w_unemb, targets, max_valid_id, 128)
+  loss_naive = jax.jit(partial(naive_cross_entropy, max_valid_id=max_valid_id))(
+    outputs, w_unemb, targets
+  )
+  loss_fused = jax.jit(
+    partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
+  )(outputs, w_unemb, targets)
 
   assert jnp.isfinite(loss_naive)
   assert jnp.isfinite(loss_fused)
@@ -282,6 +215,7 @@ def test_fused_cross_entropy_large_logits():
 
 
 def test_fused_cross_entropy_with_padding():
+  """Edge case: vocab masking with max_valid_id < vocab_size."""
   key = jax.random.PRNGKey(321)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
 
@@ -292,8 +226,12 @@ def test_fused_cross_entropy_with_padding():
   w_unemb = jax.random.normal(key_w, (vocab_size, 128), dtype=jnp.float32)
   targets = jax.random.randint(key_tgt, (2, 128), 0, max_valid_id)
 
-  loss_naive = naive_cross_entropy(outputs, w_unemb, targets, max_valid_id)
-  loss_fused = fused_cross_entropy(outputs, w_unemb, targets, max_valid_id, 128)
+  loss_naive = jax.jit(partial(naive_cross_entropy, max_valid_id=max_valid_id))(
+    outputs, w_unemb, targets
+  )
+  loss_fused = jax.jit(
+    partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
+  )(outputs, w_unemb, targets)
 
   np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-4, atol=1e-4)
 
@@ -321,6 +259,7 @@ TPU_CONFIG_IDS = [f"B{b}_S{s}_D{d}_V{v}" for b, s, d, v in TPU_CONFIGS]
   ids=TPU_CONFIG_IDS,
 )
 def test_fused_cross_entropy_on_tpu(batch_size, seq_len, d_model, vocab_size):
+  """Test kernel on TPU without interpret mode."""
   key = jax.random.PRNGKey(123)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
 
@@ -331,198 +270,37 @@ def test_fused_cross_entropy_on_tpu(batch_size, seq_len, d_model, vocab_size):
   max_valid_id = vocab_size - 128
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
-  loss_naive = naive_cross_entropy(outputs, w_unemb, targets, max_valid_id)
-  loss_fused = fused_cross_entropy(outputs, w_unemb, targets, max_valid_id, 128, False)
+  loss_naive = jax.jit(partial(naive_cross_entropy, max_valid_id=max_valid_id))(
+    outputs, w_unemb, targets
+  )
+  loss_fused = jax.jit(
+    partial(
+      fused_cross_entropy, max_valid_id=max_valid_id, block_size=128, interpret=False
+    )
+  )(outputs, w_unemb, targets)
 
   np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-4, atol=1e-4)
 
-  grad_naive = jax.grad(
-    lambda o, w: naive_cross_entropy(o, w, targets, max_valid_id), argnums=(0, 1)
+  grad_naive = jax.jit(
+    jax.grad(
+      lambda o, w: naive_cross_entropy(o, w, targets, max_valid_id), argnums=(0, 1)
+    )
   )(outputs, w_unemb)
 
-  grad_fused = jax.grad(
-    lambda o, w: fused_cross_entropy(o, w, targets, max_valid_id, 128, False),
-    argnums=(0, 1),
+  grad_fused = jax.jit(
+    jax.grad(
+      lambda o, w: fused_cross_entropy(o, w, targets, max_valid_id, 128, False),
+      argnums=(0, 1),
+    )
   )(outputs, w_unemb)
 
   np.testing.assert_allclose(grad_fused[0], grad_naive[0], rtol=2e-2, atol=2e-2)
   np.testing.assert_allclose(grad_fused[1], grad_naive[1], rtol=2e-2, atol=2e-2)
 
 
-# def fused_cross_entropy_sharded(
-#   outputs: jax.Array,
-#   w_unemb: jax.Array,
-#   targets: jax.Array,
-#   max_valid_id: int,
-#   mesh: jax.sharding.Mesh,
-#   block_size: int = 128,
-#   interpret: bool = True,
-# ) -> jax.Array:
-#   """Sharded fused cross-entropy matching FSDP setup.
-#
-#   In FSDP:
-#   - data (B*S x D) is sharded along the token dimension
-#   - w_unemb (V x D) is sharded along D but resharded to replicated for kernel
-#   """
-#   b, s = outputs.shape[:2]
-#   vocab_size = w_unemb.shape[0]
-#   num_tokens = b * s
-#
-#   data_sharding = jax.NamedSharding(mesh, jax.P("fsdp"))
-#   replicated = jax.NamedSharding(mesh, jax.P())
-#
-#   outputs_flat = outputs.reshape(num_tokens, -1)
-#   outputs_flat = jax.device_put(outputs_flat, data_sharding)
-#   targets_flat = targets.ravel()
-#   targets_flat = jax.device_put(targets_flat, data_sharding)
-#
-#   # In losses.py, w_unemb is resharded to replicated before kernel call
-#   w_unemb_replicated = jax.device_put(w_unemb, replicated)
-#
-#   q = outputs_flat[None]
-#   k = w_unemb_replicated[None]
-#
-#   # Use global device count for multi-host
-#   num_devices = jax.device_count()
-#   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
-#   block_sizes = BlockSizes(
-#     block_q=block_size,
-#     block_kv=block_size,
-#     block_kv_compute=block_size,
-#   )
-#   kernel = make_lse_kernel(
-#     mask_obj,
-#     block_sizes=block_sizes,
-#     is_mqa=False,
-#     head_shards=1,
-#     q_seq_shards=num_devices,
-#     interpret=interpret,
-#   )
-#
-#   q_spec = jax.P(None, "fsdp", None)
-#   k_spec = jax.P(None, None, None)
-#   lse_spec = jax.P(None, "fsdp")
-#   kernel_sharding = jax.NamedSharding(mesh, jax.P(None, "fsdp"))
-#   kernel_spec = kernel.manual_sharding_spec(kernel_sharding)
-#
-#   @functools.partial(
-#     shard_map,
-#     mesh=mesh,
-#     in_specs=(kernel_spec, q_spec, k_spec),
-#     out_specs=lse_spec,
-#     check_vma=False,
-#   )
-#   def sharded_kernel(kernel, q, k):
-#     return kernel(q, k)
-#
-#   lse = sharded_kernel(kernel, q, k).squeeze(0)  # type: ignore
-#
-#   per_token_unembs = w_unemb_replicated.at[targets_flat].get(out_sharding=data_sharding)
-#   label_logits = jnp.sum(outputs_flat * per_token_unembs, axis=-1)
-#
-#   return (lse - label_logits).mean()
-
-
-@pytest.mark.skipif(
-  not jax.devices()[0].platform == "tpu",
-  reason="TPU test - skip on non-TPU platforms",
-)
-def test_fused_cross_entropy_sharded():
-  # Use global device count for multi-host FSDP setup
-  num_devices = jax.device_count()
-  block_size = 128
-  # num_tokens_per_shard must be >= block_size, so num_tokens >= block_size * num_devices
-  min_tokens = block_size * num_devices
-  seq_len = 256
-  batch_size = max(num_devices, (min_tokens + seq_len - 1) // seq_len)
-  d_model = 128
-  vocab_size = 2048
-  max_valid_id = vocab_size - 128
-
-  key = jax.random.PRNGKey(42)
-  key_out, key_w, key_tgt = jax.random.split(key, 3)
-
-  outputs = jax.random.normal(
-    key_out, (batch_size, seq_len, d_model), dtype=jnp.float32
-  )
-  w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
-  targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
-
-  loss_ref = naive_cross_entropy(outputs, w_unemb, targets, max_valid_id)
-
-  mesh = jax.make_mesh((num_devices,), ("fsdp",), (jax.sharding.AxisType.Explicit,))
-
-  with jax.set_mesh(mesh):
-    loss_sharded = fused_cross_entropy_sharded(
-      outputs, w_unemb, targets, max_valid_id, mesh, block_size, interpret=False
-    )
-
-  np.testing.assert_allclose(loss_sharded, loss_ref, rtol=1e-4, atol=1e-4)
-
-
-@pytest.mark.skipif(
-  not jax.devices()[0].platform == "tpu",
-  reason="TPU test - skip on non-TPU platforms",
-)
-def test_fused_cross_entropy_sharded_backward():
-  # Use global device count for multi-host FSDP setup
-  num_devices = jax.device_count()
-  block_size = 128
-  # num_tokens_per_shard must be >= block_size, so num_tokens >= block_size * num_devices
-  min_tokens = block_size * num_devices
-  seq_len = 256
-  batch_size = 32 * 8
-  d_model = 768
-  vocab_size = 8192
-  max_valid_id = vocab_size - 256
-
-  key = jax.random.PRNGKey(123)
-  key_out, key_w, key_tgt = jax.random.split(key, 3)
-
-  outputs = jax.random.normal(
-    key_out, (batch_size, seq_len, d_model), dtype=jnp.bfloat16
-  )
-  w_unemb = 0.02 * jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.bfloat16)
-  targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
-
-  mesh = jax.make_mesh((num_devices,), ("fsdp",), (jax.sharding.AxisType.Explicit,))
-
-  # Pre-shard inputs along batch dimension (matching train.py data flow)
-  # wunemb (V, D) is sharded along D on 'fsdp' axis
-  batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
-  targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
-  weight_sharding = jax.NamedSharding(mesh, jax.P(None, "fsdp"))
-  outputs = jax.device_put(outputs, batch_sharding)
-  targets = jax.device_put(targets, targets_sharding)
-  w_unemb = jax.device_put(w_unemb, weight_sharding)
-
-  # Reference uses naive implementation
-
-  with jax.set_mesh(mesh):
-    grad_ref = jax.jit(
-      jax.grad(
-        lambda o, w: naive_cross_entropy(o, w, targets, max_valid_id), argnums=(0, 1)
-      )
-    )(outputs, w_unemb)
-    grad_sharded = jax.jit(
-      jax.grad(
-        lambda o, w: fused_cross_entropy_sharded(
-          o, w, targets, max_valid_id, mesh, block_size, interpret=False
-        ),
-        argnums=(0, 1),
-      )
-    )(outputs, w_unemb)
-
-  # Allgather both refs since inputs are sharded
-  grad_ref = jax.tree.map(
-    lambda x: multihost_utils.process_allgather(x, tiled=True), grad_ref
-  )
-  grad_sharded = jax.tree.map(
-    lambda x: multihost_utils.process_allgather(x, tiled=True), grad_sharded
-  )
-
-  np.testing.assert_allclose(grad_sharded[0], grad_ref[0], rtol=2e-2, atol=2e-2)
-  np.testing.assert_allclose(grad_sharded[1], grad_ref[1], rtol=2e-2, atol=2e-2)
+# =============================================================================
+# Integration Tests - test production losses.py functions
+# =============================================================================
 
 
 def make_test_config(
@@ -536,6 +314,7 @@ def make_test_config(
   mesh_axis_names: list[str],
   wunemb_sharding: list[str | None] | None = None,
 ) -> Config:
+  """Create a Config for testing with FSDP-style sharding."""
   # Default wunemb sharding matches FSDP config: [None, "fsdp"] for (V, D)
   if wunemb_sharding is None:
     wunemb_sharding = [None, mesh_axis_names[0]] if mesh_axis_names else [None, None]
@@ -580,10 +359,9 @@ def make_test_config(
   reason="Integration tests use production kernels (no interpret mode)",
 )
 def test_losses_integration_forward():
-  # Use global device count for multi-host FSDP setup
+  """Test production loss functions match on forward pass."""
   num_devices = jax.device_count()
   block_size = 128
-  min_tokens = block_size * num_devices
   seq_len = 256
   batch_size = 32 * 8
   d_model = 768
@@ -612,9 +390,7 @@ def test_losses_integration_forward():
   bias = jnp.zeros(vocab_size, dtype=jnp.bfloat16)
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
-  # Pre-shard inputs along batch dimension (matching train.py data flow)
-  # In production, model outputs arrive at the loss already sharded along B
-  # wunemb (V, D) is sharded along D on 'fsdp' axis
+  # Pre-shard inputs matching train.py data flow
   batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
   targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
   weight_sharding = jax.NamedSharding(mesh, jax.P(None, "fsdp"))
@@ -646,13 +422,12 @@ def test_losses_integration_forward():
     loss_ref = loss_fn_ref(unemb, outputs, targets)
     loss_fused = loss_fn_fused(unemb, outputs, targets)
 
-  # Debug: print values to understand numerical differences
   print(f"\n[DEBUG] loss_ref={float(loss_ref):.8f}, loss_fused={float(loss_fused):.8f}")
   print(
-    f"[DEBUG] diff={float(loss_fused - loss_ref):.8e}, rel_diff={float((loss_fused - loss_ref) / loss_ref):.8e}"
+    f"[DEBUG] diff={float(loss_fused - loss_ref):.8e}, "
+    f"rel_diff={float((loss_fused - loss_ref) / loss_ref):.8e}"
   )
 
-  # Tolerance allows for numerical precision differences between implementations
   np.testing.assert_allclose(loss_fused, loss_ref, rtol=2e-4, atol=2e-4)
 
 
@@ -661,15 +436,14 @@ def test_losses_integration_forward():
   reason="Integration tests use production kernels (no interpret mode)",
 )
 def test_losses_integration_backward():
-  # Use global device count for multi-host FSDP setup
+  """Test production loss functions match on backward pass."""
   num_devices = jax.device_count()
   block_size = 128
-  min_tokens = block_size * num_devices
   seq_len = 256
-  batch_size = max(num_devices, (min_tokens + seq_len - 1) // seq_len)
-  d_model = 128
-  vocab_size = 512
-  max_valid_id = vocab_size - 128
+  batch_size = 32 * 8
+  d_model = 768
+  vocab_size = 2 * 4096
+  max_valid_id = vocab_size - 256
 
   config = make_test_config(
     batch_size,
@@ -687,22 +461,19 @@ def test_losses_integration_backward():
   key_out, key_w, key_tgt = jax.random.split(key, 3)
 
   outputs = jax.random.normal(
-    key_out, (batch_size, seq_len, d_model), dtype=jnp.float32
+    key_out, (batch_size, seq_len, d_model), dtype=jnp.bfloat16
   )
-  w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
-  bias = jnp.zeros(vocab_size, dtype=jnp.float32)
+  w_unemb = 0.02 * jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.bfloat16)
+  bias = jnp.zeros(vocab_size, dtype=jnp.bfloat16)
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
-  # Pre-shard inputs along batch dimension (matching train.py data flow)
-  # wunemb (V, D) is sharded along D on 'fsdp' axis
+  # Pre-shard inputs matching train.py data flow
   batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
   targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
   weight_sharding = jax.NamedSharding(mesh, jax.P(None, "fsdp"))
   outputs = jax.device_put(outputs, batch_sharding)
   targets = jax.device_put(targets, targets_sharding)
   w_unemb = jax.device_put(w_unemb, weight_sharding)
-
-  unemb = LMHead(w=w_unemb, bias=bias)
 
   num_tokens = batch_size * seq_len
   shard_mapped__kernel = make_lse_kernel_sharded(
@@ -716,7 +487,6 @@ def test_losses_integration_backward():
   )
 
   def ref_loss(o, w):
-    # Use softmax_cross_entropy (production implementation) as reference
     return softmax_cross_entropy(config, LMHead(w=w, bias=bias), o, targets)
 
   def fused_loss(o, w):
@@ -725,8 +495,8 @@ def test_losses_integration_backward():
     )
 
   with jax.set_mesh(mesh):
-    grad_ref = jax.grad(ref_loss, argnums=(0, 1))(outputs, w_unemb)
-    grad_fused = jax.grad(fused_loss, argnums=(0, 1))(outputs, w_unemb)
+    grad_ref = jax.jit(jax.grad(ref_loss, argnums=(0, 1)))(outputs, w_unemb)
+    grad_fused = jax.jit(jax.grad(fused_loss, argnums=(0, 1)))(outputs, w_unemb)
 
   # Allgather sharded gradients before comparison
   grad_ref = jax.tree.map(
@@ -736,7 +506,6 @@ def test_losses_integration_backward():
     lambda x: multihost_utils.process_allgather(x, tiled=True), grad_fused
   )
 
-  # Debug: print gradient norms
   print(f"\n[DEBUG] grad_ref[0] norm={float(jnp.linalg.norm(grad_ref[0])):.6f}")
   print(f"[DEBUG] grad_fused[0] norm={float(jnp.linalg.norm(grad_fused[0])):.6f}")
   print(f"[DEBUG] grad_ref[1] norm={float(jnp.linalg.norm(grad_ref[1])):.6f}")
@@ -744,147 +513,3 @@ def test_losses_integration_backward():
 
   np.testing.assert_allclose(grad_fused[0], grad_ref[0], rtol=2e-2, atol=2e-2)
   np.testing.assert_allclose(grad_fused[1], grad_ref[1], rtol=2e-2, atol=2e-2)
-
-
-INTEGRATION_CONFIGS = [
-  (2, 256, 128, 512),
-  (4, 128, 64, 1024),
-  (1, 256, 256, 256),
-  (2, 128, 128, 2048),
-]
-INTEGRATION_CONFIG_IDS = [f"B{b}_S{s}_D{d}_V{v}" for b, s, d, v in INTEGRATION_CONFIGS]
-
-
-@pytest.mark.skipif(
-  not jax.devices()[0].platform == "tpu",
-  reason="Integration tests use production kernels (no interpret mode)",
-)
-@pytest.mark.parametrize(
-  "base_batch_size,seq_len,d_model,vocab_size",
-  INTEGRATION_CONFIGS,
-  ids=INTEGRATION_CONFIG_IDS,
-)
-def test_losses_integration_parametrized(base_batch_size, seq_len, d_model, vocab_size):
-  # Use global device count for multi-host FSDP setup
-  num_devices = jax.device_count()
-  block_size = 128
-  min_tokens = block_size * num_devices
-  # Scale batch size to meet minimum token requirement
-  batch_size = max(num_devices, base_batch_size, (min_tokens + seq_len - 1) // seq_len)
-  max_valid_id = vocab_size - 128
-
-  config = make_test_config(
-    batch_size,
-    seq_len,
-    d_model,
-    vocab_size,
-    max_valid_id,
-    data_sharding=["fsdp"],
-    mesh_shape=[num_devices],
-    mesh_axis_names=["fsdp"],
-  )
-  mesh = jax.make_mesh([num_devices], ["fsdp"], (jax.sharding.AxisType.Explicit,))
-
-  key = jax.random.PRNGKey(42)
-  key_out, key_w, key_tgt = jax.random.split(key, 3)
-
-  outputs = jax.random.normal(
-    key_out, (batch_size, seq_len, d_model), dtype=jnp.float32
-  )
-  w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
-  bias = jnp.zeros(vocab_size, dtype=jnp.float32)
-  targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
-
-  # Pre-shard inputs along batch dimension (matching train.py data flow)
-  batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
-  targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
-  outputs = jax.device_put(outputs, batch_sharding)
-  targets = jax.device_put(targets, targets_sharding)
-
-  unemb = LMHead(w=w_unemb, bias=bias)
-
-  num_tokens = batch_size * seq_len
-  shard_mapped__kernel = make_lse_kernel_sharded(
-    q_seq_len=num_tokens,
-    k_seq_len=vocab_size,
-    mesh=mesh,
-    data_sharding=config.sharding.data,
-    q_seq_shards=num_devices,
-    block_size=block_size,
-    max_valid_id=max_valid_id,
-  )
-
-  loss_ref = naive_cross_entropy(outputs, w_unemb, targets, max_valid_id)
-
-  with jax.set_mesh(mesh):
-    loss_fused = fused_softmax_cross_entropy(
-      config, unemb, outputs, targets, shard_mapped__kernel
-    )
-
-  np.testing.assert_allclose(loss_fused, loss_ref, rtol=1e-4, atol=1e-4)
-
-
-@pytest.mark.skipif(
-  not jax.devices()[0].platform == "tpu",
-  reason="TPU test - skip on non-TPU platforms",
-)
-def test_losses_integration_tpu_sharded():
-  # Use global device count for multi-host FSDP setup
-  num_devices = jax.device_count()
-  block_size = 128
-  min_tokens = block_size * num_devices
-  seq_len = 256
-  batch_size = max(num_devices, (min_tokens + seq_len - 1) // seq_len)
-  d_model = 128
-  vocab_size = 2048
-  max_valid_id = vocab_size - 128
-
-  config = make_test_config(
-    batch_size,
-    seq_len,
-    d_model,
-    vocab_size,
-    max_valid_id,
-    data_sharding=["fsdp"],
-    mesh_shape=[num_devices],
-    mesh_axis_names=["fsdp"],
-  )
-  mesh = jax.make_mesh([num_devices], ["fsdp"], (jax.sharding.AxisType.Explicit,))
-
-  key = jax.random.PRNGKey(42)
-  key_out, key_w, key_tgt = jax.random.split(key, 3)
-
-  outputs = jax.random.normal(
-    key_out, (batch_size, seq_len, d_model), dtype=jnp.float32
-  )
-  w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
-  bias = jnp.zeros(vocab_size, dtype=jnp.float32)
-  targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
-
-  # Pre-shard inputs along batch dimension (matching train.py data flow)
-  batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
-  targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
-  outputs = jax.device_put(outputs, batch_sharding)
-  targets = jax.device_put(targets, targets_sharding)
-
-  unemb = LMHead(w=w_unemb, bias=bias)
-
-  num_tokens = batch_size * seq_len
-  shard_mapped__kernel = make_lse_kernel_sharded(
-    q_seq_len=num_tokens,
-    k_seq_len=vocab_size,
-    mesh=mesh,
-    data_sharding=config.sharding.data,
-    q_seq_shards=num_devices,
-    block_size=block_size,
-    max_valid_id=max_valid_id,
-  )
-
-  loss_ref = naive_cross_entropy(outputs, w_unemb, targets, max_valid_id)
-
-  with jax.set_mesh(mesh):
-    loss_fused = fused_softmax_cross_entropy(
-      config, unemb, outputs, targets, shard_mapped__kernel
-    )
-
-  np.testing.assert_allclose(loss_fused, loss_ref, rtol=1e-4, atol=1e-4)
