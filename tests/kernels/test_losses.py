@@ -33,6 +33,9 @@ CONFIGS = [
 ]
 CONFIG_IDS = [f"B{b}_S{s}_D{d}_V{v}" for b, s, d, v in CONFIGS]
 
+GLOBAL_RTOL = 1e-4
+GLOBAL_ATOL = 1e-4
+
 
 def ref_cross_entropy(
   outputs: jax.Array,
@@ -116,7 +119,7 @@ def test_fused_cross_entropy_forward(batch_size, seq_len, d_model, vocab_size):
     partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
   )(outputs, w_unemb, targets)
 
-  np.testing.assert_allclose(loss_fused, loss_ref, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
 
 
 @pytest.mark.parametrize(
@@ -140,7 +143,7 @@ def test_fused_cross_entropy_backward_outputs(batch_size, seq_len, d_model, voca
     jax.grad(lambda o: fused_cross_entropy(o, w_unemb, targets, max_valid_id, 128))
   )(outputs)
 
-  np.testing.assert_allclose(grad_fused, grad_ref, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(grad_fused, grad_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
 
 
 @pytest.mark.parametrize(
@@ -166,7 +169,7 @@ def test_fused_cross_entropy_backward_weights(batch_size, seq_len, d_model, voca
     )
   )(w_unemb)
 
-  np.testing.assert_allclose(grad_fused, grad_ref, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(grad_fused, grad_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
 
 
 def test_fused_cross_entropy_single_block():
@@ -186,7 +189,7 @@ def test_fused_cross_entropy_single_block():
     partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
   )(outputs, w_unemb, targets)
 
-  np.testing.assert_allclose(loss_fused, loss_ref, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
 
 
 def test_fused_cross_entropy_large_logits():
@@ -209,7 +212,7 @@ def test_fused_cross_entropy_large_logits():
   assert jnp.isfinite(loss_ref)
   assert jnp.isfinite(loss_fused)
 
-  np.testing.assert_allclose(loss_fused, loss_ref, rtol=1e-3, atol=1e-3)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
 
 
 def test_fused_cross_entropy_with_padding():
@@ -231,7 +234,7 @@ def test_fused_cross_entropy_with_padding():
     partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
   )(outputs, w_unemb, targets)
 
-  np.testing.assert_allclose(loss_fused, loss_ref, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
 
 
 TPU_CONFIGS = [
@@ -277,7 +280,7 @@ def test_fused_cross_entropy_on_tpu(batch_size, seq_len, d_model, vocab_size):
     )
   )(outputs, w_unemb, targets)
 
-  np.testing.assert_allclose(loss_fused, loss_ref, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
 
   grad_ref = jax.jit(
     jax.grad(
@@ -292,8 +295,8 @@ def test_fused_cross_entropy_on_tpu(batch_size, seq_len, d_model, vocab_size):
     )
   )(outputs, w_unemb)
 
-  np.testing.assert_allclose(grad_fused[0], grad_ref[0], rtol=1e-4, atol=1e-4)
-  np.testing.assert_allclose(grad_fused[1], grad_ref[1], rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(grad_fused[0], grad_ref[0], rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
+  np.testing.assert_allclose(grad_fused[1], grad_ref[1], rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
 
 
 # =============================================================================
@@ -426,7 +429,7 @@ def test_losses_integration_forward():
     f"rel_diff={float((loss_fused - loss_ref) / loss_ref):.8e}"
   )
 
-  np.testing.assert_allclose(loss_fused, loss_ref, rtol=2e-4, atol=2e-4)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
 
 
 @pytest.mark.skipif(
@@ -514,5 +517,5 @@ def test_losses_integration_backward():
   print(f"[DEBUG] grad_ref[1] norm={float(jnp.linalg.norm(grad_ref[1])):.6f}")
   print(f"[DEBUG] grad_fused[1] norm={float(jnp.linalg.norm(grad_fused[1])):.6f}")
 
-  np.testing.assert_allclose(grad_fused[0], grad_ref[0], rtol=1e-4, atol=1e-4)
-  np.testing.assert_allclose(grad_fused[1], grad_ref[1], rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(grad_fused[0], grad_ref[0], rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
+  np.testing.assert_allclose(grad_fused[1], grad_ref[1], rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
