@@ -23,7 +23,7 @@ from bmgpt.losses import fused_softmax_cross_entropy, softmax_cross_entropy
 from bmgpt.model import LMHead
 from bmgpt.splash_helpers import make_lse_kernel_sharded
 
-# block_size must be >= 128 (TPU NUM_LANES requirement) and divide (batch_size * seq_len)
+# block_size must be >= 128 (TPU NUM_LANES requirement) & divide (batch_size * seq_len)
 CONFIGS = [
   (1, 128, 64, 256),
   (2, 128, 128, 512),
@@ -34,13 +34,13 @@ CONFIGS = [
 CONFIG_IDS = [f"B{b}_S{s}_D{d}_V{v}" for b, s, d, v in CONFIGS]
 
 
-def naive_cross_entropy(
+def ref_cross_entropy(
   outputs: jax.Array,
   w_unemb: jax.Array,
   targets: jax.Array,
   max_valid_id: int | None = None,
 ) -> jax.Array:
-  """Naive cross-entropy that materializes full logits matrix."""
+  """ref cross-entropy that materializes full logits matrix."""
   logits = jnp.einsum("bsd,vd->bsv", outputs, w_unemb)
 
   if max_valid_id is not None:
@@ -109,14 +109,14 @@ def test_fused_cross_entropy_forward(batch_size, seq_len, d_model, vocab_size):
   max_valid_id = vocab_size - 1
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
-  loss_naive = jax.jit(partial(naive_cross_entropy, max_valid_id=max_valid_id))(
+  loss_ref = jax.jit(partial(ref_cross_entropy, max_valid_id=max_valid_id))(
     outputs, w_unemb, targets
   )
   loss_fused = jax.jit(
     partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
   )(outputs, w_unemb, targets)
 
-  np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=1e-4, atol=1e-4)
 
 
 @pytest.mark.parametrize(
@@ -133,14 +133,14 @@ def test_fused_cross_entropy_backward_outputs(batch_size, seq_len, d_model, voca
   max_valid_id = vocab_size - 1
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
-  grad_naive = jax.jit(
-    jax.grad(lambda o: naive_cross_entropy(o, w_unemb, targets, max_valid_id))
+  grad_ref = jax.jit(
+    jax.grad(lambda o: ref_cross_entropy(o, w_unemb, targets, max_valid_id))
   )(outputs)
   grad_fused = jax.jit(
     jax.grad(lambda o: fused_cross_entropy(o, w_unemb, targets, max_valid_id, 128))
   )(outputs)
 
-  np.testing.assert_allclose(grad_fused, grad_naive, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(grad_fused, grad_ref, rtol=2e-2, atol=2e-2)
 
 
 @pytest.mark.parametrize(
@@ -157,10 +157,8 @@ def test_fused_cross_entropy_backward_weights(batch_size, seq_len, d_model, voca
   max_valid_id = vocab_size - 1
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
-  grad_naive = jax.jit(
-    jax.grad(
-      lambda w: naive_cross_entropy(outputs, w, targets, max_valid_id), argnums=0
-    )
+  grad_ref = jax.jit(
+    jax.grad(lambda w: ref_cross_entropy(outputs, w, targets, max_valid_id), argnums=0)
   )(w_unemb)
   grad_fused = jax.jit(
     jax.grad(
@@ -168,7 +166,7 @@ def test_fused_cross_entropy_backward_weights(batch_size, seq_len, d_model, voca
     )
   )(w_unemb)
 
-  np.testing.assert_allclose(grad_fused, grad_naive, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(grad_fused, grad_ref, rtol=2e-2, atol=2e-2)
 
 
 def test_fused_cross_entropy_single_block():
@@ -181,14 +179,14 @@ def test_fused_cross_entropy_single_block():
   targets = jax.random.randint(key_tgt, (1, 128), 0, 255)
   max_valid_id = 255
 
-  loss_naive = jax.jit(partial(naive_cross_entropy, max_valid_id=max_valid_id))(
+  loss_ref = jax.jit(partial(ref_cross_entropy, max_valid_id=max_valid_id))(
     outputs, w_unemb, targets
   )
   loss_fused = jax.jit(
     partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
   )(outputs, w_unemb, targets)
 
-  np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=1e-4, atol=1e-4)
 
 
 def test_fused_cross_entropy_large_logits():
@@ -201,17 +199,17 @@ def test_fused_cross_entropy_large_logits():
   max_valid_id = 511
   targets = jax.random.randint(key_tgt, (2, 128), 0, max_valid_id)
 
-  loss_naive = jax.jit(partial(naive_cross_entropy, max_valid_id=max_valid_id))(
+  loss_ref = jax.jit(partial(ref_cross_entropy, max_valid_id=max_valid_id))(
     outputs, w_unemb, targets
   )
   loss_fused = jax.jit(
     partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
   )(outputs, w_unemb, targets)
 
-  assert jnp.isfinite(loss_naive)
+  assert jnp.isfinite(loss_ref)
   assert jnp.isfinite(loss_fused)
 
-  np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-3, atol=1e-3)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=1e-3, atol=1e-3)
 
 
 def test_fused_cross_entropy_with_padding():
@@ -226,14 +224,14 @@ def test_fused_cross_entropy_with_padding():
   w_unemb = jax.random.normal(key_w, (vocab_size, 128), dtype=jnp.float32)
   targets = jax.random.randint(key_tgt, (2, 128), 0, max_valid_id)
 
-  loss_naive = jax.jit(partial(naive_cross_entropy, max_valid_id=max_valid_id))(
+  loss_ref = jax.jit(partial(ref_cross_entropy, max_valid_id=max_valid_id))(
     outputs, w_unemb, targets
   )
   loss_fused = jax.jit(
     partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
   )(outputs, w_unemb, targets)
 
-  np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=1e-4, atol=1e-4)
 
 
 TPU_CONFIGS = [
@@ -270,7 +268,7 @@ def test_fused_cross_entropy_on_tpu(batch_size, seq_len, d_model, vocab_size):
   max_valid_id = vocab_size - 128
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
-  loss_naive = jax.jit(partial(naive_cross_entropy, max_valid_id=max_valid_id))(
+  loss_ref = jax.jit(partial(ref_cross_entropy, max_valid_id=max_valid_id))(
     outputs, w_unemb, targets
   )
   loss_fused = jax.jit(
@@ -279,11 +277,11 @@ def test_fused_cross_entropy_on_tpu(batch_size, seq_len, d_model, vocab_size):
     )
   )(outputs, w_unemb, targets)
 
-  np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=1e-4, atol=1e-4)
 
-  grad_naive = jax.jit(
+  grad_ref = jax.jit(
     jax.grad(
-      lambda o, w: naive_cross_entropy(o, w, targets, max_valid_id), argnums=(0, 1)
+      lambda o, w: ref_cross_entropy(o, w, targets, max_valid_id), argnums=(0, 1)
     )
   )(outputs, w_unemb)
 
@@ -294,8 +292,8 @@ def test_fused_cross_entropy_on_tpu(batch_size, seq_len, d_model, vocab_size):
     )
   )(outputs, w_unemb)
 
-  np.testing.assert_allclose(grad_fused[0], grad_naive[0], rtol=2e-2, atol=2e-2)
-  np.testing.assert_allclose(grad_fused[1], grad_naive[1], rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(grad_fused[0], grad_ref[0], rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(grad_fused[1], grad_ref[1], rtol=2e-2, atol=2e-2)
 
 
 # =============================================================================
@@ -439,7 +437,7 @@ def test_losses_integration_backward():
   """Test production loss functions match on backward pass."""
   num_devices = jax.device_count()
   block_size = 128
-  seq_len = 256
+  seq_len = 1024
   batch_size = 32 * 8
   d_model = 768
   vocab_size = 2 * 4096
@@ -486,17 +484,22 @@ def test_losses_integration_backward():
     max_valid_id=max_valid_id,
   )
 
-  def ref_loss(o, w):
-    return softmax_cross_entropy(config, LMHead(w=w, bias=bias), o, targets)
+  @jax.jit
+  def evaluate_step(outputs, w_unemb, targets):
+    def ref_loss(o, w):
+      return softmax_cross_entropy(config, LMHead(w=w, bias=bias), o, targets)
 
-  def fused_loss(o, w):
-    return fused_softmax_cross_entropy(
-      config, LMHead(w=w, bias=bias), o, targets, shard_mapped__kernel
-    )
+    def fused_loss(o, w):
+      return fused_softmax_cross_entropy(
+        config, LMHead(w=w, bias=bias), o, targets, shard_mapped__kernel
+      )
+
+    grad_ref = jax.grad(ref_loss, argnums=(0, 1))(outputs, w_unemb)
+    grad_fused = jax.grad(fused_loss, argnums=(0, 1))(outputs, w_unemb)
+    return grad_ref, grad_fused
 
   with jax.set_mesh(mesh):
-    grad_ref = jax.jit(jax.grad(ref_loss, argnums=(0, 1)))(outputs, w_unemb)
-    grad_fused = jax.jit(jax.grad(fused_loss, argnums=(0, 1)))(outputs, w_unemb)
+    grad_ref, grad_fused = evaluate_step(outputs, w_unemb, targets)
 
   # Allgather sharded gradients before comparison
   grad_ref = jax.tree.map(
