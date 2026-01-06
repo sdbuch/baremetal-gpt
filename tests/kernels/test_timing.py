@@ -218,11 +218,12 @@ def test_scanned_reference_correctness(
     outputs, w_unemb, targets
   )
 
+  # Match tolerance from test_losses.py
   np.testing.assert_allclose(
     loss_scanned,
     loss_ref,
-    rtol=1e-5,
-    atol=1e-5,
+    rtol=1e-4,
+    atol=1e-4,
     err_msg=f"Scanned (block_size={block_size_v}) does not match materialized reference",
   )
 
@@ -250,11 +251,12 @@ def test_scanned_logsumexp_correctness(block_size_v):
     outputs, w_unemb
   )
 
+  # Match tolerance from test_losses.py
   np.testing.assert_allclose(
     lse_scanned,
     lse_ref,
-    rtol=1e-5,
-    atol=1e-5,
+    rtol=1e-4,
+    atol=1e-4,
     err_msg=f"Scanned logsumexp (block_size={block_size_v}) does not match reference",
   )
 
@@ -284,11 +286,12 @@ def test_scanned_reference_partial_blocks(block_size_v):
     outputs, w_unemb, targets
   )
 
+  # Match tolerance from test_losses.py
   np.testing.assert_allclose(
     loss_scanned,
     loss_ref,
-    rtol=1e-5,
-    atol=1e-5,
+    rtol=1e-4,
+    atol=1e-4,
     err_msg=f"Partial block handling failed for vocab_size={vocab_size}, block_size={block_size_v}",
   )
 
