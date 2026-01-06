@@ -139,6 +139,11 @@ def make_splash_kernel_sharded(
   if block_size % 128 != 0:
     # splash attention kernel requires block size to be a multiple of 128
     raise NotImplementedError("Splash block size needs to be a multiple of 128")
+  # Heuristic: if model is small enough, use fused splash backward
+  if (q_seq_len // block_size) * num_heads * q_seq_len * 128 <= 2**28:
+    block_extra_args = {"use_fused_bwd_kernel": True}
+  else:
+    block_extra_args = {"block_q_dq": block_size, "block_kv_dq": block_size}
   block_sizes = BlockSizesSplash(
     block_q=block_size,
     block_kv=block_size,
@@ -146,8 +151,7 @@ def make_splash_kernel_sharded(
     block_q_dkv=block_size,
     block_kv_dkv=block_size,
     block_kv_dkv_compute=block_size,
-    block_q_dq=block_size,
-    block_kv_dq=block_size,
+    *block_extra_args,
   )
   kernel = make_splash_mha(
     mask,
