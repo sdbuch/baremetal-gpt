@@ -140,7 +140,7 @@ def test_fused_cross_entropy_backward_outputs(batch_size, seq_len, d_model, voca
     jax.grad(lambda o: fused_cross_entropy(o, w_unemb, targets, max_valid_id, 128))
   )(outputs)
 
-  np.testing.assert_allclose(grad_fused, grad_ref, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(grad_fused, grad_ref, rtol=1e-4, atol=1e-4)
 
 
 @pytest.mark.parametrize(
@@ -166,7 +166,7 @@ def test_fused_cross_entropy_backward_weights(batch_size, seq_len, d_model, voca
     )
   )(w_unemb)
 
-  np.testing.assert_allclose(grad_fused, grad_ref, rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(grad_fused, grad_ref, rtol=1e-4, atol=1e-4)
 
 
 def test_fused_cross_entropy_single_block():
@@ -292,8 +292,8 @@ def test_fused_cross_entropy_on_tpu(batch_size, seq_len, d_model, vocab_size):
     )
   )(outputs, w_unemb)
 
-  np.testing.assert_allclose(grad_fused[0], grad_ref[0], rtol=2e-2, atol=2e-2)
-  np.testing.assert_allclose(grad_fused[1], grad_ref[1], rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(grad_fused[0], grad_ref[0], rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(grad_fused[1], grad_ref[1], rtol=1e-4, atol=1e-4)
 
 
 # =============================================================================
@@ -514,5 +514,5 @@ def test_losses_integration_backward():
   print(f"[DEBUG] grad_ref[1] norm={float(jnp.linalg.norm(grad_ref[1])):.6f}")
   print(f"[DEBUG] grad_fused[1] norm={float(jnp.linalg.norm(grad_fused[1])):.6f}")
 
-  np.testing.assert_allclose(grad_fused[0], grad_ref[0], rtol=2e-2, atol=2e-2)
-  np.testing.assert_allclose(grad_fused[1], grad_ref[1], rtol=2e-2, atol=2e-2)
+  np.testing.assert_allclose(grad_fused[0], grad_ref[0], rtol=1e-4, atol=1e-4)
+  np.testing.assert_allclose(grad_fused[1], grad_ref[1], rtol=1e-4, atol=1e-4)
