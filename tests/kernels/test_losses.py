@@ -1,3 +1,5 @@
+"""Tests for cross-entropy loss functions with the fused LSE kernel."""
+
 from functools import partial
 
 import jax
@@ -9,51 +11,24 @@ from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_mask impo
   MultiHeadMask,
 )
 
-from bmgpt.config import (
-  Config,
-  DatasetConfig,
-  DatasetName,
-  ModelConfig,
-  ShardingConfig,
-  TransformerType,
-)
 from bmgpt.kernels.lse_kernel import BlockSizes, make_lse_kernel
 from bmgpt.kernels.lse_mask import VocabMask
 from bmgpt.losses import fused_softmax_cross_entropy, softmax_cross_entropy
 from bmgpt.model import LMHead
 from bmgpt.splash_helpers import make_lse_kernel_sharded
 
-# block_size must be >= 128 (TPU NUM_LANES requirement) & divide (batch_size * seq_len)
-CONFIGS = [
-  (1, 128, 64, 256),
-  (2, 128, 128, 512),
-  (4, 128, 128, 1024),
-  (4, 256, 256, 2048),
-  (2, 256, 128, 4096),
-]
-CONFIG_IDS = [f"B{b}_S{s}_D{d}_V{v}" for b, s, d, v in CONFIGS]
-
-GLOBAL_RTOL = 1e-4
-GLOBAL_ATOL = 1e-4
-
-
-def ref_cross_entropy(
-  outputs: jax.Array,
-  w_unemb: jax.Array,
-  targets: jax.Array,
-  max_valid_id: int | None = None,
-) -> jax.Array:
-  """ref cross-entropy that materializes full logits matrix."""
-  logits = jnp.einsum("bsd,vd->bsv", outputs, w_unemb)
-
-  if max_valid_id is not None:
-    vocab_ids = jnp.arange(logits.shape[-1])
-    mask = vocab_ids <= max_valid_id
-    logits = jnp.where(mask[None, None, :], logits, -1e10)
-
-  label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1).squeeze(-1)
-  lse = jax.nn.logsumexp(logits, axis=-1)
-  return (lse - label_logits).mean()
+from .conftest import (
+  DEFAULT_BLOCK_SIZE,
+  FORWARD_ATOL,
+  FORWARD_RTOL,
+  SMALL_CONFIG_IDS,
+  SMALL_CONFIGS,
+  TPU_CONFIG_IDS,
+  TPU_CONFIGS,
+  make_test_config,
+  ref_cross_entropy,
+  requires_tpu,
+)
 
 
 def fused_cross_entropy(
@@ -61,7 +36,7 @@ def fused_cross_entropy(
   w_unemb: jax.Array,
   targets: jax.Array,
   max_valid_id: int,
-  block_size: int = 128,
+  block_size: int = DEFAULT_BLOCK_SIZE,
   interpret: bool = True,
 ) -> jax.Array:
   """Fused cross-entropy using LSE kernel directly (for kernel testing)."""
@@ -99,9 +74,10 @@ def fused_cross_entropy(
 
 
 @pytest.mark.parametrize(
-  "batch_size,seq_len,d_model,vocab_size", CONFIGS, ids=CONFIG_IDS
+  "batch_size,seq_len,d_model,vocab_size", SMALL_CONFIGS, ids=SMALL_CONFIG_IDS
 )
 def test_fused_cross_entropy_forward(batch_size, seq_len, d_model, vocab_size):
+  """Test fused cross-entropy forward pass matches reference."""
   key = jax.random.PRNGKey(42)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
 
@@ -116,16 +92,19 @@ def test_fused_cross_entropy_forward(batch_size, seq_len, d_model, vocab_size):
     outputs, w_unemb, targets
   )
   loss_fused = jax.jit(
-    partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
+    partial(
+      fused_cross_entropy, max_valid_id=max_valid_id, block_size=DEFAULT_BLOCK_SIZE
+    )
   )(outputs, w_unemb, targets)
 
-  np.testing.assert_allclose(loss_fused, loss_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=FORWARD_RTOL, atol=FORWARD_ATOL)
 
 
 @pytest.mark.parametrize(
-  "batch_size,seq_len,d_model,vocab_size", CONFIGS, ids=CONFIG_IDS
+  "batch_size,seq_len,d_model,vocab_size", SMALL_CONFIGS, ids=SMALL_CONFIG_IDS
 )
 def test_fused_cross_entropy_backward_outputs(batch_size, seq_len, d_model, vocab_size):
+  """Test fused cross-entropy gradient w.r.t. outputs matches reference."""
   key = jax.random.PRNGKey(123)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
 
@@ -140,16 +119,21 @@ def test_fused_cross_entropy_backward_outputs(batch_size, seq_len, d_model, voca
     jax.grad(lambda o: ref_cross_entropy(o, w_unemb, targets, max_valid_id))
   )(outputs)
   grad_fused = jax.jit(
-    jax.grad(lambda o: fused_cross_entropy(o, w_unemb, targets, max_valid_id, 128))
+    jax.grad(
+      lambda o: fused_cross_entropy(
+        o, w_unemb, targets, max_valid_id, DEFAULT_BLOCK_SIZE
+      )
+    )
   )(outputs)
 
-  np.testing.assert_allclose(grad_fused, grad_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
+  np.testing.assert_allclose(grad_fused, grad_ref, rtol=FORWARD_RTOL, atol=FORWARD_ATOL)
 
 
 @pytest.mark.parametrize(
-  "batch_size,seq_len,d_model,vocab_size", CONFIGS, ids=CONFIG_IDS
+  "batch_size,seq_len,d_model,vocab_size", SMALL_CONFIGS, ids=SMALL_CONFIG_IDS
 )
 def test_fused_cross_entropy_backward_weights(batch_size, seq_len, d_model, vocab_size):
+  """Test fused cross-entropy gradient w.r.t. weights matches reference."""
   key = jax.random.PRNGKey(456)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
 
@@ -165,99 +149,68 @@ def test_fused_cross_entropy_backward_weights(batch_size, seq_len, d_model, voca
   )(w_unemb)
   grad_fused = jax.jit(
     jax.grad(
-      lambda w: fused_cross_entropy(outputs, w, targets, max_valid_id, 128), argnums=0
+      lambda w: fused_cross_entropy(
+        outputs, w, targets, max_valid_id, DEFAULT_BLOCK_SIZE
+      ),
+      argnums=0,
     )
   )(w_unemb)
 
-  np.testing.assert_allclose(grad_fused, grad_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
+  np.testing.assert_allclose(grad_fused, grad_ref, rtol=FORWARD_RTOL, atol=FORWARD_ATOL)
 
 
-def test_fused_cross_entropy_single_block():
-  """Edge case: single block computation."""
+# =============================================================================
+# Edge Cases
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+  "name,batch_size,seq_len,d_model,vocab_size,max_valid_id,scale",
+  [
+    pytest.param("single_block", 1, 128, 128, 256, 255, 1.0, id="single_block"),
+    pytest.param("large_logits", 2, 128, 128, 512, 511, 5.0, id="large_logits"),
+    pytest.param("with_padding", 2, 128, 128, 1024, 900, 1.0, id="with_padding"),
+  ],
+)
+def test_fused_cross_entropy_edge_cases(
+  name, batch_size, seq_len, d_model, vocab_size, max_valid_id, scale
+):
+  """Test edge cases: single block, large logits, vocab masking."""
   key = jax.random.PRNGKey(789)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
 
-  outputs = jax.random.normal(key_out, (1, 128, 128), dtype=jnp.float32)
-  w_unemb = jax.random.normal(key_w, (256, 128), dtype=jnp.float32)
-  targets = jax.random.randint(key_tgt, (1, 128), 0, 255)
-  max_valid_id = 255
+  outputs = jax.random.normal(
+    key_out, (batch_size, seq_len, d_model), dtype=jnp.float32
+  )
+  outputs = outputs * scale
+  w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
+  w_unemb = w_unemb * scale
+  targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
   loss_ref = jax.jit(partial(ref_cross_entropy, max_valid_id=max_valid_id))(
     outputs, w_unemb, targets
   )
   loss_fused = jax.jit(
-    partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
+    partial(
+      fused_cross_entropy, max_valid_id=max_valid_id, block_size=DEFAULT_BLOCK_SIZE
+    )
   )(outputs, w_unemb, targets)
 
-  np.testing.assert_allclose(loss_fused, loss_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
+  if scale > 1.0:
+    assert jnp.isfinite(loss_ref)
+    assert jnp.isfinite(loss_fused)
+
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=FORWARD_RTOL, atol=FORWARD_ATOL)
 
 
-def test_fused_cross_entropy_large_logits():
-  """Edge case: numerical stability with large logit values."""
-  key = jax.random.PRNGKey(999)
-  key_out, key_w, key_tgt = jax.random.split(key, 3)
-
-  outputs = jax.random.normal(key_out, (2, 128, 128), dtype=jnp.float32) * 5.0
-  w_unemb = jax.random.normal(key_w, (512, 128), dtype=jnp.float32) * 5.0
-  max_valid_id = 511
-  targets = jax.random.randint(key_tgt, (2, 128), 0, max_valid_id)
-
-  loss_ref = jax.jit(partial(ref_cross_entropy, max_valid_id=max_valid_id))(
-    outputs, w_unemb, targets
-  )
-  loss_fused = jax.jit(
-    partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
-  )(outputs, w_unemb, targets)
-
-  assert jnp.isfinite(loss_ref)
-  assert jnp.isfinite(loss_fused)
-
-  np.testing.assert_allclose(loss_fused, loss_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
+# =============================================================================
+# TPU Tests
+# =============================================================================
 
 
-def test_fused_cross_entropy_with_padding():
-  """Edge case: vocab masking with max_valid_id < vocab_size."""
-  key = jax.random.PRNGKey(321)
-  key_out, key_w, key_tgt = jax.random.split(key, 3)
-
-  vocab_size = 1024
-  max_valid_id = 900
-
-  outputs = jax.random.normal(key_out, (2, 128, 128), dtype=jnp.float32)
-  w_unemb = jax.random.normal(key_w, (vocab_size, 128), dtype=jnp.float32)
-  targets = jax.random.randint(key_tgt, (2, 128), 0, max_valid_id)
-
-  loss_ref = jax.jit(partial(ref_cross_entropy, max_valid_id=max_valid_id))(
-    outputs, w_unemb, targets
-  )
-  loss_fused = jax.jit(
-    partial(fused_cross_entropy, max_valid_id=max_valid_id, block_size=128)
-  )(outputs, w_unemb, targets)
-
-  np.testing.assert_allclose(loss_fused, loss_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
-
-
-TPU_CONFIGS = [
-  (8, 128, 128, 2048),
-  (16, 256, 256, 4096),
-  (1, 256, 64, 512),
-  (2, 128, 256, 1024),
-  (4, 256, 128, 2048),
-  (8, 256, 64, 4096),
-  (4, 128, 256, 512),
-  (2, 256, 128, 1024),
-]
-TPU_CONFIG_IDS = [f"B{b}_S{s}_D{d}_V{v}" for b, s, d, v in TPU_CONFIGS]
-
-
-@pytest.mark.skipif(
-  not jax.devices()[0].platform == "tpu",
-  reason="TPU test - skip on non-TPU platforms",
-)
+@requires_tpu
 @pytest.mark.parametrize(
-  "batch_size,seq_len,d_model,vocab_size",
-  TPU_CONFIGS,
-  ids=TPU_CONFIG_IDS,
+  "batch_size,seq_len,d_model,vocab_size", TPU_CONFIGS, ids=TPU_CONFIG_IDS
 )
 def test_fused_cross_entropy_on_tpu(batch_size, seq_len, d_model, vocab_size):
   """Test kernel on TPU without interpret mode."""
@@ -276,12 +229,16 @@ def test_fused_cross_entropy_on_tpu(batch_size, seq_len, d_model, vocab_size):
   )
   loss_fused = jax.jit(
     partial(
-      fused_cross_entropy, max_valid_id=max_valid_id, block_size=128, interpret=False
+      fused_cross_entropy,
+      max_valid_id=max_valid_id,
+      block_size=DEFAULT_BLOCK_SIZE,
+      interpret=False,
     )
   )(outputs, w_unemb, targets)
 
-  np.testing.assert_allclose(loss_fused, loss_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=FORWARD_RTOL, atol=FORWARD_ATOL)
 
+  # Test gradients
   grad_ref = jax.jit(
     jax.grad(
       lambda o, w: ref_cross_entropy(o, w, targets, max_valid_id), argnums=(0, 1)
@@ -290,13 +247,19 @@ def test_fused_cross_entropy_on_tpu(batch_size, seq_len, d_model, vocab_size):
 
   grad_fused = jax.jit(
     jax.grad(
-      lambda o, w: fused_cross_entropy(o, w, targets, max_valid_id, 128, False),
+      lambda o, w: fused_cross_entropy(
+        o, w, targets, max_valid_id, DEFAULT_BLOCK_SIZE, False
+      ),
       argnums=(0, 1),
     )
   )(outputs, w_unemb)
 
-  np.testing.assert_allclose(grad_fused[0], grad_ref[0], rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
-  np.testing.assert_allclose(grad_fused[1], grad_ref[1], rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
+  np.testing.assert_allclose(
+    grad_fused[0], grad_ref[0], rtol=FORWARD_RTOL, atol=FORWARD_ATOL
+  )
+  np.testing.assert_allclose(
+    grad_fused[1], grad_ref[1], rtol=FORWARD_RTOL, atol=FORWARD_ATOL
+  )
 
 
 # =============================================================================
@@ -304,65 +267,10 @@ def test_fused_cross_entropy_on_tpu(batch_size, seq_len, d_model, vocab_size):
 # =============================================================================
 
 
-def make_test_config(
-  batch_size: int,
-  seq_len: int,
-  d_model: int,
-  vocab_size: int,
-  max_valid_id: int,
-  data_sharding: list[str | None],
-  mesh_shape: list[int],
-  mesh_axis_names: list[str],
-  wunemb_sharding: list[str | None] | None = None,
-) -> Config:
-  """Create a Config for testing with FSDP-style sharding."""
-  # Default wunemb sharding matches FSDP config: [None, "fsdp"] for (V, D)
-  if wunemb_sharding is None:
-    wunemb_sharding = [None, mesh_axis_names[0]] if mesh_axis_names else [None, None]
-  return Config(
-    seed=42,
-    used_fused_xent_loss=True,
-    train_dataset=DatasetConfig(
-      name=DatasetName.SHAKESPEARE,
-      path="",
-      seq_len=seq_len,
-      max_valid_token_id=max_valid_id,
-      global_batch_size=batch_size,
-    ),
-    model=ModelConfig(
-      transformer_type=TransformerType.DISCRETE,
-      d_model=d_model,
-      num_heads=4,
-      d_head=d_model // 4,
-      num_layers=1,
-      num_vocab=vocab_size,
-      num_classes=vocab_size,
-    ),
-    sharding=ShardingConfig(
-      mesh_shape=mesh_shape,
-      mesh_axis_names=mesh_axis_names,
-      wqkv=[None, None, None, None],
-      wo=[None, None, None],
-      wup=[None, None],
-      wdown=[None, None],
-      wemb=[None, None],
-      wunemb=wunemb_sharding,
-      data=data_sharding,
-      mlp_hidden=[None],
-      res_stream=[None],
-      att_qkv=[None, None, None, None],
-    ),
-  )
-
-
-@pytest.mark.skipif(
-  not jax.devices()[0].platform == "tpu",
-  reason="Integration tests use production kernels (no interpret mode)",
-)
+@requires_tpu
 def test_losses_integration_forward():
   """Test production loss functions match on forward pass."""
   num_devices = jax.device_count()
-  block_size = 128
   seq_len = 256
   batch_size = 32 * 8
   d_model = 768
@@ -391,7 +299,7 @@ def test_losses_integration_forward():
   bias = jnp.zeros(vocab_size, dtype=jnp.bfloat16)
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
-  # Pre-shard inputs matching train.py data flow
+  # Pre-shard inputs
   batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
   targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
   weight_sharding = jax.NamedSharding(mesh, jax.P(None, "fsdp"))
@@ -408,7 +316,7 @@ def test_losses_integration_forward():
     mesh=mesh,
     data_sharding=config.sharding.data,
     q_seq_shards=num_devices,
-    block_size=block_size,
+    block_size=DEFAULT_BLOCK_SIZE,
     max_valid_id=max_valid_id,
   )
 
@@ -423,23 +331,13 @@ def test_losses_integration_forward():
     loss_ref = loss_fn_ref(unemb, outputs, targets)
     loss_fused = loss_fn_fused(unemb, outputs, targets)
 
-  print(f"\n[DEBUG] loss_ref={float(loss_ref):.8f}, loss_fused={float(loss_fused):.8f}")
-  print(
-    f"[DEBUG] diff={float(loss_fused - loss_ref):.8e}, "
-    f"rel_diff={float((loss_fused - loss_ref) / loss_ref):.8e}"
-  )
-
-  np.testing.assert_allclose(loss_fused, loss_ref, rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
+  np.testing.assert_allclose(loss_fused, loss_ref, rtol=FORWARD_RTOL, atol=FORWARD_ATOL)
 
 
-@pytest.mark.skipif(
-  not jax.devices()[0].platform == "tpu",
-  reason="Integration tests use production kernels (no interpret mode)",
-)
+@requires_tpu
 def test_losses_integration_backward():
   """Test production loss functions match on backward pass."""
   num_devices = jax.device_count()
-  block_size = 128
   seq_len = 1024
   batch_size = 32 * 8
   d_model = 768
@@ -468,7 +366,7 @@ def test_losses_integration_backward():
   bias = jnp.zeros(vocab_size, dtype=jnp.bfloat16)
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
-  # Pre-shard inputs matching train.py data flow
+  # Pre-shard inputs
   batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
   targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
   weight_sharding = jax.NamedSharding(mesh, jax.P(None, "fsdp"))
@@ -483,7 +381,7 @@ def test_losses_integration_backward():
     mesh=mesh,
     data_sharding=config.sharding.data,
     q_seq_shards=num_devices,
-    block_size=block_size,
+    block_size=DEFAULT_BLOCK_SIZE,
     max_valid_id=max_valid_id,
   )
 
@@ -512,10 +410,9 @@ def test_losses_integration_backward():
     lambda x: multihost_utils.process_allgather(x, tiled=True), grad_fused
   )
 
-  print(f"\n[DEBUG] grad_ref[0] norm={float(jnp.linalg.norm(grad_ref[0])):.6f}")
-  print(f"[DEBUG] grad_fused[0] norm={float(jnp.linalg.norm(grad_fused[0])):.6f}")
-  print(f"[DEBUG] grad_ref[1] norm={float(jnp.linalg.norm(grad_ref[1])):.6f}")
-  print(f"[DEBUG] grad_fused[1] norm={float(jnp.linalg.norm(grad_fused[1])):.6f}")
-
-  np.testing.assert_allclose(grad_fused[0], grad_ref[0], rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
-  np.testing.assert_allclose(grad_fused[1], grad_ref[1], rtol=GLOBAL_RTOL, atol=GLOBAL_ATOL)
+  np.testing.assert_allclose(
+    grad_fused[0], grad_ref[0], rtol=FORWARD_RTOL, atol=FORWARD_ATOL
+  )
+  np.testing.assert_allclose(
+    grad_fused[1], grad_ref[1], rtol=FORWARD_RTOL, atol=FORWARD_ATOL
+  )
