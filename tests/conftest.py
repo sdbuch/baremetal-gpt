@@ -1,4 +1,3 @@
-import pytest
 import jax
 
 # Note: Tests that need Config should create their own instances.
@@ -9,8 +8,11 @@ import jax
 
 def pytest_configure(config):
   """Initialize JAX distributed backend for multi-host TPU tests."""
-  try:
-    jax.distributed.initialize()
-  except RuntimeError:
-    # Already initialized
-    pass
+  # Only initialize distributed backend on TPU
+  # On CPU/GPU, jax.distributed.initialize() requires coordinator_address
+  if jax.devices()[0].platform == "tpu":
+    try:
+      jax.distributed.initialize()
+    except RuntimeError:
+      # Already initialized
+      pass
