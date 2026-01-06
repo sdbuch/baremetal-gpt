@@ -4,12 +4,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-from hypothesis import given, settings, strategies as st, HealthCheck, Phase
+from hypothesis import HealthCheck, Phase, given, settings
+from hypothesis import strategies as st
 from jax import shard_map
 from jax.experimental import multihost_utils
-
-from bmgpt.kernels.lse_kernel import BlockSizes, make_lse_kernel
-from bmgpt.kernels.lse_mask import VocabMask
 from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_mask import (
   MultiHeadMask,
 )
@@ -17,12 +15,14 @@ from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_mask impo
 from bmgpt.config import (
   Config,
   DatasetConfig,
+  DatasetName,
   ModelConfig,
   ShardingConfig,
-  DatasetName,
   TransformerType,
 )
-from bmgpt.losses import softmax_cross_entropy, fused_softmax_cross_entropy
+from bmgpt.kernels.lse_kernel import BlockSizes, make_lse_kernel
+from bmgpt.kernels.lse_mask import VocabMask
+from bmgpt.losses import fused_softmax_cross_entropy, softmax_cross_entropy
 from bmgpt.model import LMHead
 from bmgpt.splash_helpers import make_lse_kernel_sharded
 
@@ -348,78 +348,78 @@ def test_fused_cross_entropy_on_tpu(batch_size, seq_len, d_model, vocab_size):
   np.testing.assert_allclose(grad_fused[1], grad_naive[1], rtol=2e-2, atol=2e-2)
 
 
-def fused_cross_entropy_sharded(
-  outputs: jax.Array,
-  w_unemb: jax.Array,
-  targets: jax.Array,
-  max_valid_id: int,
-  mesh: jax.sharding.Mesh,
-  block_size: int = 128,
-  interpret: bool = True,
-) -> jax.Array:
-  """Sharded fused cross-entropy matching FSDP setup.
-
-  In FSDP:
-  - data (B*S x D) is sharded along the token dimension
-  - w_unemb (V x D) is sharded along D but resharded to replicated for kernel
-  """
-  b, s = outputs.shape[:2]
-  vocab_size = w_unemb.shape[0]
-  num_tokens = b * s
-
-  data_sharding = jax.NamedSharding(mesh, jax.P("fsdp"))
-  replicated = jax.NamedSharding(mesh, jax.P())
-
-  outputs_flat = outputs.reshape(num_tokens, -1)
-  outputs_flat = jax.device_put(outputs_flat, data_sharding)
-  targets_flat = targets.ravel()
-  targets_flat = jax.device_put(targets_flat, data_sharding)
-
-  # In losses.py, w_unemb is resharded to replicated before kernel call
-  w_unemb_replicated = jax.device_put(w_unemb, replicated)
-
-  q = outputs_flat[None]
-  k = w_unemb_replicated[None]
-
-  # Use global device count for multi-host
-  num_devices = jax.device_count()
-  mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
-  block_sizes = BlockSizes(
-    block_q=block_size,
-    block_kv=block_size,
-    block_kv_compute=block_size,
-  )
-  kernel = make_lse_kernel(
-    mask_obj,
-    block_sizes=block_sizes,
-    is_mqa=False,
-    head_shards=1,
-    q_seq_shards=num_devices,
-    interpret=interpret,
-  )
-
-  q_spec = jax.P(None, "fsdp", None)
-  k_spec = jax.P(None, None, None)
-  lse_spec = jax.P(None, "fsdp")
-  kernel_sharding = jax.NamedSharding(mesh, jax.P(None, "fsdp"))
-  kernel_spec = kernel.manual_sharding_spec(kernel_sharding)
-
-  @functools.partial(
-    shard_map,
-    mesh=mesh,
-    in_specs=(kernel_spec, q_spec, k_spec),
-    out_specs=lse_spec,
-    check_vma=False,
-  )
-  def sharded_kernel(kernel, q, k):
-    return kernel(q, k)
-
-  lse = sharded_kernel(kernel, q, k).squeeze(0)
-
-  per_token_unembs = w_unemb_replicated.at[targets_flat].get(out_sharding=data_sharding)
-  label_logits = jnp.sum(outputs_flat * per_token_unembs, axis=-1)
-
-  return (lse - label_logits).mean()
+# def fused_cross_entropy_sharded(
+#   outputs: jax.Array,
+#   w_unemb: jax.Array,
+#   targets: jax.Array,
+#   max_valid_id: int,
+#   mesh: jax.sharding.Mesh,
+#   block_size: int = 128,
+#   interpret: bool = True,
+# ) -> jax.Array:
+#   """Sharded fused cross-entropy matching FSDP setup.
+#
+#   In FSDP:
+#   - data (B*S x D) is sharded along the token dimension
+#   - w_unemb (V x D) is sharded along D but resharded to replicated for kernel
+#   """
+#   b, s = outputs.shape[:2]
+#   vocab_size = w_unemb.shape[0]
+#   num_tokens = b * s
+#
+#   data_sharding = jax.NamedSharding(mesh, jax.P("fsdp"))
+#   replicated = jax.NamedSharding(mesh, jax.P())
+#
+#   outputs_flat = outputs.reshape(num_tokens, -1)
+#   outputs_flat = jax.device_put(outputs_flat, data_sharding)
+#   targets_flat = targets.ravel()
+#   targets_flat = jax.device_put(targets_flat, data_sharding)
+#
+#   # In losses.py, w_unemb is resharded to replicated before kernel call
+#   w_unemb_replicated = jax.device_put(w_unemb, replicated)
+#
+#   q = outputs_flat[None]
+#   k = w_unemb_replicated[None]
+#
+#   # Use global device count for multi-host
+#   num_devices = jax.device_count()
+#   mask_obj = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
+#   block_sizes = BlockSizes(
+#     block_q=block_size,
+#     block_kv=block_size,
+#     block_kv_compute=block_size,
+#   )
+#   kernel = make_lse_kernel(
+#     mask_obj,
+#     block_sizes=block_sizes,
+#     is_mqa=False,
+#     head_shards=1,
+#     q_seq_shards=num_devices,
+#     interpret=interpret,
+#   )
+#
+#   q_spec = jax.P(None, "fsdp", None)
+#   k_spec = jax.P(None, None, None)
+#   lse_spec = jax.P(None, "fsdp")
+#   kernel_sharding = jax.NamedSharding(mesh, jax.P(None, "fsdp"))
+#   kernel_spec = kernel.manual_sharding_spec(kernel_sharding)
+#
+#   @functools.partial(
+#     shard_map,
+#     mesh=mesh,
+#     in_specs=(kernel_spec, q_spec, k_spec),
+#     out_specs=lse_spec,
+#     check_vma=False,
+#   )
+#   def sharded_kernel(kernel, q, k):
+#     return kernel(q, k)
+#
+#   lse = sharded_kernel(kernel, q, k).squeeze(0)  # type: ignore
+#
+#   per_token_unembs = w_unemb_replicated.at[targets_flat].get(out_sharding=data_sharding)
+#   label_logits = jnp.sum(outputs_flat * per_token_unembs, axis=-1)
+#
+#   return (lse - label_logits).mean()
 
 
 @pytest.mark.skipif(
@@ -470,18 +470,18 @@ def test_fused_cross_entropy_sharded_backward():
   # num_tokens_per_shard must be >= block_size, so num_tokens >= block_size * num_devices
   min_tokens = block_size * num_devices
   seq_len = 256
-  batch_size = max(num_devices, (min_tokens + seq_len - 1) // seq_len)
-  d_model = 128
-  vocab_size = 1024
-  max_valid_id = vocab_size - 128
+  batch_size = 32 * 8
+  d_model = 768
+  vocab_size = 8192
+  max_valid_id = vocab_size - 256
 
   key = jax.random.PRNGKey(123)
   key_out, key_w, key_tgt = jax.random.split(key, 3)
 
   outputs = jax.random.normal(
-    key_out, (batch_size, seq_len, d_model), dtype=jnp.float32
+    key_out, (batch_size, seq_len, d_model), dtype=jnp.bfloat16
   )
-  w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
+  w_unemb = 0.02 * jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.bfloat16)
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
   mesh = jax.make_mesh((num_devices,), ("fsdp",), (jax.sharding.AxisType.Explicit,))
@@ -496,16 +496,20 @@ def test_fused_cross_entropy_sharded_backward():
   w_unemb = jax.device_put(w_unemb, weight_sharding)
 
   # Reference uses naive implementation
-  grad_ref = jax.grad(
-    lambda o, w: naive_cross_entropy(o, w, targets, max_valid_id), argnums=(0, 1)
-  )(outputs, w_unemb)
 
   with jax.set_mesh(mesh):
-    grad_sharded = jax.grad(
-      lambda o, w: fused_cross_entropy_sharded(
-        o, w, targets, max_valid_id, mesh, block_size, interpret=False
-      ),
-      argnums=(0, 1),
+    grad_ref = jax.jit(
+      jax.grad(
+        lambda o, w: naive_cross_entropy(o, w, targets, max_valid_id), argnums=(0, 1)
+      )
+    )(outputs, w_unemb)
+    grad_sharded = jax.jit(
+      jax.grad(
+        lambda o, w: fused_cross_entropy_sharded(
+          o, w, targets, max_valid_id, mesh, block_size, interpret=False
+        ),
+        argnums=(0, 1),
+      )
     )(outputs, w_unemb)
 
   # Allgather both refs since inputs are sharded
