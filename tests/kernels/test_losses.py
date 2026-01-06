@@ -484,11 +484,18 @@ def test_fused_cross_entropy_sharded_backward():
   w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
+  mesh = jax.make_mesh((num_devices,), ("fsdp",), (jax.sharding.AxisType.Explicit,))
+
+  # Pre-shard inputs along batch dimension (matching train.py data flow)
+  batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
+  targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
+  outputs = jax.device_put(outputs, batch_sharding)
+  targets = jax.device_put(targets, targets_sharding)
+
+  # Reference uses naive implementation (unsharded)
   grad_ref = jax.grad(
     lambda o, w: naive_cross_entropy(o, w, targets, max_valid_id), argnums=(0, 1)
   )(outputs, w_unemb)
-
-  mesh = jax.make_mesh((num_devices,), ("fsdp",), (jax.sharding.AxisType.Explicit,))
 
   with jax.set_mesh(mesh):
     grad_sharded = jax.grad(
@@ -589,6 +596,13 @@ def test_losses_integration_forward():
   bias = jnp.zeros(vocab_size, dtype=jnp.float32)
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
+  # Pre-shard inputs along batch dimension (matching train.py data flow)
+  # In production, model outputs arrive at the loss already sharded along B
+  batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
+  targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
+  outputs = jax.device_put(outputs, batch_sharding)
+  targets = jax.device_put(targets, targets_sharding)
+
   unemb = LMHead(w=w_unemb, bias=bias)
 
   num_tokens = batch_size * seq_len
@@ -607,6 +621,14 @@ def test_losses_integration_forward():
     loss_fused = fused_softmax_cross_entropy(
       config, unemb, outputs, targets, shard_mapped__kernel
     )
+
+  # Debug: print values to understand numerical differences
+  print(
+    f"\n[DEBUG] loss_naive={float(loss_naive):.8f}, loss_fused={float(loss_fused):.8f}"
+  )
+  print(
+    f"[DEBUG] diff={float(loss_fused - loss_naive):.8e}, rel_diff={float((loss_fused - loss_naive) / loss_naive):.8e}"
+  )
 
   np.testing.assert_allclose(loss_fused, loss_naive, rtol=1e-4, atol=1e-4)
 
@@ -648,6 +670,12 @@ def test_losses_integration_backward():
   bias = jnp.zeros(vocab_size, dtype=jnp.float32)
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
 
+  # Pre-shard inputs along batch dimension (matching train.py data flow)
+  batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
+  targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
+  outputs = jax.device_put(outputs, batch_sharding)
+  targets = jax.device_put(targets, targets_sharding)
+
   unemb = LMHead(w=w_unemb, bias=bias)
 
   num_tokens = batch_size * seq_len
@@ -662,17 +690,23 @@ def test_losses_integration_backward():
   )
 
   def ref_loss(o, w):
-    return naive_cross_entropy(o, w, targets, max_valid_id)
+    # Use softmax_cross_entropy (production implementation) as reference
+    return softmax_cross_entropy(config, LMHead(w=w, bias=bias), o, targets)
 
   def fused_loss(o, w):
     return fused_softmax_cross_entropy(
       config, LMHead(w=w, bias=bias), o, targets, shard_mapped__kernel
     )
 
-  grad_ref = jax.grad(ref_loss, argnums=(0, 1))(outputs, w_unemb)
-
   with jax.set_mesh(mesh):
+    grad_ref = jax.grad(ref_loss, argnums=(0, 1))(outputs, w_unemb)
     grad_fused = jax.grad(fused_loss, argnums=(0, 1))(outputs, w_unemb)
+
+  # Debug: print gradient norms
+  print(f"\n[DEBUG] grad_ref[0] norm={float(jnp.linalg.norm(grad_ref[0])):.6f}")
+  print(f"[DEBUG] grad_fused[0] norm={float(jnp.linalg.norm(grad_fused[0])):.6f}")
+  print(f"[DEBUG] grad_ref[1] norm={float(jnp.linalg.norm(grad_ref[1])):.6f}")
+  print(f"[DEBUG] grad_fused[1] norm={float(jnp.linalg.norm(grad_fused[1])):.6f}")
 
   np.testing.assert_allclose(grad_fused[0], grad_ref[0], rtol=2e-2, atol=2e-2)
   np.testing.assert_allclose(grad_fused[1], grad_ref[1], rtol=2e-2, atol=2e-2)
@@ -726,6 +760,12 @@ def test_losses_integration_parametrized(base_batch_size, seq_len, d_model, voca
   w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
   bias = jnp.zeros(vocab_size, dtype=jnp.float32)
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
+
+  # Pre-shard inputs along batch dimension (matching train.py data flow)
+  batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
+  targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
+  outputs = jax.device_put(outputs, batch_sharding)
+  targets = jax.device_put(targets, targets_sharding)
 
   unemb = LMHead(w=w_unemb, bias=bias)
 
@@ -786,6 +826,12 @@ def test_losses_integration_tpu_sharded():
   w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
   bias = jnp.zeros(vocab_size, dtype=jnp.float32)
   targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
+
+  # Pre-shard inputs along batch dimension (matching train.py data flow)
+  batch_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None, None))
+  targets_sharding = jax.NamedSharding(mesh, jax.P("fsdp", None))
+  outputs = jax.device_put(outputs, batch_sharding)
+  targets = jax.device_put(targets, targets_sharding)
 
   unemb = LMHead(w=w_unemb, bias=bias)
 
