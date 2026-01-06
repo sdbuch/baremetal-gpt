@@ -530,13 +530,13 @@ def test_timing_sweep_vocab_sizes():
   # Production-scale vocab sizes up to 128K (and 256K to test OOM boundary)
   vocab_sizes = [8192, 16384, 32768, 65536, 131072, 262144]
 
-  print(f"\n{'=' * 95}")
+  print(f"\n{'=' * 70}")
   print("Vocabulary Size Sweep (Forward Only)")
-  print(f"{'=' * 95}")
+  print(f"{'=' * 70}")
   print(
-    f"{'Vocab Size':>12} | {'Fused (ms)':>12} | {'Scanned (ms)':>14} | {'Ref (ms)':>12} | {'Fused/Ref':>10} | {'Scan/Ref':>10}"
+    f"{'Vocab Size':>12} | {'Fused (ms)':>12} | {'Scanned (ms)':>14} | {'Speedup':>8}"
   )
-  print(f"{'-' * 95}", flush=True)
+  print(f"{'-' * 70}", flush=True)
 
   for vocab_size in vocab_sizes:
     print(f"  [Compiling vocab_size={vocab_size}]...", end="", flush=True)
@@ -593,9 +593,6 @@ def test_timing_sweep_vocab_sizes():
     loss_fn_scanned = jax.jit(
       partial(scanned_cross_entropy, block_size_v=block_size_v, data_sharding=["fsdp"])
     )
-    loss_fn_ref = jax.jit(
-      partial(ref_cross_entropy_materialized, data_sharding=["fsdp"])
-    )
 
     with jax.set_mesh(mesh):
       time_fused, _ = time_fn(
@@ -615,32 +612,14 @@ def test_timing_sweep_vocab_sizes():
         warmup_iters=1,
         time_iters=2,
       )
-      print(" scanned...", end="", flush=True)
-      # Ref may OOM at large vocab sizes (materializes full logits)
-      try:
-        time_ref, _ = time_fn(
-          loss_fn_ref,
-          outputs,
-          w_unemb,
-          targets,
-          warmup_iters=1,
-          time_iters=2,
-        )
-        print(" ref done")
-        ref_str = f"{time_ref * 1000:>12.3f}"
-        fused_ref_str = f"{time_fused / time_ref:>10.2f}x"
-        scan_ref_str = f"{time_scanned / time_ref:>10.2f}x"
-      except Exception:
-        print(" ref OOM")
-        ref_str = "OOM"
-        fused_ref_str = "N/A"
-        scan_ref_str = "N/A"
+      print(" scanned done")
 
+    speedup = time_scanned / time_fused
     print(
-      f"{vocab_size:>12} | {time_fused * 1000:>12.3f} | {time_scanned * 1000:>14.3f} | {ref_str:>12} | {fused_ref_str:>10} | {scan_ref_str:>10}"
+      f"{vocab_size:>12} | {time_fused * 1000:>12.3f} | {time_scanned * 1000:>14.3f} | {speedup:>7.2f}x"
     )
 
-  print(f"{'=' * 95}")
+  print(f"{'=' * 70}")
 
 
 @pytest.mark.skipif(
@@ -781,13 +760,13 @@ def test_timing_fwd_bwd_sweep_vocab_sizes():
   # Test at production scale
   vocab_sizes = [8192, 16384, 32768, 65536, 131072]
 
-  print(f"\n{'=' * 95}")
+  print(f"\n{'=' * 70}")
   print("Forward-Backward Timing: Vocabulary Size Sweep")
-  print(f"{'=' * 95}")
+  print(f"{'=' * 70}")
   print(
-    f"{'Vocab Size':>12} | {'Fused (ms)':>12} | {'Scanned (ms)':>14} | {'Ref (ms)':>12} | {'Fused/Ref':>10} | {'Scan/Ref':>10}"
+    f"{'Vocab Size':>12} | {'Fused (ms)':>12} | {'Scanned (ms)':>14} | {'Speedup':>8}"
   )
-  print(f"{'-' * 95}", flush=True)
+  print(f"{'-' * 70}", flush=True)
 
   for vocab_size in vocab_sizes:
     print(f"  [Compiling vocab_size={vocab_size}]...", end="", flush=True)
@@ -847,15 +826,9 @@ def test_timing_fwd_bwd_sweep_vocab_sizes():
         outputs, w_unemb, targets, block_size_v=block_size_v, data_sharding=["fsdp"]
       )
 
-    def ref_loss(outputs, w_unemb, targets):
-      return ref_cross_entropy_materialized(
-        outputs, w_unemb, targets, data_sharding=["fsdp"]
-      )
-
     # JIT the value_and_grad functions
     fused_fwd_bwd = jax.jit(jax.value_and_grad(fused_loss))
     scanned_fwd_bwd = jax.jit(jax.value_and_grad(scanned_loss))
-    ref_fwd_bwd = jax.jit(jax.value_and_grad(ref_loss))
 
     with jax.set_mesh(mesh):
       time_fused, _ = time_fn(
@@ -875,32 +848,14 @@ def test_timing_fwd_bwd_sweep_vocab_sizes():
         warmup_iters=1,
         time_iters=2,
       )
-      print(" scanned...", end="", flush=True)
-      # Ref may OOM at large vocab sizes (materializes full logits)
-      try:
-        time_ref, _ = time_fn(
-          ref_fwd_bwd,
-          outputs,
-          w_unemb,
-          targets,
-          warmup_iters=1,
-          time_iters=2,
-        )
-        print(" ref done")
-        ref_str = f"{time_ref * 1000:>12.3f}"
-        fused_ref_str = f"{time_fused / time_ref:>10.2f}x"
-        scan_ref_str = f"{time_scanned / time_ref:>10.2f}x"
-      except Exception:
-        print(" ref OOM")
-        ref_str = "OOM"
-        fused_ref_str = "N/A"
-        scan_ref_str = "N/A"
+      print(" scanned done")
 
+    speedup = time_scanned / time_fused
     print(
-      f"{vocab_size:>12} | {time_fused * 1000:>12.3f} | {time_scanned * 1000:>14.3f} | {ref_str:>12} | {fused_ref_str:>10} | {scan_ref_str:>10}"
+      f"{vocab_size:>12} | {time_fused * 1000:>12.3f} | {time_scanned * 1000:>14.3f} | {speedup:>7.2f}x"
     )
 
-  print(f"{'=' * 95}")
+  print(f"{'=' * 70}")
 
 
 @pytest.mark.skipif(
