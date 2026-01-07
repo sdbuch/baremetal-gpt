@@ -29,37 +29,26 @@ from .conftest import (
 # =============================================================================
 
 
-def scanned_logsumexp_blocked(
-  outputs: jax.Array,
-  w_unemb: jax.Array,
-  block_size_v: int = DEFAULT_BLOCK_SIZE,
+def _scanned_logsumexp_single_block(
+  outputs_block: jax.Array,
+  w_unemb_padded: jax.Array,
+  block_size_v: int,
+  vocab_size: int,
+  num_blocks_v: int,
 ) -> jax.Array:
-  """Compute logsumexp(outputs @ w_unemb.T) using a scan over vocab blocks.
-
-  This reference implementation avoids materializing the full (N, V) logits matrix
-  by scanning over blocks of the vocabulary dimension, maintaining running max and
-  sum-of-exp accumulators (online logsumexp).
+  """Compute logsumexp for a single block of tokens over all vocab blocks.
 
   Args:
-    outputs: Input activations of shape (N, D)
-    w_unemb: Unembedding weights of shape (V, D)
-    block_size_v: Block size for scanning over vocabulary dimension
+    outputs_block: Input activations of shape (block_size_n, D)
+    w_unemb_padded: Padded unembedding weights of shape (V_padded, D)
+    block_size_v: Block size for vocabulary dimension
+    vocab_size: Original vocabulary size (for masking)
+    num_blocks_v: Number of vocabulary blocks
 
   Returns:
-    logsumexp values of shape (N,)
+    logsumexp values of shape (block_size_n,)
   """
-  n, d = outputs.shape
-  v, _ = w_unemb.shape
-
-  # Pad w_unemb to be a multiple of block_size_v
-  v_padded = ((v + block_size_v - 1) // block_size_v) * block_size_v
-  pad_amount = v_padded - v
-  if pad_amount > 0:
-    w_unemb_padded = jnp.pad(w_unemb, ((0, pad_amount), (0, 0)), mode="constant")
-  else:
-    w_unemb_padded = w_unemb
-
-  num_blocks = v_padded // block_size_v
+  block_size_n, d = outputs_block.shape
 
   def scan_body(carry, block_idx):
     """Process one block of vocabulary."""
@@ -67,11 +56,11 @@ def scanned_logsumexp_blocked(
 
     start_idx = block_idx * block_size_v
     w_block = jax.lax.dynamic_slice(w_unemb_padded, (start_idx, 0), (block_size_v, d))
-    logits_block = jnp.dot(outputs, w_block.T)
+    logits_block = jnp.dot(outputs_block, w_block.T)
 
     # Mask out padding positions
     vocab_indices = start_idx + jnp.arange(block_size_v)
-    valid_mask = vocab_indices < v
+    valid_mask = vocab_indices < vocab_size
     logits_block = jnp.where(valid_mask[None, :], logits_block, -jnp.inf)
 
     # Online logsumexp update
@@ -83,14 +72,81 @@ def scanned_logsumexp_blocked(
 
     return (m_next, l_next), None
 
-  m_init = jnp.full((n,), -jnp.inf, dtype=jnp.float32)
-  l_init = jnp.zeros((n,), dtype=jnp.float32)
+  m_init = jnp.full((block_size_n,), -jnp.inf, dtype=jnp.float32)
+  l_init = jnp.zeros((block_size_n,), dtype=jnp.float32)
 
   (m_final, l_final), _ = jax.lax.scan(
-    scan_body, (m_init, l_init), jnp.arange(num_blocks)
+    scan_body, (m_init, l_init), jnp.arange(num_blocks_v)
   )
 
   return jnp.log(l_final) + m_final
+
+
+def scanned_logsumexp_blocked(
+  outputs: jax.Array,
+  w_unemb: jax.Array,
+  block_size_v: int = DEFAULT_BLOCK_SIZE,
+  block_size_n: int | None = None,
+) -> jax.Array:
+  """Compute logsumexp(outputs @ w_unemb.T) using a scan over vocab blocks.
+
+  This reference implementation avoids materializing the full (N, V) logits matrix
+  by scanning over blocks of the vocabulary dimension, maintaining running max and
+  sum-of-exp accumulators (online logsumexp).
+
+  Args:
+    outputs: Input activations of shape (N, D)
+    w_unemb: Unembedding weights of shape (V, D)
+    block_size_v: Block size for scanning over vocabulary dimension
+    block_size_n: Block size for token dimension. If None, processes all tokens
+                  together. If specified, vmaps over token blocks for better
+                  comparison with fused kernels.
+
+  Returns:
+    logsumexp values of shape (N,)
+  """
+  n, d = outputs.shape
+  v, _ = w_unemb.shape
+
+  # Pad w_unemb to be a multiple of block_size_v
+  v_padded = ((v + block_size_v - 1) // block_size_v) * block_size_v
+  pad_amount_v = v_padded - v
+  if pad_amount_v > 0:
+    w_unemb_padded = jnp.pad(w_unemb, ((0, pad_amount_v), (0, 0)), mode="constant")
+  else:
+    w_unemb_padded = w_unemb
+
+  num_blocks_v = v_padded // block_size_v
+
+  if block_size_n is None:
+    # Original behavior: process all tokens together
+    return _scanned_logsumexp_single_block(
+      outputs, w_unemb_padded, block_size_v, v, num_blocks_v
+    )
+
+  # Block over token dimension: pad N, reshape, vmap, reshape back
+  n_padded = ((n + block_size_n - 1) // block_size_n) * block_size_n
+  pad_amount_n = n_padded - n
+  if pad_amount_n > 0:
+    outputs_padded = jnp.pad(outputs, ((0, pad_amount_n), (0, 0)), mode="constant")
+  else:
+    outputs_padded = outputs
+
+  num_blocks_n = n_padded // block_size_n
+
+  # Reshape to (num_blocks_n, block_size_n, D)
+  outputs_blocked = outputs_padded.reshape(num_blocks_n, block_size_n, d)
+
+  # vmap over token blocks
+  vmapped_lse = jax.vmap(
+    lambda x: _scanned_logsumexp_single_block(
+      x, w_unemb_padded, block_size_v, v, num_blocks_v
+    )
+  )(outputs_blocked)
+
+  # Reshape back to (N_padded,) and slice to (N,)
+  lse_flat = vmapped_lse.reshape(n_padded)
+  return lse_flat[:n]
 
 
 def scanned_cross_entropy(
@@ -98,6 +154,7 @@ def scanned_cross_entropy(
   w_unemb: jax.Array,
   targets: jax.Array,
   block_size_v: int = DEFAULT_BLOCK_SIZE,
+  block_size_n: int | None = None,
   data_sharding: list[str | None] | None = None,
 ) -> jax.Array:
   """Cross entropy using scanned logsumexp reference.
@@ -107,6 +164,9 @@ def scanned_cross_entropy(
     w_unemb: (V, D) unembedding weights
     targets: (B, S) or (N,) target token indices
     block_size_v: Block size for vocab dimension scan
+    block_size_n: Block size for token dimension. If None, processes all tokens
+                  together. If specified, vmaps over token blocks for better
+                  comparison with fused kernels (equivalent to block_q).
     data_sharding: Optional sharding spec for data dimension
 
   Returns:
@@ -129,7 +189,7 @@ def scanned_cross_entropy(
     outputs_flat = outputs
     targets_flat = targets
 
-  lse = scanned_logsumexp_blocked(outputs_flat, w_unemb, block_size_v)
+  lse = scanned_logsumexp_blocked(outputs_flat, w_unemb, block_size_v, block_size_n)
 
   if data_sharding:
     per_token_unembs = w_unemb.at[targets_flat].get(
@@ -297,20 +357,125 @@ def test_scanned_reference_partial_blocks(block_size_v):
   )
 
 
+@pytest.mark.parametrize(
+  "block_size_n,block_size_v",
+  [(64, 128), (128, 128), (128, 256), (256, 512)],
+  ids=["n64_v128", "n128_v128", "n128_v256", "n256_v512"],
+)
+def test_scanned_reference_with_block_n(block_size_n, block_size_v):
+  """Test scanned reference with blocking over both token and vocab dimensions."""
+  key = jax.random.PRNGKey(789)
+  key_out, key_w, key_tgt = jax.random.split(key, 3)
+
+  batch_size, seq_len, d_model = 4, 256, 128
+  vocab_size = 2048
+
+  outputs = jax.random.normal(
+    key_out, (batch_size, seq_len, d_model), dtype=jnp.float32
+  )
+  w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
+  targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, vocab_size)
+
+  loss_ref = jax.jit(ref_cross_entropy_materialized)(outputs, w_unemb, targets)
+
+  # Test with block_size_n
+  loss_scanned_blocked = jax.jit(
+    partial(scanned_cross_entropy, block_size_v=block_size_v, block_size_n=block_size_n)
+  )(outputs, w_unemb, targets)
+
+  np.testing.assert_allclose(
+    loss_scanned_blocked,
+    loss_ref,
+    rtol=FORWARD_RTOL,
+    atol=FORWARD_ATOL,
+    err_msg=f"Token-blocked (n={block_size_n}, v={block_size_v}) does not match reference",
+  )
+
+
+@pytest.mark.parametrize("block_size_n", [64, 128, 256])
+def test_scanned_logsumexp_with_block_n(block_size_n):
+  """Verify scanned logsumexp with token blocking matches reference."""
+  key = jax.random.PRNGKey(321)
+  key_out, key_w = jax.random.split(key, 2)
+
+  n, d, v = 512, 128, 2048
+  block_size_v = 256
+  outputs = jax.random.normal(key_out, (n, d), dtype=jnp.float32)
+  w_unemb = jax.random.normal(key_w, (v, d), dtype=jnp.float32)
+
+  @jax.jit
+  def ref_lse(outputs, w_unemb):
+    logits = jnp.dot(outputs, w_unemb.T)
+    return jax.nn.logsumexp(logits, axis=-1)
+
+  lse_ref = ref_lse(outputs, w_unemb)
+  lse_scanned = jax.jit(
+    partial(
+      scanned_logsumexp_blocked, block_size_v=block_size_v, block_size_n=block_size_n
+    )
+  )(outputs, w_unemb)
+
+  np.testing.assert_allclose(
+    lse_scanned,
+    lse_ref,
+    rtol=FORWARD_RTOL,
+    atol=FORWARD_ATOL,
+    err_msg=f"Token-blocked logsumexp (n={block_size_n}) does not match reference",
+  )
+
+
+@pytest.mark.parametrize("block_size_n", [64, 128])
+def test_scanned_reference_partial_block_n(block_size_n):
+  """Test scanned reference handles partial token blocks correctly."""
+  key = jax.random.PRNGKey(654)
+  key_out, key_w, key_tgt = jax.random.split(key, 3)
+
+  # Use token count that's not divisible by block_size_n
+  batch_size, seq_len, d_model = 3, 70, 128
+  vocab_size = 1024
+  block_size_v = 128
+
+  outputs = jax.random.normal(
+    key_out, (batch_size, seq_len, d_model), dtype=jnp.float32
+  )
+  w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
+  targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, vocab_size)
+
+  loss_ref = jax.jit(ref_cross_entropy_materialized)(outputs, w_unemb, targets)
+  loss_scanned = jax.jit(
+    partial(scanned_cross_entropy, block_size_v=block_size_v, block_size_n=block_size_n)
+  )(outputs, w_unemb, targets)
+
+  np.testing.assert_allclose(
+    loss_scanned,
+    loss_ref,
+    rtol=FORWARD_RTOL,
+    atol=FORWARD_ATOL,
+    err_msg=f"Partial token block (n={block_size_n}) handling failed",
+  )
+
+
 # =============================================================================
 # Timing Tests - compare fused kernel vs scanned reference
 # =============================================================================
 
-BLOCK_SIZES_V = [128, 256, 512, 1024, 2048]
-BLOCK_SIZE_IDS = [f"block_v_{bs}" for bs in BLOCK_SIZES_V]
+# Block size configurations for timing tests
+# Each tuple is (block_q, block_kv) matching fused kernel's BlockSizes
+TIMING_BLOCK_CONFIGS = [
+  (128, 128),
+  (128, 256),
+  (256, 256),
+  (256, 512),
+  (512, 512),
+]
+TIMING_BLOCK_IDS = [f"q{q}_kv{kv}" for q, kv in TIMING_BLOCK_CONFIGS]
 
 
 @requires_tpu
-@pytest.mark.parametrize("block_size_v", BLOCK_SIZES_V, ids=BLOCK_SIZE_IDS)
-def test_timing_forward_pass(block_size_v: int):
+@pytest.mark.parametrize("block_q,block_kv", TIMING_BLOCK_CONFIGS, ids=TIMING_BLOCK_IDS)
+def test_timing_forward_pass(block_q: int, block_kv: int):
   """Compare forward pass timing: fused kernel vs scanned logsumexp reference."""
   num_devices = jax.device_count()
-  kernel_block_size = DEFAULT_BLOCK_SIZE
   seq_len = 256
   batch_size = 32 * 8
   d_model = 768
@@ -356,7 +521,7 @@ def test_timing_forward_pass(block_size_v: int):
     mesh=mesh,
     data_sharding=config.sharding.data,
     q_seq_shards=num_devices,
-    block_size=kernel_block_size,
+    block_size=block_q,
     max_valid_id=max_valid_id,
   )
 
@@ -366,7 +531,12 @@ def test_timing_forward_pass(block_size_v: int):
     )
   )
   loss_fn_scanned = jax.jit(
-    partial(scanned_cross_entropy, block_size_v=block_size_v, data_sharding=["fsdp"])
+    partial(
+      scanned_cross_entropy,
+      block_size_v=block_kv,
+      block_size_n=block_q,
+      data_sharding=["fsdp"],
+    )
   )
 
   with jax.set_mesh(mesh):
@@ -378,7 +548,7 @@ def test_timing_forward_pass(block_size_v: int):
     )
 
   print(f"\n{'=' * 60}")
-  print(f"Timing Results (block_size_v={block_size_v})")
+  print(f"Timing Results (block_q={block_q}, block_kv={block_kv})")
   print(f"{'=' * 60}")
   print(f"Fused kernel:      {time_fused * 1000:.3f} ms")
   print(f"Scanned reference: {time_scanned * 1000:.3f} ms")
@@ -398,11 +568,11 @@ def test_timing_forward_pass(block_size_v: int):
 def test_timing_sweep_vocab_sizes():
   """Sweep over vocabulary sizes to see scaling behavior at production scale."""
   num_devices = jax.device_count()
-  kernel_block_size = 512
+  block_q = 512
+  block_kv = 512
   seq_len = 2048
   batch_size = 512
   d_model = 768
-  block_size_v = 512
 
   vocab_sizes = [8192, 16384, 32768, 65536, 131072, 262144]
 
@@ -456,7 +626,7 @@ def test_timing_sweep_vocab_sizes():
       mesh=mesh,
       data_sharding=config.sharding.data,
       q_seq_shards=num_devices,
-      block_size=kernel_block_size,
+      block_size=block_q,
       max_valid_id=max_valid_id,
     )
 
@@ -466,7 +636,12 @@ def test_timing_sweep_vocab_sizes():
       )
     )
     loss_fn_scanned = jax.jit(
-      partial(scanned_cross_entropy, block_size_v=block_size_v, data_sharding=["fsdp"])
+      partial(
+        scanned_cross_entropy,
+        block_size_v=block_kv,
+        block_size_n=block_q,
+        data_sharding=["fsdp"],
+      )
     )
 
     with jax.set_mesh(mesh):
@@ -492,11 +667,11 @@ def test_timing_sweep_vocab_sizes():
 def test_timing_sweep_batch_sizes():
   """Sweep over batch sizes to see scaling behavior at production scale."""
   num_devices = jax.device_count()
-  kernel_block_size = 512
+  block_q = 512
+  block_kv = 512
   d_model = 768
   vocab_size = 32768
   max_valid_id = vocab_size - 128
-  block_size_v = 512
 
   batch_seq_configs = [
     (128, 1024),
@@ -558,7 +733,7 @@ def test_timing_sweep_batch_sizes():
       mesh=mesh,
       data_sharding=config.sharding.data,
       q_seq_shards=num_devices,
-      block_size=kernel_block_size,
+      block_size=block_q,
       max_valid_id=max_valid_id,
     )
 
@@ -568,7 +743,12 @@ def test_timing_sweep_batch_sizes():
       )
     )
     loss_fn_scanned = jax.jit(
-      partial(scanned_cross_entropy, block_size_v=block_size_v, data_sharding=["fsdp"])
+      partial(
+        scanned_cross_entropy,
+        block_size_v=block_kv,
+        block_size_n=block_q,
+        data_sharding=["fsdp"],
+      )
     )
 
     with jax.set_mesh(mesh):
@@ -599,11 +779,11 @@ def test_timing_sweep_batch_sizes():
 def test_timing_fwd_bwd_sweep_vocab_sizes():
   """Sweep vocab sizes comparing forward-backward passes."""
   num_devices = jax.device_count()
-  kernel_block_size = 512
+  block_q = 512
+  block_kv = 512
   seq_len = 2048
   batch_size = 512
   d_model = 768
-  block_size_v = 512
 
   vocab_sizes = [8192, 16384, 32768, 65536, 131072]
 
@@ -657,7 +837,7 @@ def test_timing_fwd_bwd_sweep_vocab_sizes():
       mesh=mesh,
       data_sharding=config.sharding.data,
       q_seq_shards=num_devices,
-      block_size=kernel_block_size,
+      block_size=block_q,
       max_valid_id=max_valid_id,
     )
 
@@ -668,7 +848,12 @@ def test_timing_fwd_bwd_sweep_vocab_sizes():
 
     def scanned_loss(outputs, w_unemb, targets):
       return scanned_cross_entropy(
-        outputs, w_unemb, targets, block_size_v=block_size_v, data_sharding=["fsdp"]
+        outputs,
+        w_unemb,
+        targets,
+        block_size_v=block_kv,
+        block_size_n=block_q,
+        data_sharding=["fsdp"],
       )
 
     fused_fwd_bwd = jax.jit(jax.value_and_grad(fused_loss))
@@ -697,11 +882,11 @@ def test_timing_fwd_bwd_sweep_vocab_sizes():
 def test_timing_fwd_bwd_sweep_batch_sizes():
   """Sweep batch sizes comparing forward-backward passes."""
   num_devices = jax.device_count()
-  kernel_block_size = 512
+  block_q = 512
+  block_kv = 512
   d_model = 768
   vocab_size = 32768
   max_valid_id = vocab_size - 128
-  block_size_v = 512
 
   batch_seq_configs = [
     (128, 1024),
@@ -762,7 +947,7 @@ def test_timing_fwd_bwd_sweep_batch_sizes():
       mesh=mesh,
       data_sharding=config.sharding.data,
       q_seq_shards=num_devices,
-      block_size=kernel_block_size,
+      block_size=block_q,
       max_valid_id=max_valid_id,
     )
 
@@ -773,7 +958,12 @@ def test_timing_fwd_bwd_sweep_batch_sizes():
 
     def scanned_loss(outputs, w_unemb, targets):
       return scanned_cross_entropy(
-        outputs, w_unemb, targets, block_size_v=block_size_v, data_sharding=["fsdp"]
+        outputs,
+        w_unemb,
+        targets,
+        block_size_v=block_kv,
+        block_size_n=block_q,
+        data_sharding=["fsdp"],
       )
 
     fused_fwd_bwd = jax.jit(jax.value_and_grad(fused_loss))
