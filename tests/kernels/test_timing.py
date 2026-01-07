@@ -721,6 +721,9 @@ def test_timing_sweep_batch_sizes():
   print(f"{'-' * 85}", flush=True)
 
   for batch_size, seq_len in batch_seq_configs:
+    # Clear JIT cache between iterations to prevent memory accumulation
+    jax.clear_caches()
+
     print(f"  [Compiling B={batch_size}, S={seq_len}]...", end="", flush=True)
     n_tokens = batch_size * seq_len
 
@@ -824,6 +827,9 @@ def test_timing_fwd_bwd_sweep_vocab_sizes():
   print(f"{'-' * 70}", flush=True)
 
   for vocab_size in vocab_sizes:
+    # Clear JIT cache between iterations to prevent memory accumulation
+    jax.clear_caches()
+
     print(f"  [Compiling vocab_size={vocab_size}]...", end="", flush=True)
     max_valid_id = vocab_size - 128
 
@@ -935,6 +941,9 @@ def test_timing_fwd_bwd_sweep_batch_sizes():
   print(f"{'-' * 90}", flush=True)
 
   for batch_size, seq_len in batch_seq_configs:
+    # Clear JIT cache between iterations to prevent memory accumulation
+    jax.clear_caches()
+
     print(f"  [Compiling B={batch_size}, S={seq_len}]...", end="", flush=True)
     n_tokens = batch_size * seq_len
 
