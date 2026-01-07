@@ -551,14 +551,15 @@ def test_timing_forward_pass(block_q: int, block_kv: int):
       fused_softmax_cross_entropy, config, shard_mapped__kernel=shard_mapped__kernel
     )
   )
-  # loss_fn_scanned = jax.jit(
-  loss_fn_scanned = partial(
+  loss_fn_scanned = jax.jit(
+    # loss_fn_scanned =
+    partial(
       scanned_cross_entropy,
       block_size_v=block_kv,
       block_size_n=block_q,
       data_sharding=["fsdp"],
+    )
   )
-  # )
 
   with jax.set_mesh(mesh):
     time_fused, loss_fused = time_fn(
