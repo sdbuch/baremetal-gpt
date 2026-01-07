@@ -526,6 +526,7 @@ def test_timing_forward_pass(block_q: int, block_kv: int):
   outputs = jax.device_put(outputs, batch_sharding)
   targets = jax.device_put(targets, targets_sharding)
   w_unemb = jax.device_put(w_unemb, weight_sharding)
+  print(jax.typeof(batch_sharding))
 
   unemb = LMHead(w=w_unemb, bias=bias)
 
