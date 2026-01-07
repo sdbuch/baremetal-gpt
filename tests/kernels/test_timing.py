@@ -72,11 +72,9 @@ def _scanned_logsumexp_single_block(
 
     return (m_next, l_next), None
 
-  m_init = jnp.full((block_size_n,), -jnp.inf, dtype=jnp.float32)
-  l_init = jnp.zeros((block_size_n,), dtype=jnp.float32)
+  m_init = -jnp.inf * jnp.ones((block_size_n,), dtype=jnp.float32, out_sharding=jax.P())
+  l_init = jnp.zeros((block_size_n,), dtype=jnp.float32, out_sharding=jax.P())
 
-  print(m_init.is_fully_addressable)
-  print(l_init.is_fully_addressable)
   (m_final, l_final), _ = jax.lax.scan(
     scan_body, (m_init, l_init), jnp.arange(num_blocks_v)
   )
