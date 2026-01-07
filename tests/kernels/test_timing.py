@@ -35,6 +35,7 @@ def _scanned_logsumexp_single_block(
   block_size_v: int,
   vocab_size: int,
   num_blocks_v: int,
+  use_explicit_sharding: bool = False,
 ) -> jax.Array:
   """Compute logsumexp for a single block of tokens over all vocab blocks.
 
@@ -44,6 +45,8 @@ def _scanned_logsumexp_single_block(
     block_size_v: Block size for vocabulary dimension
     vocab_size: Original vocabulary size (for masking)
     num_blocks_v: Number of vocabulary blocks
+    use_explicit_sharding: Whether to use explicit sharding for scan buffers.
+                           Required when running inside a mesh context on TPU.
 
   Returns:
     logsumexp values of shape (block_size_n,)
@@ -72,8 +75,16 @@ def _scanned_logsumexp_single_block(
 
     return (m_next, l_next), None
 
-  m_init = -jnp.inf * jnp.ones((block_size_n,), dtype=jnp.float32, out_sharding=jax.P())
-  l_init = jnp.zeros((block_size_n,), dtype=jnp.float32, out_sharding=jax.P())
+  # Initialize scan buffers. When inside a mesh context, we need explicit
+  # sharding to make them fully addressable.
+  if use_explicit_sharding:
+    m_init = -jnp.inf * jnp.ones(
+      (block_size_n,), dtype=jnp.float32, out_sharding=jax.P()
+    )
+    l_init = jnp.zeros((block_size_n,), dtype=jnp.float32, out_sharding=jax.P())
+  else:
+    m_init = jnp.full((block_size_n,), -jnp.inf, dtype=jnp.float32)
+    l_init = jnp.zeros((block_size_n,), dtype=jnp.float32)
 
   (m_final, l_final), _ = jax.lax.scan(
     scan_body, (m_init, l_init), jnp.arange(num_blocks_v)
@@ -121,10 +132,12 @@ def scanned_logsumexp_blocked(
 
   num_blocks_v = v_padded // block_size_v
 
+  use_explicit_sharding = data_sharding is not None
+
   if block_size_n is None:
     # Original behavior: process all tokens together
     return _scanned_logsumexp_single_block(
-      outputs, w_unemb_padded, block_size_v, v, num_blocks_v
+      outputs, w_unemb_padded, block_size_v, v, num_blocks_v, use_explicit_sharding
     )
 
   # Block over token dimension: pad N, reshape, vmap, reshape back
@@ -147,12 +160,10 @@ def scanned_logsumexp_blocked(
   else:
     outputs_blocked = outputs_padded.reshape(num_blocks_n, block_size_n, d)
 
-  print(jax.typeof(outputs_blocked))
-  print(jax.typeof(w_unemb_padded))
   # vmap over token blocks
   vmapped_lse = jax.vmap(
     lambda x: _scanned_logsumexp_single_block(
-      x, w_unemb_padded, block_size_v, v, num_blocks_v
+      x, w_unemb_padded, block_size_v, v, num_blocks_v, use_explicit_sharding
     )
   )(outputs_blocked)
 
@@ -203,8 +214,6 @@ def scanned_cross_entropy(
   else:
     outputs_flat = outputs
     targets_flat = targets
-  print(jax.typeof(outputs))
-  print(jax.typeof(w_unemb))
 
   lse = scanned_logsumexp_blocked(
     outputs_flat, w_unemb, block_size_v, block_size_n, data_sharding
@@ -530,8 +539,6 @@ def test_timing_forward_pass(block_q: int, block_kv: int):
   outputs = jax.device_put(outputs, batch_sharding)
   targets = jax.device_put(targets, targets_sharding)
   w_unemb = jax.device_put(w_unemb, weight_sharding)
-  print(jax.typeof(outputs))
-  print(jax.typeof(w_unemb))
 
   unemb = LMHead(w=w_unemb, bias=bias)
 
@@ -552,7 +559,6 @@ def test_timing_forward_pass(block_q: int, block_kv: int):
     )
   )
   loss_fn_scanned = jax.jit(
-    # loss_fn_scanned =
     partial(
       scanned_cross_entropy,
       block_size_v=block_kv,
