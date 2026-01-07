@@ -87,6 +87,7 @@ def scanned_logsumexp_blocked(
   w_unemb: jax.Array,
   block_size_v: int = DEFAULT_BLOCK_SIZE,
   block_size_n: int | None = None,
+  data_sharding: list[str | None] | None = None,
 ) -> jax.Array:
   """Compute logsumexp(outputs @ w_unemb.T) using a scan over vocab blocks.
 
@@ -101,6 +102,8 @@ def scanned_logsumexp_blocked(
     block_size_n: Block size for token dimension. If None, processes all tokens
                   together. If specified, vmaps over token blocks for better
                   comparison with fused kernels.
+    data_sharding: Optional sharding spec for data dimension. When block_size_n
+                   is specified, the leading (num_blocks_n) axis will be sharded.
 
   Returns:
     logsumexp values of shape (N,)
@@ -135,7 +138,14 @@ def scanned_logsumexp_blocked(
   num_blocks_n = n_padded // block_size_n
 
   # Reshape to (num_blocks_n, block_size_n, D)
-  outputs_blocked = outputs_padded.reshape(num_blocks_n, block_size_n, d)
+  # When sharded, the N axis is sharded across data_sharding, so after reshape
+  # the leading num_blocks_n axis should be sharded
+  if data_sharding:
+    outputs_blocked = outputs_padded.reshape(
+      num_blocks_n, block_size_n, d, out_sharding=jax.P(*data_sharding, None, None)
+    )
+  else:
+    outputs_blocked = outputs_padded.reshape(num_blocks_n, block_size_n, d)
 
   # vmap over token blocks
   vmapped_lse = jax.vmap(
@@ -145,7 +155,10 @@ def scanned_logsumexp_blocked(
   )(outputs_blocked)
 
   # Reshape back to (N_padded,) and slice to (N,)
-  lse_flat = vmapped_lse.reshape(n_padded)
+  if data_sharding:
+    lse_flat = vmapped_lse.reshape(n_padded, out_sharding=jax.P(*data_sharding))
+  else:
+    lse_flat = vmapped_lse.reshape(n_padded)
   return lse_flat[:n]
 
 
@@ -189,7 +202,9 @@ def scanned_cross_entropy(
     outputs_flat = outputs
     targets_flat = targets
 
-  lse = scanned_logsumexp_blocked(outputs_flat, w_unemb, block_size_v, block_size_n)
+  lse = scanned_logsumexp_blocked(
+    outputs_flat, w_unemb, block_size_v, block_size_n, data_sharding
+  )
 
   if data_sharding:
     per_token_unembs = w_unemb.at[targets_flat].get(
