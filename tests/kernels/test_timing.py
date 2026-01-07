@@ -75,6 +75,8 @@ def _scanned_logsumexp_single_block(
   m_init = jnp.full((block_size_n,), -jnp.inf, dtype=jnp.float32)
   l_init = jnp.zeros((block_size_n,), dtype=jnp.float32)
 
+  print(m_init.is_fully_addressable)
+  print(l_init.is_fully_addressable)
   (m_final, l_final), _ = jax.lax.scan(
     scan_body, (m_init, l_init), jnp.arange(num_blocks_v)
   )
@@ -147,6 +149,8 @@ def scanned_logsumexp_blocked(
   else:
     outputs_blocked = outputs_padded.reshape(num_blocks_n, block_size_n, d)
 
+  print(jax.typeof(outputs_blocked))
+  print(jax.typeof(w_unemb_padded))
   # vmap over token blocks
   vmapped_lse = jax.vmap(
     lambda x: _scanned_logsumexp_single_block(
@@ -201,6 +205,8 @@ def scanned_cross_entropy(
   else:
     outputs_flat = outputs
     targets_flat = targets
+  print(jax.typeof(outputs))
+  print(jax.typeof(w_unemb))
 
   lse = scanned_logsumexp_blocked(
     outputs_flat, w_unemb, block_size_v, block_size_n, data_sharding
@@ -547,14 +553,14 @@ def test_timing_forward_pass(block_q: int, block_kv: int):
       fused_softmax_cross_entropy, config, shard_mapped__kernel=shard_mapped__kernel
     )
   )
-  loss_fn_scanned = jax.jit(
-    partial(
+  # loss_fn_scanned = jax.jit(
+  loss_fn_scanned = partial(
       scanned_cross_entropy,
       block_size_v=block_kv,
       block_size_n=block_q,
       data_sharding=["fsdp"],
-    )
   )
+  # )
 
   with jax.set_mesh(mesh):
     time_fused, loss_fused = time_fn(
