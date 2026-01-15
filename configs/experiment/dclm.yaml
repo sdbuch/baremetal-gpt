@@ -5,6 +5,10 @@ defaults:
 
 val_log_interval: 250
 # These need to be tuned fairly aggressively wrt d_model
+# And for DCLM, 512 is a good V block size
+#   (256 is bad, bc we have 128K-128256=2816=256*11 leftover tokens...
+#    and this seems to trigger the JAX splash masklib bug, since that bug
+#    is avoided only when we end with a partial mask)
 fused_xent_block_size_T: 256
 fused_xent_block_size_V: 512
 fused_xent_block_size_V_compute: 512
@@ -14,8 +18,8 @@ train_dataset:
   global_batch_size: 512  # about 4b tokens
   use_splash: True
   splash_block_size_q: 1024
-  splash_block_size_kv: 512
-  splash_block_size_kv_compute: 512
+  splash_block_size_kv: 1024
+  splash_block_size_kv_compute: 1024
 
 val_list:
   - dataset:
