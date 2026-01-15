@@ -316,7 +316,8 @@ def test_losses_integration_forward():
     mesh=mesh,
     data_sharding=config.sharding.data,
     q_seq_shards=num_devices,
-    block_size=DEFAULT_BLOCK_SIZE,
+    block_size_mem=DEFAULT_BLOCK_SIZE,
+    block_size_compute=DEFAULT_BLOCK_SIZE,
     max_valid_id=max_valid_id,
   )
 
@@ -381,7 +382,8 @@ def test_losses_integration_backward():
     mesh=mesh,
     data_sharding=config.sharding.data,
     q_seq_shards=num_devices,
-    block_size=DEFAULT_BLOCK_SIZE,
+    block_size_mem=DEFAULT_BLOCK_SIZE,
+    block_size_compute=DEFAULT_BLOCK_SIZE,
     max_valid_id=max_valid_id,
   )
 

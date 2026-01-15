@@ -549,7 +549,8 @@ def test_timing_forward_pass(block_q: int, block_kv: int):
     mesh=mesh,
     data_sharding=config.sharding.data,
     q_seq_shards=num_devices,
-    block_size=block_q,
+    block_size_mem=block_q,
+    block_size_compute=block_q,
     max_valid_id=max_valid_id,
   )
 
@@ -654,7 +655,8 @@ def test_timing_sweep_vocab_sizes():
       mesh=mesh,
       data_sharding=config.sharding.data,
       q_seq_shards=num_devices,
-      block_size=block_q,
+      block_size_mem=block_q,
+      block_size_compute=block_q,
       max_valid_id=max_valid_id,
     )
 
@@ -770,7 +772,8 @@ def test_timing_sweep_batch_sizes():
         mesh=mesh,
         data_sharding=config.sharding.data,
         q_seq_shards=num_devices,
-        block_size=block_q,
+        block_size_mem=block_q,
+        block_size_compute=block_q,
         max_valid_id=max_valid_id,
       )
 
@@ -882,7 +885,8 @@ def test_timing_fwd_bwd_sweep_vocab_sizes():
         mesh=mesh,
         data_sharding=config.sharding.data,
         q_seq_shards=num_devices,
-        block_size=block_q,
+        block_size_mem=block_q,
+        block_size_compute=block_q,
         max_valid_id=max_valid_id,
       )
 
@@ -1000,7 +1004,8 @@ def test_timing_fwd_bwd_sweep_batch_sizes():
         mesh=mesh,
         data_sharding=config.sharding.data,
         q_seq_shards=num_devices,
-        block_size=block_q,
+        block_size_mem=block_q,
+        block_size_compute=block_q,
         max_valid_id=max_valid_id,
       )
 
