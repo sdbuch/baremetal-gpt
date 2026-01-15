@@ -168,6 +168,7 @@ def make_splash_kernel_sharded(
   block_size_mem_q: int = 128,
   block_size_mem_kv: int = 128,
   block_size_compute_kv: int = 128,
+  use_fused_bwd_kernel: bool = False,
 ):
   """Currently only supports causal transformer"""
   # s is Q len (seq_len @ train; variable/1 at prefill/decode)
@@ -182,11 +183,10 @@ def make_splash_kernel_sharded(
   )
 
   # kernel
-  # Heuristic: if model is small enough, use fused splash backward
-  # This formula is (num_kv_blocks) * q.size * 2 <bf16> <= 64MB (mem per batch element)
-  if (t // block_size_mem_kv) * num_heads * s * 128 <= 2**25:
-    if jax.process_index() == 0:
-      print('INFO: Using splash attention fused backward kernel.')
+  # # Heuristic: if model is small enough, use fused splash backward
+  # # This formula is (num_kv_blocks) * q.size * 2 <bf16> <= 64MB (mem per batch element)
+  # if (t // block_size_mem_kv) * num_heads * s * 128 <= 2**25:
+  if use_fused_bwd_kernel:
     block_xtra_args = {"use_fused_bwd_kernel": True}
   else:
     block_xtra_args = {"block_q_dq": block_size_mem_q, "block_kv_dq": block_size_mem_kv}
@@ -242,6 +242,7 @@ def forward_kernels_from_config(config: Config, mesh):
       "block_size_mem_q": dataset.splash_block_size_q,
       "block_size_mem_kv": dataset.splash_block_size_kv,
       "block_size_compute_kv": dataset.splash_block_size_kv_compute,
+      "use_fused_bwd_kernel": dataset.splash_use_fused_bwd_kernel,
     }
     return make_splash_kernel_sharded(*splash_args, 0, mesh, **splash_kwargs)
 

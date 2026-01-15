@@ -97,6 +97,7 @@ class DatasetConfig:
   splash_block_size_q: int = 128
   splash_block_size_kv: int = 128
   splash_block_size_kv_compute: int = 128
+  splash_use_fused_bwd_kernel: bool = False
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
