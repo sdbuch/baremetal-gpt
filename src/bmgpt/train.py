@@ -37,39 +37,23 @@ register_configs()
 _debug_microbatch_counter = 0  # Track which microbatch we're on
 
 
-def debug_save_loss_inputs(config, unemb, outputs, targets, mesh):
-  """Save loss function inputs for offline debugging.
-
-  Saves per-process local shards to /tmp/debug_loss_inputs/
-  Assumes num_steps=1, num_microbatches=2.
-  """
+def _debug_save_callback(outputs, targets, unemb_w, config_dict):
+  """Callback that runs with concrete values - does actual file I/O."""
   global _debug_microbatch_counter
   microbatch_idx = _debug_microbatch_counter
   _debug_microbatch_counter += 1
-
-  from omegaconf import OmegaConf
 
   proc_idx = jax.process_index()
   save_dir = Path(f"/tmp/debug_loss_inputs/proc_{proc_idx}")
   save_dir.mkdir(parents=True, exist_ok=True)
   suffix = f"_mb{microbatch_idx}"
 
-  # Helper to extract local shards as numpy arrays
-  def to_local_numpy(arr):
-    if hasattr(arr, "addressable_shards"):
-      # Sharded array - get local data from each addressable shard
-      local_shards = [np.asarray(s.data) for s in arr.addressable_shards]
-      return np.stack(local_shards, axis=0)  # Stack into single array
-    else:
-      return np.asarray(arr)
+  # Save arrays (already concrete numpy arrays from callback)
+  np.save(save_dir / f"outputs{suffix}.npy", np.asarray(outputs))
+  np.save(save_dir / f"targets{suffix}.npy", np.asarray(targets))
+  np.save(save_dir / f"unemb_w{suffix}.npy", np.asarray(unemb_w))
 
-  # Save arrays (local shards)
-  np.save(save_dir / f"outputs{suffix}.npy", to_local_numpy(outputs))
-  np.save(save_dir / f"targets{suffix}.npy", to_local_numpy(targets))
-  np.save(save_dir / f"unemb_w{suffix}.npy", to_local_numpy(unemb.w))
-
-  # Save config as dict (for mesh recreation)
-  config_dict = OmegaConf.to_container(config, resolve=True)
+  # Save config
   with open(save_dir / f"config{suffix}.pkl", "wb") as f:
     pickle.dump(config_dict, f)
 
@@ -77,66 +61,21 @@ def debug_save_loss_inputs(config, unemb, outputs, targets, mesh):
     f"[DEBUG] Saved loss inputs to {save_dir} (proc {proc_idx}, microbatch {microbatch_idx})"
   )
 
-  # === IN-SITU VERIFICATION: only run after last microbatch ===
-  if microbatch_idx < 1:  # Assuming num_microbatches=2
-    return
 
-  print("[DEBUG] Verifying reload for both microbatches...")
+def debug_save_loss_inputs(config, unemb, outputs, targets, mesh):
+  """Save loss function inputs for offline debugging using jax.debug.callback.
 
-  for mb_idx in range(2):
-    mb_suffix = f"_mb{mb_idx}"
-    print(f"[DEBUG] Checking microbatch {mb_idx}...")
+  Uses jax.debug.callback to handle traced values from inside jax.lax.scan.
+  Saves per-process local shards to /tmp/debug_loss_inputs/
+  Assumes num_steps=1, num_microbatches=2.
+  """
+  from omegaconf import OmegaConf
 
-    # Reload config
-    with open(save_dir / f"config{mb_suffix}.pkl", "rb") as f:
-      config_reloaded = pickle.load(f)
+  # Convert config to dict outside the callback (config is not traced)
+  config_dict = OmegaConf.to_container(config, resolve=True)
 
-    # Reload arrays
-    outputs_local = np.load(save_dir / f"outputs{mb_suffix}.npy")
-    targets_local = np.load(save_dir / f"targets{mb_suffix}.npy")
-    unemb_w_local = np.load(save_dir / f"unemb_w{mb_suffix}.npy")
-
-    # Recreate sharded arrays using make_array_from_process_local_data
-    def reload_sharded(local_data, sharding):
-      # local_data is (num_local_shards, *shard_shape)
-      # Unstack back to list of shards
-      local_shards = [local_data[i] for i in range(local_data.shape[0])]
-      return jax.make_array_from_process_local_data(sharding, local_shards)
-
-    # Get shardings from original arrays (same sharding for all microbatches)
-    outputs_reloaded = reload_sharded(outputs_local, outputs.sharding)
-    targets_reloaded = reload_sharded(targets_local, targets.sharding)
-    unemb_w_reloaded = reload_sharded(unemb_w_local, unemb.w.sharding)
-
-    # Verify shapes match
-    print(f"[DEBUG]   outputs shape: {outputs_reloaded.shape}")
-    print(f"[DEBUG]   targets shape: {targets_reloaded.shape}")
-    print(f"[DEBUG]   unemb_w shape: {unemb_w_reloaded.shape}")
-
-    # For the current microbatch (mb_idx=1), verify equality
-    if mb_idx == microbatch_idx:
-
-      def check_equal(name, orig, reloaded):
-        orig_local = to_local_numpy(orig)
-        reloaded_local = to_local_numpy(reloaded)
-        if np.allclose(orig_local, reloaded_local):
-          print(f"[DEBUG]   ✓ {name} reload OK")
-        else:
-          max_diff = np.max(np.abs(orig_local - reloaded_local))
-          print(f"[DEBUG]   ✗ {name} MISMATCH! max_diff={max_diff}")
-
-      check_equal("outputs", outputs, outputs_reloaded)
-      check_equal("targets", targets, targets_reloaded)
-      check_equal("unemb_w", unemb.w, unemb_w_reloaded)
-
-  # Verify config
-  assert config_reloaded["use_fused_xent_loss"] == config.use_fused_xent_loss
-  assert (
-    config_reloaded["train_dataset"]["num_microbatches"]
-    == config.train_dataset.num_microbatches
-  )
-  print("[DEBUG] ✓ config reload OK")
-  print("[DEBUG] Verification complete.")
+  # Use jax.debug.callback to save with concrete values at runtime
+  jax.debug.callback(_debug_save_callback, outputs, targets, unemb.w, config_dict)
 
 
 # Setup for training loop
