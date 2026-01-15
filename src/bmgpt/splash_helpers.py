@@ -183,9 +183,6 @@ def make_splash_kernel_sharded(
   )
 
   # kernel
-  # # Heuristic: if model is small enough, use fused splash backward
-  # # This formula is (num_kv_blocks) * q.size * 2 <bf16> <= 64MB (mem per batch element)
-  # if (t // block_size_mem_kv) * num_heads * s * 128 <= 2**25:
   if use_fused_bwd_kernel:
     block_xtra_args = {"use_fused_bwd_kernel": True}
   else:

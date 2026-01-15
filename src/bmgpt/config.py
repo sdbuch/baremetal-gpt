@@ -97,6 +97,8 @@ class DatasetConfig:
   splash_block_size_q: int = 128
   splash_block_size_kv: int = 128
   splash_block_size_kv_compute: int = 128
+  # Heuristic: if model is small enough, use fused splash backward
+  # Formula is (num_kv_blocks) * q.size * 2 <bf16> <= 64MB (mem per batch element)
   splash_use_fused_bwd_kernel: bool = False
 
 

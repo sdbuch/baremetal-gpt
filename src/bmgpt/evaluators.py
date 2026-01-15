@@ -125,7 +125,6 @@ def calculate_metric_on_minibatches(
   batch = next(batch_iter)
   with jax.set_mesh(mesh):
     batch_metric = forward_and_calc_metric(*batch, params, cache)
-    # batch_metric = metric(config, kernel, batch, params, cache)
   batch_metric_buffer = batch_metric
   tokens_per_batch = batch_metric_buffer.size
   num_batches_processed = 1
@@ -136,7 +135,6 @@ def calculate_metric_on_minibatches(
     for step, batch in enumerate(batch_iter):
       with jax.set_mesh(mesh):
         batch_metric = forward_and_calc_metric(*batch, params, cache)
-        # batch_metric = metric(config, kernel, batch, params, cache)
         batch_metric_buffer += batch_metric
       if step == num_steps - 1:
         break
