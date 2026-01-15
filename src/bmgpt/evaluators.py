@@ -114,7 +114,7 @@ def calculate_metric_on_minibatches(
 
   # Loss accumulation function (avoid communication until we're done)
   @jax.jit
-  def forward_and_calc_metric(inputs, targets):
+  def forward_and_calc_metric(inputs, targets, params, cache):
     cache_params = CacheParams(enabled=False, size=0)
     model = partial(_transformer, config, kernel, params, cache_params=cache_params)
     outputs, _ = jax.vmap(model)(inputs, cache)
@@ -125,7 +125,7 @@ def calculate_metric_on_minibatches(
   # Process first batch (to get on-device buffer shape)
   batch = next(batch_iter)
   with jax.set_mesh(mesh):
-    batch_metric = forward_and_calc_metric(*batch)
+    batch_metric = forward_and_calc_metric(*batch, params, cache)
     # batch_metric = metric(config, kernel, batch, params, cache)
   batch_metric_buffer = batch_metric
   num_samples_processed += batch[0].size
@@ -134,7 +134,7 @@ def calculate_metric_on_minibatches(
   if num_steps != 1:  # if num_steps=1, we want to skip this
     for step, batch in enumerate(batch_iter):
       with jax.set_mesh(mesh):
-        batch_metric = forward_and_calc_metric(*batch)
+        batch_metric = forward_and_calc_metric(*batch, params, cache)
         # batch_metric = metric(config, kernel, batch, params, cache)
         batch_metric_buffer += batch_metric
       num_samples_processed += batch[0].size
