@@ -117,7 +117,7 @@ def main(config: Config):
     zeros_like_fp32 = partial(jnp.zeros_like, dtype=jnp.float32)
     carry = (jnp.zeros(()), jax.tree.map(zeros_like_fp32, state.params))
     (loss, grad), raw_losses = jax.lax.scan(gradient_accum, carry, batch)
-    assert jnp.all(raw_losses.dtype == jnp.float32)
+    assert raw_losses.dtype == jnp.float32
     # NOTE: breaks if per-token loss masking introduced (see unsloth blog)
     loss = loss / config.train_dataset.num_microbatches
     grad = jax.tree.map(lambda x: x / config.train_dataset.num_microbatches, grad)
