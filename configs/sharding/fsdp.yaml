@@ -1,6 +1,5 @@
 # @package _global_
 
-# TODO
 sharding:
   mesh_axis_names: ["fsdp"]
   data: ["fsdp"]

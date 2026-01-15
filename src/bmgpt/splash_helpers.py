@@ -240,29 +240,32 @@ def forward_kernels_from_config(config: Config, mesh):
 
   # model splash attention kernel
   train_attn_kernel = make_splash_kernel_wrapper(config.train_dataset)
-  # fused cross entropy loss kernel (via attn!)
-  num_toks = (
-    config.train_dataset.seq_len
-    * config.train_dataset.global_batch_size
-    // config.train_dataset.num_microbatches
-  )
-  if config.sharding.data and config.sharding.data[0]:
-    data_axis_name = config.sharding.data[0]
-    num_data_shards = config.sharding.mesh_shape[
-      config.sharding.mesh_axis_names.index(data_axis_name)
-    ]
+  # fused cross entropy loss kernel
+  if not config.use_fused_xent_loss:
+    train_lse_kernel = None
   else:
-    num_data_shards = 1
-  lse_kernel_kwargs = {
-    "data_sharding": config.sharding.data,
-    "q_seq_shards": num_data_shards,
-    "block_size_mem": 512,
-    "block_size_compute": 512,
-    "max_valid_id": config.train_dataset.max_valid_token_id,
-  }
-  train_lse_kernel = make_lse_kernel_sharded(
-    num_toks, config.model.num_vocab, mesh, **lse_kernel_kwargs
-  )
+    num_toks = (
+      config.train_dataset.seq_len
+      * config.train_dataset.global_batch_size
+      // config.train_dataset.num_microbatches
+    )
+    if config.sharding.data and config.sharding.data[0]:
+      data_axis_name = config.sharding.data[0]
+      num_data_shards = config.sharding.mesh_shape[
+        config.sharding.mesh_axis_names.index(data_axis_name)
+      ]
+    else:
+      num_data_shards = 1
+    lse_kernel_kwargs = {
+      "data_sharding": config.sharding.data,
+      "q_seq_shards": num_data_shards,
+      "block_size_mem": 512,
+      "block_size_compute": 512,
+      "max_valid_id": config.train_dataset.max_valid_token_id,
+    }
+    train_lse_kernel = make_lse_kernel_sharded(
+      num_toks, config.model.num_vocab, mesh, **lse_kernel_kwargs
+    )
   # val and test splash attention kernels
   val_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.val_list]
   eval_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.eval_list]
