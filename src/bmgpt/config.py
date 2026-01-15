@@ -92,9 +92,11 @@ class DatasetConfig:
   epochs_to_loop: int = -1  # -1 means indefinite; otherwise, fixed num epochs
   num_steps: int = 10**3  # if 0 or less, will train until dataloader exhausted
 
-  ## Call-time parameters
-  # It makes sense to do these here, instead of model, since they're data-specific
+  ## Splash Attention kernel parameters (dataset-specific)
   use_splash: bool = True  # use splash attention pallas kernel or jax-xla attention
+  splash_block_size_q: int = 128
+  splash_block_size_kv: int = 128
+  splash_block_size_kv_compute: int = 128
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -201,6 +203,9 @@ class Config:
   run_name: str = ""
   val_log_interval: int = 1000  # log validation metrics every <this many> batches
   use_fused_xent_loss: bool = True  # requires vocab size divisible by 128
+  fused_xent_block_size_T: int = 512  # block size along batch axis
+  fused_xent_block_size_V: int = 512  # block size along vocab axis
+  fused_xent_block_size_V_compute: int = 512  # block size along vocab axis for dots
 
   train_dataset: DatasetConfig = MISSING
   val_list: list[EvaluationConfig] = field(default_factory=list)  # validation metrics
