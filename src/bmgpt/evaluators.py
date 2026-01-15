@@ -108,7 +108,6 @@ def calculate_metric_on_minibatches(
   perplexity_flag: bool = False,
   num_steps: int = 0,
 ):
-  num_samples_processed = 0
   with jax.set_mesh(mesh):
     cache = init_kv_cache(config, *global_batch_size__num_microbatches, 0)
 
@@ -128,19 +127,22 @@ def calculate_metric_on_minibatches(
     batch_metric = forward_and_calc_metric(*batch, params, cache)
     # batch_metric = metric(config, kernel, batch, params, cache)
   batch_metric_buffer = batch_metric
-  num_samples_processed += batch[0].size
+  tokens_per_batch = batch_metric_buffer.size
+  num_batches_processed = 1
 
   # Process remaining batches
-  if num_steps != 1:  # if num_steps=1, we want to skip this
+  step = -1
+  if num_steps != 1:  # executed step 1 above
     for step, batch in enumerate(batch_iter):
       with jax.set_mesh(mesh):
         batch_metric = forward_and_calc_metric(*batch, params, cache)
         # batch_metric = metric(config, kernel, batch, params, cache)
         batch_metric_buffer += batch_metric
-      num_samples_processed += batch[0].size
       if step == num_steps - 1:
         break
-  metric = batch_metric_buffer / num_samples_processed
+  num_batches_processed += step + 1
+  num_tokens_processed = tokens_per_batch * num_batches_processed
+  metric = batch_metric_buffer.sum() / num_tokens_processed
   if perplexity_flag:
     metric = jnp.exp(metric)
   return {metric_name: metric}
