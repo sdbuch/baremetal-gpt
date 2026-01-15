@@ -1,22 +1,22 @@
 # @package _global_
 
 defaults:
-  - /dataset/dclm@train_dataset
+  - /dataset/dclm@train_dataset  # seq len 2048
 
 val_log_interval: 250
 
-train_dataset:  # about 2b tokens
+train_dataset:
   num_steps: 4000
-  global_batch_size: 512
+  global_batch_size: 512  # about 4b tokens
 
 val_list:
   - dataset:
       name: DCLM
       path: ${train_dataset.path}
       split: VAL
-      seq_len: ${train_dataset.seq_len}  # At inference time, this functions like prompt size
-      global_batch_size: ${train_dataset.global_batch_size}
-      num_steps: 64  # about 32M tokens
+      seq_len: ${train_dataset.seq_len}
+      global_batch_size: 256
+      num_steps: 64  # about 34M tokens
     evaluator: NLL
 
 eval_list:
