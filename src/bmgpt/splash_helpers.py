@@ -195,7 +195,7 @@ def make_splash_kernel_sharded(
     block_q_dkv=block_size_mem,
     block_kv_dkv=block_size_mem,
     block_kv_dkv_compute=block_size_compute,
-    **block_extra_args,
+    **block_extra_args,  # type: ignore
   )
   kernel = make_splash_mha(
     mask,

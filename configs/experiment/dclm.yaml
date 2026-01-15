@@ -15,7 +15,7 @@ val_list:
       path: ${train_dataset.path}
       split: VAL
       seq_len: ${train_dataset.seq_len}
-      global_batch_size: 256
+      global_batch_size: 256  # 512K tokens
       num_steps: 64  # about 34M tokens
     evaluator: NLL
 
