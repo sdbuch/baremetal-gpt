@@ -200,7 +200,7 @@ class Config:
   project_name: str = "bmgpt-debug"
   run_name: str = ""
   val_log_interval: int = 1000  # log validation metrics every <this many> batches
-  used_fused_xent_loss: bool = True  # requires vocab size divisible by 128
+  use_fused_xent_loss: bool = True  # requires vocab size divisible by 128
 
   train_dataset: DatasetConfig = MISSING
   val_list: list[EvaluationConfig] = field(default_factory=list)  # validation metrics

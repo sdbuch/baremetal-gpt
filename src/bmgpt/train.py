@@ -100,7 +100,7 @@ def main(config: Config):
           _transformer, config, train_attn_kernel, params, cache_params=cache_params
         )
       )(inputs, state.kv_cache)
-      if config.used_fused_xent_loss:
+      if config.use_fused_xent_loss:
         loss = fused_softmax_cross_entropy(
           config, params.unemb, outputs, targets, train_lse_kernel
         )

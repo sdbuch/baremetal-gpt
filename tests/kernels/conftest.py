@@ -219,7 +219,7 @@ def make_test_config(
     wunemb_sharding = [None, mesh_axis_names[0]] if mesh_axis_names else [None, None]
   return Config(
     seed=42,
-    used_fused_xent_loss=True,
+    use_fused_xent_loss=True,
     train_dataset=DatasetConfig(
       name=DatasetName.SHAKESPEARE,
       path="",
