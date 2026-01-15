@@ -28,9 +28,13 @@ import numpy as np
 from jax import ad_checkpoint, lax, tree_util
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu
-
+from jax.experimental.pallas.ops.tpu.splash_attention import (
+  SegmentIds,
+)
 from jax.experimental.pallas.ops.tpu.splash_attention import (
   splash_attention_mask as mask_lib,
+)
+from jax.experimental.pallas.ops.tpu.splash_attention import (
   splash_attention_mask_info as mask_info_lib,
 )
 
@@ -43,30 +47,6 @@ NN_DIM_NUMBERS = (((1,), (0,)), ((), ()))  # standard matmul
 NT_DIM_NUMBERS = (((1,), (1,)), ((), ()))  # RHS transposed
 
 # mypy: ignore-errors
-
-
-class SegmentIds(NamedTuple):
-  """SegmentIds for Q and KV sequences.
-
-  SegmentIds are a mechanism to ensure that there is no cross-attention between
-  segments (fraction of a sequence) that have been concatenated together into a
-  sequence. Each array is a list of ids (integers). Only tokens with the same
-  id are allowed to attend to each other.
-
-  The static mask (e.g. causal) is "and-ed" with the segment id mask to form
-  the actual attention mask. It is important that the latter does not have any
-  all-zero rows (along dimension kv). Otherwise it would result in a invalid
-  softmax (the denominator would be 0).
-  This condition holds for causal self-attention because in this case segment
-  ids form a block diagonal matrix so at least one element in each row is set.
-  It is easy to break this condition with non-self-attention configurations.
-  Attributes:
-    q: segment ids along the Q sequence
-    kv: segment ids along the KV sequence
-  """
-
-  q: jax.Array  # [q_seq_len]
-  kv: jax.Array  # [kv_seq_len]
 
 
 MaskFunctionType = Callable[..., jax.Array]

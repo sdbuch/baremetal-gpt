@@ -16,7 +16,6 @@ from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_mask impo
 
 from bmgpt.config import Config, DatasetConfig
 from bmgpt.kernels.lse_kernel import BlockSizes, make_lse_kernel
-from bmgpt.kernels.lse_mask import VocabMask
 
 
 class FullMask(_ComputableMask):
@@ -51,6 +50,48 @@ class FullMask(_ComputableMask):
       (
         type(self),
         self.shape,
+        self.q_sequence.tobytes() if self.q_sequence is not None else None,
+      )
+    )
+
+
+class VocabMask(_ComputableMask):
+  """Mask that allows attention only to valid vocabulary tokens (with fused xent)"""
+
+  max_valid_id: int
+
+  def __init__(
+    self,
+    shape: tuple[int, int],
+    max_valid_id: int,
+    shard_count: int = 1,
+  ):
+    self.max_valid_id = max_valid_id
+
+    def vocab_mask_function(q_ids, kv_ids):
+      return kv_ids <= max_valid_id
+
+    super().__init__(
+      shape=shape,
+      mask_function=vocab_mask_function,
+      shard_count=shard_count,
+    )
+
+  def __eq__(self, other: object):
+    if not isinstance(other, type(self)):
+      return NotImplemented
+    return (
+      self.shape == other.shape
+      and self.max_valid_id == other.max_valid_id
+      and np.array_equal(self.q_sequence, other.q_sequence)
+    )
+
+  def __hash__(self):
+    return hash(
+      (
+        type(self),
+        self.shape,
+        self.max_valid_id,
         self.q_sequence.tobytes() if self.q_sequence is not None else None,
       )
     )
@@ -215,7 +256,8 @@ def forward_kernels_from_config(config: Config, mesh):
   lse_kernel_kwargs = {
     "data_sharding": config.sharding.data,
     "q_seq_shards": num_data_shards,
-    "block_size": 512,
+    "block_size_mem": 512,
+    "block_size_compute": 512,
     "max_valid_id": config.train_dataset.max_valid_token_id,
   }
   train_lse_kernel = make_lse_kernel_sharded(
