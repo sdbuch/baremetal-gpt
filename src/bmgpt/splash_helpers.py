@@ -237,9 +237,9 @@ def forward_kernels_from_config(config: Config, mesh):
       return None
     splash_args = (config.model.num_heads, dataset.seq_len)
     splash_kwargs = {
-      "block_size_mem_q": config.train_dataset.splash_block_size_q,
-      "block_size_mem_kv": config.train_dataset.splash_block_size_kv,
-      "block_size_compute_kv": config.train_dataset.splash_block_size_kv_compute,
+      "block_size_mem_q": dataset.splash_block_size_q,
+      "block_size_mem_kv": dataset.splash_block_size_kv,
+      "block_size_compute_kv": dataset.splash_block_size_kv_compute,
     }
     return make_splash_kernel_sharded(*splash_args, 0, mesh, **splash_kwargs)
 
