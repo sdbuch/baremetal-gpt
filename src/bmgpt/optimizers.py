@@ -73,11 +73,11 @@ def adamw_update(
   nu = beta2 * state.nu + (1 - beta2) * grad**2
   new_state = OptState(mu=mu, nu=nu, step=state.step + 1)
 
+  # simulate initializing the buffers with initial gradients via pre-incrementing step
   mu_debias = mu / (1 - beta1**new_state.step)
   nu_debias = nu / (1 - beta2**new_state.step)
   update = -lr * mu_debias / (eps + jnp.sqrt(nu_debias))
   if wd_mask:
-    # Apply weight decay
     update = update - lr * weight_decay * param
   return update.astype(config.model.param_dtype.value), new_state
 
@@ -87,6 +87,5 @@ def sgd_update(
 ):
   update = -config.optimizer.lr * grad
   if wd_mask:
-    # Apply weight decay
     update = update - config.optimizer.lr * config.optimizer.weight_decay * param
   return update.astype(config.model.param_dtype.value), state

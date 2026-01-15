@@ -60,9 +60,10 @@ def make_lse_kernel_sharded(
   q_seq_len: int,
   k_seq_len: int,
   mesh,
-  data_sharding: list[str | None] = [None],  # following only used if previous is True
+  data_sharding: list[str | None] = [None],
   q_seq_shards: int = 1,
-  block_size: int = 128,
+  block_size_mem: int = 128,
+  block_size_compute: int = 128,
   max_valid_id: int | None = None,
 ):
   """Currently only supports causal transformer"""
@@ -81,13 +82,13 @@ def make_lse_kernel_sharded(
   mask = MultiHeadMask([VocabMask((s, t), max_valid_id=max_valid_id)])
 
   # kernel
-  if block_size % 128 != 0:
+  if block_size_mem % 128 != 0:
     # splash attention kernel requires block size to be a multiple of 128
     raise NotImplementedError("Splash block size needs to be a multiple of 128")
   block_sizes = BlockSizes(
-    block_q=block_size,
-    block_kv=block_size,
-    block_kv_compute=block_size,
+    block_q=block_size_mem,
+    block_kv=block_size_mem,
+    block_kv_compute=block_size_compute,
   )
   kernel = make_lse_kernel(mask, block_sizes=block_sizes, q_seq_shards=q_seq_shards)
 
@@ -121,7 +122,8 @@ def make_splash_kernel_sharded(
   cache_capacity: int,
   mesh,
   q_seq_shards: int = 1,
-  block_size: int = 128,
+  block_size_mem: int = 128,
+  block_size_compute: int = 128,
 ):
   """Currently only supports causal transformer"""
   # s is Q len (seq_len @ train; variable/1 at prefill/decode)
@@ -136,21 +138,22 @@ def make_splash_kernel_sharded(
   )
 
   # kernel
-  if block_size % 128 != 0:
+  if block_size_mem % 128 != 0:
     # splash attention kernel requires block size to be a multiple of 128
     raise NotImplementedError("Splash block size needs to be a multiple of 128")
   # Heuristic: if model is small enough, use fused splash backward
-  if (q_seq_len // block_size) * num_heads * q_seq_len * 128 <= 2**28:
+  # This formula is (num_kv_blocks) * q.size * 4 <fp32> <= 64MB (mem per batch element)
+  if (t // block_size_mem) * num_heads * s * 128 <= 2**16:
     block_extra_args = {"use_fused_bwd_kernel": True}
   else:
-    block_extra_args = {"block_q_dq": block_size, "block_kv_dq": block_size}
+    block_extra_args = {"block_q_dq": block_size_mem, "block_kv_dq": block_size_mem}
   block_sizes = BlockSizesSplash(
-    block_q=block_size,
-    block_kv=block_size,
-    block_kv_compute=block_size,
-    block_q_dkv=block_size,
-    block_kv_dkv=block_size,
-    block_kv_dkv_compute=block_size,
+    block_q=block_size_mem,
+    block_kv=block_size_mem,
+    block_kv_compute=block_size_compute,
+    block_q_dkv=block_size_mem,
+    block_kv_dkv=block_size_mem,
+    block_kv_dkv_compute=block_size_compute,
     *block_extra_args,
   )
   kernel = make_splash_mha(

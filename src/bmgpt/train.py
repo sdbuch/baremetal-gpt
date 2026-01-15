@@ -114,8 +114,10 @@ def main(config: Config):
       loss, grad = jax.value_and_grad(loss_fn)(state.params, microbatch)
       return (loss_accum + loss, jax.tree.map(jnp.add, grad_accum, grad)), None
 
-    carry = (jnp.zeros(()), jax.tree.map(jnp.zeros_like, state.params))
+    zeros_like_fp32 = partial(jnp.zeros_like, dtype=jnp.float32)
+    carry = (jnp.zeros(()), jax.tree.map(zeros_like_fp32, state.params))
     (loss, grad), _ = jax.lax.scan(gradient_accum, carry, batch)
+    # NOTE: breaks if per-token loss masking introduced (see unsloth blog)
     loss = loss / config.train_dataset.num_microbatches
     grad = jax.tree.map(lambda x: x / config.train_dataset.num_microbatches, grad)
 
@@ -164,7 +166,9 @@ def eval_loop(
   for evaluation, shard_mapped__kernel in evals_and_kernels:
     key, key_d, key_e = jax.random.split(key, 3)
     batch_iter = get_distributed_batch_iter(config, evaluation.dataset, key_d, mesh)
-    # HACK: eval loop should be refactored to unify with gradient accum (& cut this)
+    assert evaluation.dataset.num_microbatches == 1, (
+      "Microbatching for evaluators not supported"
+    )
     batch_iter = map(lambda b: jax.tree.map(lambda x: x.squeeze(0), b), batch_iter)
     evaluation_fn = evaluator_factory(evaluation)
     metrics = evaluation_fn(

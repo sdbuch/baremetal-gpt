@@ -375,6 +375,7 @@ def init_classification_head(config: Config, key) -> ClassificationHead:
 
 
 def _classification_head(config: Config, params: ClassificationHead, x: Array):
+  """Input x has shape (S, D)"""
   logits = jnp.matmul(x[:1], params.w)
   if config.model.use_bias_embeddings:
     logits += params.bias
@@ -511,6 +512,7 @@ def _transformer(
 def init_kv_cache(
   config: Config, global_batch_size: int, num_microbatches: int, cache_capacity: int
 ):
+  """Cache is shape (B//num_micro, L, 2, N, max_seq_len, H)"""
   if not config.sharding.data:
     sharding_batch_layer = [None, None]
   else:

@@ -6,9 +6,9 @@ import jax
 import jax.numpy as jnp
 from jax.experimental.multihost_utils import process_allgather
 
-from bmgpt import data
 from bmgpt.config import Config, EvaluationConfig, EvaluatorType
 from bmgpt.data import DataloaderOutputType
+from bmgpt.losses import MetricType, accuracy, softmax_cross_entropy
 from bmgpt.model import CacheParams, Transformer, _transformer, init_kv_cache
 from bmgpt.sample import generate
 from bmgpt.tokenizers import get_tokenizer_factory
@@ -29,7 +29,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
     case EvaluatorType.ACCURACY:
       return partial(
         calculate_metric_on_minibatches,
-        metric=accuracy,
+        metric_fun=accuracy,
         global_batch_size__num_microbatches=(
           evaluation_config.dataset.global_batch_size,
           evaluation_config.dataset.num_microbatches,
@@ -40,7 +40,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
     case EvaluatorType.NLL:
       return partial(
         calculate_metric_on_minibatches,
-        metric=nll,
+        metric_fun=softmax_cross_entropy,
         global_batch_size__num_microbatches=(
           evaluation_config.dataset.global_batch_size,
           evaluation_config.dataset.num_microbatches,
@@ -51,7 +51,7 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
     case EvaluatorType.PERPLEXITY:
       return partial(
         calculate_metric_on_minibatches,
-        metric=nll,
+        metric_fun=softmax_cross_entropy,
         global_batch_size__num_microbatches=(
           evaluation_config.dataset.global_batch_size,
           evaluation_config.dataset.num_microbatches,
@@ -103,20 +103,30 @@ def calculate_metric_on_minibatches(
   params: Transformer,
   batch_iter: DataloaderOutputType,
   global_batch_size__num_microbatches: tuple[int, int],
-  metric,
+  metric_fun: MetricType,
   metric_name: str = "",
   perplexity_flag: bool = False,
   num_steps: int = 0,
 ):
-  # TODO: Now that we added gradient accum, this whole fun could be refactored...
   num_samples_processed = 0
   with jax.set_mesh(mesh):
     cache = init_kv_cache(config, *global_batch_size__num_microbatches, 0)
 
+  # Loss accumulation function (avoid communication until we're done)
+  @jax.jit
+  def forward_and_calc_metric(inputs, targets):
+    cache_params = CacheParams(enabled=False, size=0)
+    model = partial(_transformer, config, kernel, params, cache_params=cache_params)
+    outputs, _ = jax.vmap(model)(inputs, cache)
+    return metric_fun(
+      config, params.unemb, outputs, targets, kernel, False
+    )  # don't reduce
+
   # Process first batch (to get on-device buffer shape)
   batch = next(batch_iter)
   with jax.set_mesh(mesh):
-    batch_metric = metric(config, kernel, batch, params, cache)
+    batch_metric = forward_and_calc_metric(*batch)
+    # batch_metric = metric(config, kernel, batch, params, cache)
   batch_metric_buffer = batch_metric
   num_samples_processed += batch[0].size
 
@@ -124,48 +134,13 @@ def calculate_metric_on_minibatches(
   if num_steps != 1:  # if num_steps=1, we want to skip this
     for step, batch in enumerate(batch_iter):
       with jax.set_mesh(mesh):
-        batch_metric = metric(config, kernel, batch, params, cache)
+        batch_metric = forward_and_calc_metric(*batch)
+        # batch_metric = metric(config, kernel, batch, params, cache)
         batch_metric_buffer += batch_metric
       num_samples_processed += batch[0].size
       if step == num_steps - 1:
         break
   metric = batch_metric_buffer / num_samples_processed
   if perplexity_flag:
-    # there is an online algorithm for perplexity with a product reduction
-    # but it is not numerically stable... easier to just do this hack
     metric = jnp.exp(metric)
   return {metric_name: metric}
-
-
-@partial(jax.jit, static_argnums=(1,))
-def accuracy(config: Config, kernel, batch, params: Transformer, cache):
-  inputs, targets = batch
-  logits, _ = jax.vmap(
-    partial(
-      _transformer,
-      config,
-      kernel,
-      params,
-      cache_params=CacheParams(enabled=False, size=0),
-    )
-  )(inputs, cache)
-  preds = logits.argmax(axis=-1)
-  return (preds == targets).astype(jnp.int32).sum()
-
-
-@partial(jax.jit, static_argnums=(1,))
-def nll(config: Config, kernel, batch, params: Transformer, cache):
-  """Negative log likelihood, calculated in nats."""
-  inputs, targets = batch
-  logits, _ = jax.vmap(
-    partial(
-      _transformer,
-      config,
-      kernel,
-      params,
-      cache_params=CacheParams(enabled=False, size=0),
-    )
-  )(inputs, cache)
-  logits = logits.astype(jnp.float32)
-  logprobs = jax.nn.log_softmax(logits, axis=-1)
-  return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).sum()

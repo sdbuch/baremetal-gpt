@@ -1,45 +1,72 @@
 from functools import partial
+from typing import Any, Callable
 
 import jax
 import jax.numpy as jnp
+from jax import Array
 
 from bmgpt.config import Config
+from bmgpt.data import DataloaderOutputType
 from bmgpt.model import ClassificationHead, LMHead, transformer_variant_factory
 
 """Loss functions for training and evaluation."""
 
-# API: inputs = (outputs, targets)
-#  outputs: model outputs (NOT logits!)
-#  targets: token labels (int32)
-# Both are batched as (B, S, ...)
-# Shardings according to config.py (ShardingConfig)
+# API:
+# Positional:
+#   unembedding: output projection, shape num_vocab x d_model
+#   outputs: model outputs (not logits)
+#   targets: token labels (int32)
+#     Both are batched as (B, S, ...)
+#     Shardings according to config.py (ShardingConfig)
+# Keyword:
+#   shard_mapped__kernel: shard-map-compatible pallas kernel tuple (or None)
+#   reduce: whether to reduce over the batch axes or not
+
+
+MetricType = Callable[
+  [Config, LMHead | ClassificationHead, Array, Array, Any, bool], Array
+]
+
+
+def calculate_logits(
+  config: Config, unembedding: LMHead | ClassificationHead, outputs: Array
+):
+  """Helper to wrap _unembedding factory (expects (S, D) shape input)"""
+  _, _, _, _unembedding = transformer_variant_factory(config)
+  logits = _unembedding(config, unembedding, outputs)  # type: ignore
+  return logits
 
 
 def softmax_cross_entropy(
   config: Config,
   unembedding: LMHead | ClassificationHead,
-  outputs: jax.Array,
-  targets: jax.Array,
+  outputs: Array,
+  targets: Array,
   shard_mapped__kernel=None,
+  reduce=True,
 ):
   """Optax-style cross entropy loss."""
-  _, _, _, _unembedding = transformer_variant_factory(config)
-  logits = jax.vmap(partial(_unembedding, config, unembedding))(outputs)
+  logits = jax.vmap(partial(calculate_logits, config, unembedding))(outputs)
+  label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1).squeeze(-1)
   valid_ids_mask = (
     jnp.arange(config.model.num_vocab) <= config.train_dataset.max_valid_token_id
   )
   logits = jnp.where(valid_ids_mask, logits, -jnp.inf)
-  label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1)
-  lse = jax.nn.logsumexp(logits, axis=-1, keepdims=True)
-  return (lse - label_logits).mean()
+  lse = jax.nn.logsumexp(logits, axis=-1)
+  loss = lse - label_logits
+  if reduce:
+    return loss.mean()
+  else:
+    return loss
 
 
 def fused_softmax_cross_entropy(
   config: Config,
   unembedding: LMHead | ClassificationHead,
-  outputs: jax.Array,
-  targets: jax.Array,
+  outputs: Array,
+  targets: Array,
   shard_mapped__kernel,
+  reduce=True,
 ):
   """HBM-efficient softmax cross entropy loss."""
   # Fold batch and sequence dimensions and gather unembeddings
@@ -57,4 +84,26 @@ def fused_softmax_cross_entropy(
   lse = lse_sharded(lse_kernel, q, k).squeeze(0)
   per_token_unembs = w_unemb.at[targets].get(out_sharding=jax.P(*config.sharding.data))
   label_logits = jnp.sum(outputs * per_token_unembs, axis=-1)
-  return (lse - label_logits).mean()
+  loss = lse - label_logits
+  if reduce:
+    return loss.mean()
+  else:
+    return loss
+
+
+def accuracy(
+  config: Config,
+  unembedding: LMHead | ClassificationHead,
+  outputs: Array,
+  targets: Array,
+  shard_mapped__kernel=None,
+  reduce=True,
+):
+  """Classification accuracy."""
+  logits = jax.vmap(partial(calculate_logits, config, unembedding))(outputs)
+  preds = logits.argmax(axis=-1)
+  loss = (preds == targets).astype(jnp.int32)
+  if reduce:
+    return loss.mean()
+  else:
+    return loss
