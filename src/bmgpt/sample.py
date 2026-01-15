@@ -22,9 +22,14 @@ def sample_one_prompt(
   """Expects seq and cache_in to have no batch axis."""
   cache_params = CacheParams(enabled=True, size=cache_size)
   out, cache_out = _transformer(config, kernel, params, seq, cache_in, cache_params)
-  logits = calculate_logits(config, params.unemb, out).astype(jnp.float32)
   cache_size = cache_size + seq.shape[-1]
-  next_token = jnp.array((jax.random.categorical(key, logits[-1] / temperature),))
+  logits = calculate_logits(config, params.unemb, out).astype(jnp.float32)
+  logits = logits[-1]
+  valid_ids_mask = (
+    jnp.arange(config.model.num_vocab) <= config.train_dataset.max_valid_token_id
+  )
+  logits = jnp.where(valid_ids_mask, logits, -jnp.inf)
+  next_token = jnp.array((jax.random.categorical(key, logits / temperature),))
   return next_token, cache_out, cache_size
 
 
