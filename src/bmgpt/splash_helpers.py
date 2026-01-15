@@ -103,6 +103,7 @@ def make_lse_kernel_sharded(
   mesh,
   data_sharding: list[str | None] = [None],
   q_seq_shards: int = 1,
+  head_shards: int = 1,
   block_size_mem: int = 128,
   block_size_compute: int = 128,
   max_valid_id: int | None = None,
@@ -131,7 +132,9 @@ def make_lse_kernel_sharded(
     block_kv=block_size_mem,
     block_kv_compute=block_size_compute,
   )
-  kernel = make_lse_kernel(mask, block_sizes=block_sizes, q_seq_shards=q_seq_shards)
+  kernel = make_lse_kernel(
+    mask, block_sizes=block_sizes, q_seq_shards=q_seq_shards, head_shards=head_shards
+  )
 
   # sharding: can shard q_seq_len and head_dim, kv_seq_len cannot
   # q is N x S x H
@@ -163,6 +166,7 @@ def make_splash_kernel_sharded(
   cache_capacity: int,
   mesh,
   q_seq_shards: int = 1,
+  head_shards: int = 1,
   block_size_mem: int = 128,
   block_size_compute: int = 128,
 ):
@@ -185,7 +189,7 @@ def make_splash_kernel_sharded(
   # Heuristic: if model is small enough, use fused splash backward
   # This formula is (num_kv_blocks) * q.size * 4 <fp32> <= 64MB (mem per batch element)
   if (t // block_size_mem) * num_heads * s * 128 <= 2**16:
-    block_extra_args = {"use_fused_bwd_kernel": False}
+    block_extra_args = {"use_fused_bwd_kernel": True}
   else:
     block_extra_args = {"block_q_dq": block_size_mem, "block_kv_dq": block_size_mem}
   block_sizes = BlockSizesSplash(
@@ -199,7 +203,7 @@ def make_splash_kernel_sharded(
   )
   kernel = make_splash_mha(
     mask,
-    head_shards=1,
+    head_shards=head_shards,
     q_seq_shards=q_seq_shards,
     block_sizes=block_sizes,
   )
