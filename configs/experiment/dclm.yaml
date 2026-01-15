@@ -5,9 +5,9 @@ defaults:
 
 val_log_interval: 250
 # These need to be tuned fairly aggressively wrt d_model
-fused_xent_block_size_T: 512
-fused_xent_block_size_V: 256
-fused_xent_block_size_V_compute: 256
+fused_xent_block_size_T: 256
+fused_xent_block_size_V: 512
+fused_xent_block_size_V_compute: 512
 
 train_dataset:
   num_steps: 4000
