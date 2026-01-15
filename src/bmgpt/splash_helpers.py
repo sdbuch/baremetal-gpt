@@ -185,7 +185,7 @@ def make_splash_kernel_sharded(
   # Heuristic: if model is small enough, use fused splash backward
   # This formula is (num_kv_blocks) * q.size * 4 <fp32> <= 64MB (mem per batch element)
   if (t // block_size_mem) * num_heads * s * 128 <= 2**16:
-    block_extra_args = {"use_fused_bwd_kernel": True}
+    block_extra_args = {"use_fused_bwd_kernel": False}
   else:
     block_extra_args = {"block_q_dq": block_size_mem, "block_kv_dq": block_size_mem}
   block_sizes = BlockSizesSplash(
