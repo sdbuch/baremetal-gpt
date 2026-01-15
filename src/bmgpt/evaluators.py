@@ -85,7 +85,6 @@ def autoregressive_rollouts(
     outputs, cache, cache_size = batched_generate(prompts, cache)
 
   prompts, outputs = process_allgather((prompts, outputs), tiled=True)
-  print(jax.process_index(), outputs)
   tokenizer = get_tokenizer_factory(config.inference)
   str_prompts = [tokenizer.decode(ids[:prompt_size]) for ids in outputs]
   str_outputs = [tokenizer.decode(ids[prompt_size:]) for ids in outputs]

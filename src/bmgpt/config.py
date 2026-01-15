@@ -78,7 +78,7 @@ class DatasetConfig:
   path: str = MISSING
   split: SplitType = SplitType.VAL
   seq_len: int = MISSING
-  max_valid_token_id: int = MISSING  # for fused CE (should be strictly less vocab_size)
+  max_valid_token_id: int = MISSING  # For padded embeddings, mask invalid token ids
 
   # microbatch_size = global_batch_size / num_microbatches
   global_batch_size: int = MISSING
