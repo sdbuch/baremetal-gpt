@@ -4,9 +4,9 @@ defaults:
   - /dataset/dclm@train_dataset  # seq len 2048
 
 val_log_interval: 250
-fused_xent_block_size_T: 768
-fused_xent_block_size_V: 768
-fused_xent_block_size_V_compute: 768
+fused_xent_block_size_T: 1024
+fused_xent_block_size_V: 512
+fused_xent_block_size_V_compute: 512
 
 train_dataset:
   num_steps: 4000
