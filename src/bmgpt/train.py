@@ -37,29 +37,56 @@ register_configs()
 _debug_microbatch_counter = 0  # Track which microbatch we're on
 
 
-def _debug_log(msg, proc_idx=None, host0_only=False):
-  """Print debug message with consistent formatting."""
+def _debug_log(msg, proc_idx=None):
+  """Print debug message with host index prefix."""
   if proc_idx is None:
     proc_idx = jax.process_index()
-  if host0_only and proc_idx != 0:
-    return
   print(f"[DEBUG][H{proc_idx}] {msg}", flush=True)
+
+
+def _get_sharded_axis(spec):
+  """Find which axis is sharded (has non-None value in PartitionSpec)."""
+  if spec is None:
+    return None
+  for i, s in enumerate(spec):
+    if s is not None:
+      return i
+  return None
 
 
 def _debug_save_microbatch_callback(outputs, targets, microbatch_idx):
   """Callback that runs with concrete values inside scan - saves microbatch outputs."""
+  import ml_dtypes
+
   proc_idx = jax.process_index()
   save_dir = Path(f"/tmp/debug_loss_inputs/proc_{proc_idx}")
   save_dir.mkdir(parents=True, exist_ok=True)
   suffix = f"_mb{int(microbatch_idx)}"
 
   # Save arrays (concrete from callback)
-  # In callback, arrays are already concrete numpy-compatible
-  # bfloat16 shows as float32 after going through callback
-  np.save(save_dir / f"outputs{suffix}.npy", np.asarray(outputs, dtype=np.float32))
-  np.save(save_dir / f"targets{suffix}.npy", np.asarray(targets))
+  # For bfloat16: save as uint16 view to preserve exact bits
+  outputs_np = np.asarray(outputs)
+  targets_np = np.asarray(targets)
 
-  _debug_log(f"saved microbatch {int(microbatch_idx)} outputs/targets", proc_idx)
+  dtypes = {"outputs": str(outputs_np.dtype), "targets": str(targets_np.dtype)}
+
+  # Handle bfloat16 by viewing as uint16
+  if outputs_np.dtype == ml_dtypes.bfloat16:
+    outputs_np = outputs_np.view(np.uint16)
+  if targets_np.dtype == ml_dtypes.bfloat16:
+    targets_np = targets_np.view(np.uint16)
+
+  np.save(save_dir / f"outputs{suffix}.npy", outputs_np)
+  np.save(save_dir / f"targets{suffix}.npy", targets_np)
+
+  # Save dtype info for this microbatch
+  with open(save_dir / f"dtypes{suffix}.pkl", "wb") as f:
+    pickle.dump(dtypes, f)
+
+  _debug_log(
+    f"saved microbatch {int(microbatch_idx)} outputs({dtypes['outputs']})/targets({dtypes['targets']})",
+    proc_idx,
+  )
 
 
 def debug_save_microbatch(outputs, targets, microbatch_idx):
@@ -79,15 +106,8 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
   save_dir = Path(f"/tmp/debug_loss_inputs/proc_{proc_idx}")
   save_dir.mkdir(parents=True, exist_ok=True)
 
-  dtypes = {}  # Track original dtypes for bfloat16 handling
-  specs = {}  # Track partition specs for reconstruction
-
-  def get_sharded_axis(spec):
-    """Find which axis is sharded (has non-None value in PartitionSpec)."""
-    for i, s in enumerate(spec):
-      if s is not None:
-        return i
-    return None
+  dtypes = {}
+  specs = {}
 
   def save_sharded(arr, name):
     """Save per-process local data by concatenating device shards along sharded axis.
@@ -97,11 +117,10 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
     orig_dtype = arr.dtype
     dtypes[name] = str(orig_dtype)
 
-    # Get partition spec from NamedSharding
     if hasattr(arr, "sharding") and hasattr(arr.sharding, "spec"):
       spec = tuple(arr.sharding.spec)
       specs[name] = spec
-      sharded_axis = get_sharded_axis(spec)
+      sharded_axis = _get_sharded_axis(spec)
     else:
       specs[name] = None
       sharded_axis = None
@@ -168,20 +187,10 @@ def debug_verify_reconstruction(batch, unemb, mesh):
 
   _debug_log("=== VERIFICATION START ===", proc_idx)
 
-  # Load sharding info
   with open(save_dir / "sharding_info.pkl", "rb") as f:
     sharding_info = pickle.load(f)
   dtypes = sharding_info.get("dtypes", {})
   specs = sharding_info.get("specs", {})
-
-  def get_sharded_axis(spec):
-    """Find which axis is sharded (has non-None value in PartitionSpec)."""
-    if spec is None:
-      return None
-    for i, s in enumerate(spec):
-      if s is not None:
-        return i
-    return None
 
   def load_and_reconstruct(name, orig_dtype):
     """Load saved local data and reconstruct sharded array using NamedSharding.
@@ -206,50 +215,18 @@ def debug_verify_reconstruction(batch, unemb, mesh):
       reconstructed = jnp.array(data)
     return reconstructed
 
-  def to_local_numpy(arr, spec=None):
-    """Convert sharded array to per-process numpy by concatenating along sharded axis.
-
-    Returns actual dtype (including ml_dtypes.bfloat16 for bf16 arrays).
-    """
-    sharded_axis = get_sharded_axis(spec)
-
-    if hasattr(arr, "addressable_shards"):
-      local_shards = []
-      for s in arr.addressable_shards:
-        shard_np = np.asarray(jax.device_get(s.data))
-        local_shards.append(shard_np)
-      # Concatenate along sharded axis (same as save)
-      if sharded_axis is not None and len(local_shards) > 1:
-        return np.concatenate(local_shards, axis=sharded_axis)
-      return (
-        local_shards[0] if len(local_shards) == 1 else np.stack(local_shards, axis=0)
-      )
-    return np.asarray(jax.device_get(arr))
-
   results = {}
 
-  def check_equal(name, orig, reconstructed, spec=None):
-    orig_local = to_local_numpy(orig, spec)
-    recon_local = to_local_numpy(reconstructed, spec)
-    if orig_local.shape != recon_local.shape:
-      results[name] = f"SHAPE_MISMATCH({orig_local.shape} vs {recon_local.shape})"
+  def check_equal(name, orig, reconstructed):
+    """Compare JAX arrays directly using jnp.array_equal."""
+    if orig.shape != reconstructed.shape:
+      results[name] = f"SHAPE_MISMATCH({orig.shape} vs {reconstructed.shape})"
       return False
-    # Use array_equal for exact comparison (works with bfloat16 via ml_dtypes)
-    if np.array_equal(orig_local, recon_local):
+    if jnp.array_equal(orig, reconstructed):
       results[name] = "EXACT"
       return True
-    # Count mismatches
-    num_diff = np.sum(orig_local != recon_local)
+    num_diff = jnp.sum(orig != reconstructed)
     results[name] = f"MISMATCH({num_diff} values differ)"
-    return False
-    # For other dtypes, try float comparison
-    if np.allclose(orig_local.astype(np.float32), recon_local.astype(np.float32)):
-      results[name] = "CLOSE"
-      return True
-    max_diff = np.max(
-      np.abs(orig_local.astype(np.float32) - recon_local.astype(np.float32))
-    )
-    results[name] = f"MISMATCH(diff={max_diff:.2e})"
     return False
 
   inputs, targets = batch
@@ -259,10 +236,10 @@ def debug_verify_reconstruction(batch, unemb, mesh):
   targets_recon = load_and_reconstruct("batch_targets", targets.dtype)
   unemb_w_recon = load_and_reconstruct("unemb_w", unemb.w.dtype)
 
-  check_equal("batch_inputs", inputs, inputs_recon, specs.get("batch_inputs"))
-  check_equal("batch_targets", targets, targets_recon, specs.get("batch_targets"))
+  check_equal("batch_inputs", inputs, inputs_recon)
+  check_equal("batch_targets", targets, targets_recon)
   # unemb is the ORIGINAL params from before train_step (passed in explicitly)
-  check_equal("unemb_w", unemb.w, unemb_w_recon, specs.get("unemb_w"))
+  check_equal("unemb_w", unemb.w, unemb_w_recon)
 
   # Test 2: Check that saved microbatches match slices of the full batch
   # Note: jax.debug.callback gathers data globally, so saved microbatches have global shape
@@ -277,10 +254,20 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     suffix = f"_mb{mb_idx}"
     if not (save_dir / f"targets{suffix}.npy").exists():
       results[f"mb{mb_idx}_targets"] = "MISSING"
+      results[f"mb{mb_idx}_outputs"] = "MISSING"
       continue
+
+    # Load dtype info for this microbatch
+    with open(save_dir / f"dtypes{suffix}.pkl", "rb") as f:
+      mb_dtypes = pickle.load(f)
 
     # Load microbatch targets saved from inside scan (global shape from callback)
     mb_targets_saved = np.load(save_dir / f"targets{suffix}.npy")
+    # Convert back to bfloat16 if needed
+    if "bfloat16" in mb_dtypes.get("targets", ""):
+      mb_targets_saved = np.frombuffer(
+        mb_targets_saved.tobytes(), dtype=ml_dtypes.bfloat16
+      ).reshape(mb_targets_saved.shape)
 
     # Get corresponding slice from full batch
     mb_targets_from_batch = batch_targets_global[mb_idx, :, :]
@@ -290,6 +277,20 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     else:
       results[f"mb{mb_idx}_targets"] = (
         f"MISMATCH(shapes:{mb_targets_saved.shape}vs{mb_targets_from_batch.shape})"
+      )
+
+    # Load and verify outputs (check dtype preservation and shape)
+    mb_outputs_saved = np.load(save_dir / f"outputs{suffix}.npy")
+    if "bfloat16" in mb_dtypes.get("outputs", ""):
+      mb_outputs_saved = np.frombuffer(
+        mb_outputs_saved.tobytes(), dtype=ml_dtypes.bfloat16
+      ).reshape(mb_outputs_saved.shape)
+      results[f"mb{mb_idx}_outputs"] = (
+        f"LOADED(shape={mb_outputs_saved.shape},dtype=bf16)"
+      )
+    else:
+      results[f"mb{mb_idx}_outputs"] = (
+        f"LOADED(shape={mb_outputs_saved.shape},dtype={mb_outputs_saved.dtype})"
       )
 
   # Print compact summary
