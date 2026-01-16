@@ -251,9 +251,9 @@ def mwe():
     t = jax.random.randint(kt, (T,), 0, V, out_sharding=jax.P("x"))
     w = jax.random.normal(kw, (V, D), dtype=jnp.bfloat16, out_sharding=jax.P(None, "x"))
 
-  def loss(w, x, t):
+  def loss(w: jax.Array, x, t):
     w_rep = jax.sharding.reshard(w, jax.P())
-    gathered = w_rep[t]
+    gathered = w_rep.at[t].get(out_sharding=jax.P('x'))
     loss = (gathered * x).sum()
     return loss
 
