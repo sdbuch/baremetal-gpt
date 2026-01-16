@@ -100,7 +100,6 @@ def main():
       _log(f"--- Loading {variant} data ---")
       arrays, _ = load_variant_data(variant, mesh)
       variant_data[variant] = arrays
-      # Check memory after loading
       device = jax.local_devices()[0]
       stats = device.memory_stats()
       if stats:
@@ -115,10 +114,6 @@ def main():
       _log(f"{variant}:")
       for name, arr in variant_data[variant].items():
         _log(f"  {name}: {jax.typeof(arr)}")
-
-    # Skip verify - jnp.array_equal on sharded arrays allocates huge intermediate buffers
-    # (27GB for unemb_w comparison alone due to all-gather or similar)
-    _log("Skipping input verification to preserve memory")
 
     # Check memory before creating kernels
     _log("=" * 60)
@@ -173,7 +168,8 @@ def main():
     _log("GRADIENT COMPARISON (per microbatch)")
     _log("=" * 60)
 
-    for mb_idx in range(num_microbatches):
+    # Only process microbatch 0 to test if single-batch works
+    for mb_idx in [0]:
       _log(f"--- Microbatch {mb_idx} ---")
 
       # Get microbatch data
@@ -238,38 +234,37 @@ def main():
         "grad_w_max": float(jnp.max(grad_unemb_f.w)),
       }
       # --- COMPARE ---
+      fs, nfs = fused_stats, nonfused_stats
+      _log(f"  Loss:       fused={fs['loss']:.6f}, nonfused={nfs['loss']:.6f}")
       _log(
-        f"  Loss:       fused={fused_stats['loss']:.6f}, nonfused={nonfused_stats['loss']:.6f}"
+        f"  Grad out (norm): fused={fs['grad_out_norm']:.6f}, nf={nfs['grad_out_norm']:.6f}"
       )
       _log(
-        f"  Grad outputs (norm):  fused={fused_stats['grad_out_norm']:.6f}, nonfused={nonfused_stats['grad_out_norm']:.6f}"
+        f"  Grad out (mean): fused={fs['grad_out_mean']:.6e}, nf={nfs['grad_out_mean']:.6e}"
       )
       _log(
-        f"  Grad outputs (mean):  fused={fused_stats['grad_out_mean']:.6e}, nonfused={nonfused_stats['grad_out_mean']:.6e}"
+        f"  Grad out (std):  fused={fs['grad_out_std']:.6e}, nf={nfs['grad_out_std']:.6e}"
       )
       _log(
-        f"  Grad outputs (std):   fused={fused_stats['grad_out_std']:.6e}, nonfused={nonfused_stats['grad_out_std']:.6e}"
+        f"  Grad out (min):  fused={fs['grad_out_min']:.6e}, nf={nfs['grad_out_min']:.6e}"
       )
       _log(
-        f"  Grad outputs (min):   fused={fused_stats['grad_out_min']:.6e}, nonfused={nonfused_stats['grad_out_min']:.6e}"
+        f"  Grad out (max):  fused={fs['grad_out_max']:.6e}, nf={nfs['grad_out_max']:.6e}"
       )
       _log(
-        f"  Grad outputs (max):   fused={fused_stats['grad_out_max']:.6e}, nonfused={nonfused_stats['grad_out_max']:.6e}"
+        f"  Grad w (norm):   fused={fs['grad_w_norm']:.6f}, nf={nfs['grad_w_norm']:.6f}"
       )
       _log(
-        f"  Grad unemb.w (norm):  fused={fused_stats['grad_w_norm']:.6f}, nonfused={nonfused_stats['grad_w_norm']:.6f}"
+        f"  Grad w (mean):   fused={fs['grad_w_mean']:.6e}, nf={nfs['grad_w_mean']:.6e}"
       )
       _log(
-        f"  Grad unemb.w (mean):  fused={fused_stats['grad_w_mean']:.6e}, nonfused={nonfused_stats['grad_w_mean']:.6e}"
+        f"  Grad w (std):    fused={fs['grad_w_std']:.6e}, nf={nfs['grad_w_std']:.6e}"
       )
       _log(
-        f"  Grad unemb.w (std):   fused={fused_stats['grad_w_std']:.6e}, nonfused={nonfused_stats['grad_w_std']:.6e}"
+        f"  Grad w (min):    fused={fs['grad_w_min']:.6e}, nf={nfs['grad_w_min']:.6e}"
       )
       _log(
-        f"  Grad unemb.w (min):   fused={fused_stats['grad_w_min']:.6e}, nonfused={nonfused_stats['grad_w_min']:.6e}"
-      )
-      _log(
-        f"  Grad unemb.w (max):   fused={fused_stats['grad_w_max']:.6e}, nonfused={nonfused_stats['grad_w_max']:.6e}"
+        f"  Grad w (max):    fused={fs['grad_w_max']:.6e}, nf={nfs['grad_w_max']:.6e}"
       )
 
   _log("=" * 60)
