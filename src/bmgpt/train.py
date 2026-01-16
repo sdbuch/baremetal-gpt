@@ -173,11 +173,17 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
   )
 
 
-def debug_verify_reconstruction(batch, unemb, mesh):
+def debug_verify_reconstruction(batch, unemb, mesh, all_outputs):
   """Verify that saved data can be reconstructed and matches original.
 
   Called AFTER the scan completes (outside traced context).
   Uses NamedSharding(mesh, P(*spec)) pattern from data.py.
+
+  Args:
+    batch: (inputs, targets) tuple from dataloader
+    unemb: original unemb params from before train_step
+    mesh: JAX mesh for sharding
+    all_outputs: outputs from train_step scan, shape (num_mb, batch_per_mb, seq, hidden)
   """
   import ml_dtypes
   from jax.sharding import NamedSharding
@@ -241,16 +247,18 @@ def debug_verify_reconstruction(batch, unemb, mesh):
   # unemb is the ORIGINAL params from before train_step (passed in explicitly)
   check_equal("unemb_w", unemb.w, unemb_w_recon)
 
-  # Test 2: Check that saved microbatches match slices of the full batch
+  # Test 2: Check that saved microbatches match outputs from train_step
   # Note: jax.debug.callback gathers data globally, so saved microbatches have global shape
   # Only H0 has the files (callback runs once per step)
   # Use process_allgather to get global data in multi-host setup
   from jax.experimental.multihost_utils import process_allgather
 
-  # Gather targets globally - must run on ALL processes (collective op)
-  batch_targets_global = np.asarray(process_allgather(targets, tiled=True))
+  # Gather targets and outputs globally - must run on ALL processes (collective op)
+  batch_targets_global = process_allgather(targets, tiled=True)
+  all_outputs_global = process_allgather(all_outputs, tiled=True)
 
-  for mb_idx in range(2):
+  num_microbatches = all_outputs.shape[0]
+  for mb_idx in range(num_microbatches):
     suffix = f"_mb{mb_idx}"
     if not (save_dir / f"targets{suffix}.npy").exists():
       results[f"mb{mb_idx}_targets"] = "MISSING"
@@ -262,36 +270,39 @@ def debug_verify_reconstruction(batch, unemb, mesh):
       mb_dtypes = pickle.load(f)
 
     # Load microbatch targets saved from inside scan (global shape from callback)
-    mb_targets_saved = np.load(save_dir / f"targets{suffix}.npy")
-    # Convert back to bfloat16 if needed
+    mb_targets_saved_np = np.load(save_dir / f"targets{suffix}.npy")
+    # Convert back to bfloat16 if needed, then to JAX array
     if "bfloat16" in mb_dtypes.get("targets", ""):
-      mb_targets_saved = np.frombuffer(
-        mb_targets_saved.tobytes(), dtype=ml_dtypes.bfloat16
-      ).reshape(mb_targets_saved.shape)
+      mb_targets_saved_np = np.frombuffer(
+        mb_targets_saved_np.tobytes(), dtype=ml_dtypes.bfloat16
+      ).reshape(mb_targets_saved_np.shape)
+    mb_targets_saved = jnp.array(mb_targets_saved_np)
 
-    # Get corresponding slice from full batch
-    mb_targets_from_batch = batch_targets_global[mb_idx, :, :]
+    # Get corresponding slice from full batch (as JAX array)
+    mb_targets_from_batch = batch_targets_global[mb_idx]
 
-    if np.array_equal(mb_targets_saved, mb_targets_from_batch):
+    if jnp.array_equal(mb_targets_saved, mb_targets_from_batch):
       results[f"mb{mb_idx}_targets"] = "EXACT"
     else:
-      results[f"mb{mb_idx}_targets"] = (
-        f"MISMATCH(shapes:{mb_targets_saved.shape}vs{mb_targets_from_batch.shape})"
-      )
+      num_diff = jnp.sum(mb_targets_saved != mb_targets_from_batch)
+      results[f"mb{mb_idx}_targets"] = f"MISMATCH({num_diff} values differ)"
 
-    # Load and verify outputs (check dtype preservation and shape)
-    mb_outputs_saved = np.load(save_dir / f"outputs{suffix}.npy")
+    # Load microbatch outputs and compare against train_step outputs
+    mb_outputs_saved_np = np.load(save_dir / f"outputs{suffix}.npy")
     if "bfloat16" in mb_dtypes.get("outputs", ""):
-      mb_outputs_saved = np.frombuffer(
-        mb_outputs_saved.tobytes(), dtype=ml_dtypes.bfloat16
-      ).reshape(mb_outputs_saved.shape)
-      results[f"mb{mb_idx}_outputs"] = (
-        f"LOADED(shape={mb_outputs_saved.shape},dtype=bf16)"
-      )
+      mb_outputs_saved_np = np.frombuffer(
+        mb_outputs_saved_np.tobytes(), dtype=ml_dtypes.bfloat16
+      ).reshape(mb_outputs_saved_np.shape)
+    mb_outputs_saved = jnp.array(mb_outputs_saved_np)
+
+    # Get corresponding outputs from train_step (as JAX array)
+    mb_outputs_from_step = all_outputs_global[mb_idx]
+
+    if jnp.array_equal(mb_outputs_saved, mb_outputs_from_step):
+      results[f"mb{mb_idx}_outputs"] = "EXACT"
     else:
-      results[f"mb{mb_idx}_outputs"] = (
-        f"LOADED(shape={mb_outputs_saved.shape},dtype={mb_outputs_saved.dtype})"
-      )
+      num_diff = jnp.sum(mb_outputs_saved != mb_outputs_from_step)
+      results[f"mb{mb_idx}_outputs"] = f"MISMATCH({num_diff} values differ)"
 
   # Print compact summary
   summary = " | ".join(f"{k}:{v}" for k, v in results.items())
@@ -384,20 +395,28 @@ def main(config: Config):
         )
       else:
         loss = softmax_cross_entropy(config, params.unemb, outputs, targets)
-      return loss
+      # Return outputs as aux for verification
+      return loss, outputs
 
     # Calculate gradients: use a scan for gradient accumulation
     def gradient_accum(loss__grad, microbatch_with_idx):
       loss_accum, grad_accum = loss__grad
-      loss, grad = jax.value_and_grad(loss_fn)(state.params, microbatch_with_idx)
-      return (loss_accum + loss, jax.tree.map(jnp.add, grad_accum, grad)), loss
+      (loss, outputs), grad = jax.value_and_grad(loss_fn, has_aux=True)(
+        state.params, microbatch_with_idx
+      )
+      return (loss_accum + loss, jax.tree.map(jnp.add, grad_accum, grad)), (
+        loss,
+        outputs,
+      )
 
     zeros_like_fp32 = partial(jnp.zeros_like, dtype=jnp.float32)
     carry = (jnp.zeros(()), jax.tree.map(zeros_like_fp32, state.params))
     # Add microbatch indices to scan inputs
     num_microbatches = config.train_dataset.num_microbatches
     indexed_batch = (jnp.arange(num_microbatches), batch[0], batch[1])
-    (loss, grad), raw_losses = jax.lax.scan(gradient_accum, carry, indexed_batch)
+    (loss, grad), (raw_losses, all_outputs) = jax.lax.scan(
+      gradient_accum, carry, indexed_batch
+    )
     assert raw_losses.dtype == jnp.float32
 
     # NOTE: breaks if per-token loss masking introduced (see unsloth blog)
@@ -413,7 +432,8 @@ def main(config: Config):
     new_state = TrainState(params=params, opt_state=opt_state, kv_cache=state.kv_cache)
 
     metrics = {"batch_loss": loss, "grad_norm": global_grad_norm}
-    return metrics, new_state
+    # Return all_outputs for verification (shape: num_microbatches, batch_per_mb, seq_len, hidden)
+    return metrics, new_state, all_outputs
 
   # Training loop
   with Logger(config) as logger:
@@ -423,10 +443,12 @@ def main(config: Config):
       if step == 0:
         original_unemb = train_state.params.unemb
       with jax.set_mesh(mesh):
-        metrics, train_state = train_step(config, batch, train_state, step=step)
+        metrics, train_state, all_outputs = train_step(
+          config, batch, train_state, step=step
+        )
       # DEBUG: verify reconstruction OUTSIDE mesh context (step 0 only)
       if step == 0:
-        debug_verify_reconstruction(batch, original_unemb, mesh)
+        debug_verify_reconstruction(batch, original_unemb, mesh, all_outputs)
       logger.log(metrics | {"step": step})
       if (step + 1) % config.val_log_interval == 0:
         # Calculate val metrics
