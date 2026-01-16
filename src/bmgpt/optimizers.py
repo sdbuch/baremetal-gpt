@@ -22,7 +22,9 @@ def grad_norm_and_clip(
   config: Config, model: Transformer
 ) -> tuple[Transformer, Transformer, float]:
   # Gradient norms in fp32
-  norm_sq = lambda x: jnp.einsum('...,...->', x, x, preferred_element_type=jnp.float32)
+  norm_sq = lambda x: jnp.einsum(
+    "...,...->", x, x, preferred_element_type=jnp.float32, out_sharding=jax.P()
+  )
   grad_norms_squared = jax.tree.map(norm_sq, model)
   global_grad_norm = jax.tree.reduce(operator.add, grad_norms_squared) ** 0.5
   truncated_norm = jax.lax.select(

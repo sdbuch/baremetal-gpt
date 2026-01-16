@@ -29,20 +29,20 @@ def init_mlp(config: Config, key) -> Mlp:
   d_hidden = int(config.model.mlp_factor * config.model.d_model)
   w_up = config.model.param_std * jax.random.normal(
     k_w_up,
-    (config.model.d_model, d_hidden),
+    (d_hidden, config.model.d_model),
     config.model.param_dtype.value,
     out_sharding=jax.P(*config.sharding.wup),
   )
   w_gate = config.model.param_std * jax.random.normal(
     k_w_up,
-    (config.model.d_model, d_hidden),
+    (d_hidden, config.model.d_model),
     config.model.param_dtype.value,
     out_sharding=jax.P(*config.sharding.wup),
   )
   w_down = config.model.param_std * (
     jax.random.normal(
       k_w_down,
-      (d_hidden, config.model.d_model),
+      (config.model.d_model, d_hidden),
       config.model.param_dtype.value,
       out_sharding=jax.P(*config.sharding.wdown),
     )
@@ -73,17 +73,19 @@ def init_mlp(config: Config, key) -> Mlp:
 
 
 def _mlp(config: Config, params: Mlp, x: Array):
-  preact = jnp.matmul(x, params.w_up, out_sharding=jax.P(*config.sharding.mlp_hidden))
+  mlp_hidden_spec = jax.P(*config.sharding.mlp_hidden)
+  mlp_out_spec = jax.P(*config.sharding.res_stream)
+  preact = jnp.matmul(x, params.w_up.mT, out_sharding=mlp_hidden_spec)
   if config.model.use_bias_mlp:
     # PERF: check that compiler fuses these
     preact += params.bias_up
   act = jax.nn.swish(preact)
   if config.model.use_gating_mlp:
-    gate = jnp.matmul(x, params.w_gate, out_sharding=jax.P(*config.sharding.mlp_hidden))
+    gate = jnp.matmul(x, params.w_gate.mT, out_sharding=mlp_hidden_spec)
     if config.model.use_bias_mlp:
       gate += params.bias_gate
     act *= gate
-  out = jnp.matmul(act, params.w_down, out_sharding=jax.P(*config.sharding.res_stream))
+  out = jnp.matmul(act, params.w_down.mT, out_sharding=mlp_out_spec)
   if config.model.use_bias_mlp:
     out += params.bias_down
   return out
@@ -103,14 +105,14 @@ def init_attn(config: Config, key) -> Attn:
   k_qkv, k_o = jax.random.split(key, 2)
   w_qkv = config.model.param_std * jax.random.normal(
     k_qkv,
-    (config.model.d_model, 3, config.model.num_heads, config.model.d_head),
+    (3, config.model.num_heads, config.model.d_head, config.model.d_model),
     config.model.param_dtype.value,
     out_sharding=jax.P(*config.sharding.wqkv),
   )
   w_out = config.model.param_std * (
     jax.random.normal(
       k_o,
-      (config.model.d_head, config.model.num_heads, config.model.d_model),
+      (config.model.d_model, config.model.num_heads, config.model.d_head),
       config.model.param_dtype.value,
       out_sharding=jax.P(*config.sharding.wo),
     )
@@ -174,7 +176,7 @@ def _attn(
   # x_seq: s x d
 
   q, k, v = jnp.einsum(
-    "sd,d3nh->3nsh",
+    "sd,3nhd->3nsh",
     x_seq,
     params.w_qkv,
     out_sharding=jax.P(*config.sharding.att_qkv),
@@ -245,7 +247,7 @@ def _attn(
     probs = probs.astype(config.model.param_dtype.value)
     attn_out = jnp.einsum("nst,nth->nsh", probs, v)
   out = jnp.einsum(
-    "nsh,hnd->sd",
+    "nsh,dnh->sd",
     attn_out,
     params.w_o,
     out_sharding=jax.P(*config.sharding.res_stream),
@@ -275,7 +277,7 @@ def init_embedding_discrete(config: Config, key) -> EmbeddingDiscrete:
 
 
 def _embedding_discrete(config: Config, params: EmbeddingDiscrete, tokens: jax.Array):
-  w_f32 = params.w.astype(jnp.float32) # upcast to perform the bwd scatter-add in fp32
+  w_f32 = params.w.astype(jnp.float32)  # upcast to perform the bwd scatter-add in fp32
   emb = w_f32.at[tokens].get(out_sharding=jax.P(*config.sharding.res_stream))
   emb = emb.astype(config.model.param_dtype.value)
   if config.model.use_bias_embeddings:
@@ -543,14 +545,15 @@ def init_kv_cache(
 def model_spec(model: Transformer) -> Any:
   # Make the spec (we need some way to pass metadata around)
   # HACK: not great... disadvantage of bare metal without custom pytree
+  # TODO: Check and update these later... reasonable to do (in, out)?
   def _make_spec_from_str(path: str) -> tuple[int, int] | None:
     param_str = path[-1].__str__()
     matrix_axes_dict = {
-      ".w_qkv": (-4, -1),
-      ".w_o": (-3, -1),
-      ".w_up": (-2, -1),
-      ".w_gate": (-2, -1),
-      ".w_down": (-2, -1),
+      ".w_qkv": (-1, -2),
+      ".w_o": (-1, -3),
+      ".w_up": (-1, -2),
+      ".w_gate": (-1, -2),
+      ".w_down": (-1, -2),
       ".w": (-2, -1),
       ".w_emb": (-2, -1),
       ".w_pos": (-2, -1),
