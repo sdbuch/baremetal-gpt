@@ -239,5 +239,27 @@ def main():
   _log("=" * 60)
 
 
+def mwe():
+  T = 256
+  V = 1024
+  D = 3 * 64
+  key = jax.random.key(42)
+  kx, kw, kt = jax.random.split(key, 3)
+  mesh = jax.make_mesh((32,), ("x",), (jax.sharding.AxisType.Explicit,))
+  with jax.set_mesh(mesh):
+    x = jax.random.normal(kx, (T, D), dtype=jnp.bfloat16, out_sharding=jax.P("x"))
+    t = jax.random.randint(kt, (T,), 0, V, out_sharding=jax.P("x"))
+    w = jax.random.normal(kw, (V, D), dtype=jnp.bfloat16, out_sharding=jax.P(None, "x"))
+
+  def loss(w, x, t):
+    w_rep = jax.sharding.reshard(w, jax.P())
+    gathered = w_rep[t]
+    loss = (gathered * x).sum()
+    return loss
+
+  grad = jax.grad(loss)(w, x, t)
+
+
 if __name__ == "__main__":
-  main()
+  # main()
+  mwe()
