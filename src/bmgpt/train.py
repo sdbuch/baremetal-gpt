@@ -172,6 +172,67 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
   )
 
 
+def debug_save_outputs(all_outputs, mesh):
+  """Save model outputs AFTER train_step (outside traced context).
+
+  Uses same per-process local data pattern as debug_save_batch_and_weights.
+  """
+  proc_idx = jax.process_index()
+  save_dir = Path(f"/tmp/debug_loss_inputs/proc_{proc_idx}")
+  save_dir.mkdir(parents=True, exist_ok=True)
+
+  # Load existing sharding info and add outputs
+  with open(save_dir / "sharding_info.pkl", "rb") as f:
+    sharding_info = pickle.load(f)
+  dtypes = sharding_info.get("dtypes", {})
+  specs = sharding_info.get("specs", {})
+
+  # Save outputs using same pattern as save_sharded
+  arr = all_outputs
+  orig_dtype = arr.dtype
+  dtypes["all_outputs"] = str(orig_dtype)
+
+  if hasattr(arr, "sharding") and hasattr(arr.sharding, "spec"):
+    spec = tuple(arr.sharding.spec)
+    specs["all_outputs"] = spec
+    sharded_axis = _get_sharded_axis(spec)
+  else:
+    specs["all_outputs"] = None
+    sharded_axis = None
+
+  if hasattr(arr, "addressable_shards"):
+    local_shards = []
+    for s in arr.addressable_shards:
+      shard_np = jax.device_get(s.data)
+      shard_np = np.asarray(shard_np)
+      if orig_dtype == jnp.bfloat16:
+        shard_np = shard_np.view(np.uint16)
+      local_shards.append(shard_np)
+    if sharded_axis is not None and len(local_shards) > 1:
+      data = np.concatenate(local_shards, axis=sharded_axis)
+    else:
+      data = (
+        local_shards[0] if len(local_shards) == 1 else np.stack(local_shards, axis=0)
+      )
+  else:
+    data = jax.device_get(arr)
+    data = np.asarray(data)
+    if orig_dtype == jnp.bfloat16:
+      data = data.view(np.uint16)
+
+  np.save(save_dir / "all_outputs.npy", data)
+
+  # Update sharding info with outputs
+  sharding_info["dtypes"] = dtypes
+  sharding_info["specs"] = specs
+  with open(save_dir / "sharding_info.pkl", "wb") as f:
+    pickle.dump(sharding_info, f)
+
+  _debug_log(
+    f"saved all_outputs={data.shape} | spec={specs.get('all_outputs')}", proc_idx
+  )
+
+
 def debug_verify_reconstruction(batch, unemb, mesh, all_outputs):
   """Verify that saved data can be reconstructed and matches original.
 
@@ -249,7 +310,11 @@ def debug_verify_reconstruction(batch, unemb, mesh, all_outputs):
   # unemb is the ORIGINAL params from before train_step (passed in explicitly)
   check_equal("unemb_w", unemb.w, unemb_w_recon)
 
-  # Test 2: Check that saved microbatches match outputs from train_step
+  # Test 2: Reconstruct all_outputs from saved local data
+  all_outputs_recon = load_and_reconstruct("all_outputs")
+  check_equal("all_outputs", all_outputs, all_outputs_recon)
+
+  # Test 3: Check that saved microbatches match outputs from train_step
   # Note: jax.debug.callback gathers data globally, so saved microbatches have global shape
   # Only H0 has the files (callback runs once per step)
   # Use process_allgather to get global data in multi-host setup
@@ -436,8 +501,9 @@ def main(config: Config):
         metrics, train_state, all_outputs = train_step(
           config, batch, train_state, step=step
         )
-      # DEBUG: verify reconstruction OUTSIDE mesh context (step 0 only)
+      # DEBUG: save and verify reconstruction OUTSIDE mesh context (step 0 only)
       if step == 0:
+        debug_save_outputs(all_outputs, mesh)
         debug_verify_reconstruction(batch, original_unemb, mesh, all_outputs)
       logger.log(metrics | {"step": step})
       if (step + 1) % config.val_log_interval == 0:
