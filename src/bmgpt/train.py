@@ -93,11 +93,18 @@ def debug_save_microbatch(outputs, targets, microbatch_idx):
   jax.debug.callback(_debug_save_microbatch_callback, outputs, targets, microbatch_idx)
 
 
-def debug_save_batch_and_weights(config, batch, unemb, mesh):
-  """Save full batch and weights BEFORE the scan (outside traced context).
+def debug_save_step_data(config, batch, unemb, all_outputs, mesh):
+  """Save batch, weights, and outputs for debugging (outside traced context).
 
   Saves per-process local data (not per-device) following the pattern in data.py.
   This allows reconstruction via NamedSharding(mesh, P(*spec)).
+
+  Args:
+    config: training config
+    batch: (inputs, targets) tuple from dataloader
+    unemb: ORIGINAL unemb params from before train_step
+    all_outputs: model outputs from train_step, shape (num_mb, batch_per_mb, seq, hidden)
+    mesh: JAX mesh for sharding
   """
   from omegaconf import OmegaConf
 
@@ -129,15 +136,12 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
       for s in arr.addressable_shards:
         shard_np = jax.device_get(s.data)
         shard_np = np.asarray(shard_np)
-        # For bfloat16: view as uint16 to preserve exact bits
         if orig_dtype == jnp.bfloat16:
           shard_np = shard_np.view(np.uint16)
         local_shards.append(shard_np)
-      # Concatenate along sharded axis to get per-process data (like dataloader produces)
       if sharded_axis is not None and len(local_shards) > 1:
         data = np.concatenate(local_shards, axis=sharded_axis)
       else:
-        # No sharding or single shard - just use the first shard
         data = (
           local_shards[0] if len(local_shards) == 1 else np.stack(local_shards, axis=0)
         )
@@ -149,87 +153,27 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
     np.save(save_dir / f"{name}.npy", data)
     return data.shape
 
-  # batch is (inputs, targets), each with shape (num_microbatches, batch_per_mb, seq_len, ...)
+  # Save batch inputs, targets, unemb weights, and model outputs
   inputs, targets = batch
-  inputs_local_shape = save_sharded(inputs, "batch_inputs")
-  targets_local_shape = save_sharded(targets, "batch_targets")
-  unemb_local_shape = save_sharded(unemb.w, "unemb_w")
+  inputs_shape = save_sharded(inputs, "batch_inputs")
+  targets_shape = save_sharded(targets, "batch_targets")
+  unemb_shape = save_sharded(unemb.w, "unemb_w")
+  outputs_shape = save_sharded(all_outputs, "all_outputs")
 
-  # Save config and sharding info - include partition specs for reconstruction
+  # Save config and sharding info
   config_dict = OmegaConf.to_container(config, resolve=True)
   sharding_info = {
     "config": config_dict,
-    "specs": specs,  # Partition specs as tuples
+    "specs": specs,
     "dtypes": dtypes,
   }
   with open(save_dir / "sharding_info.pkl", "wb") as f:
     pickle.dump(sharding_info, f)
 
   _debug_log(
-    f"saved batch inputs={inputs_local_shape} targets={targets_local_shape} "
-    f"unemb={unemb_local_shape} | specs={specs}",
+    f"saved inputs={inputs_shape} targets={targets_shape} "
+    f"unemb={unemb_shape} outputs={outputs_shape}",
     proc_idx,
-  )
-
-
-def debug_save_outputs(all_outputs, mesh):
-  """Save model outputs AFTER train_step (outside traced context).
-
-  Uses same per-process local data pattern as debug_save_batch_and_weights.
-  """
-  proc_idx = jax.process_index()
-  save_dir = Path(f"/tmp/debug_loss_inputs/proc_{proc_idx}")
-  save_dir.mkdir(parents=True, exist_ok=True)
-
-  # Load existing sharding info and add outputs
-  with open(save_dir / "sharding_info.pkl", "rb") as f:
-    sharding_info = pickle.load(f)
-  dtypes = sharding_info.get("dtypes", {})
-  specs = sharding_info.get("specs", {})
-
-  # Save outputs using same pattern as save_sharded
-  arr = all_outputs
-  orig_dtype = arr.dtype
-  dtypes["all_outputs"] = str(orig_dtype)
-
-  if hasattr(arr, "sharding") and hasattr(arr.sharding, "spec"):
-    spec = tuple(arr.sharding.spec)
-    specs["all_outputs"] = spec
-    sharded_axis = _get_sharded_axis(spec)
-  else:
-    specs["all_outputs"] = None
-    sharded_axis = None
-
-  if hasattr(arr, "addressable_shards"):
-    local_shards = []
-    for s in arr.addressable_shards:
-      shard_np = jax.device_get(s.data)
-      shard_np = np.asarray(shard_np)
-      if orig_dtype == jnp.bfloat16:
-        shard_np = shard_np.view(np.uint16)
-      local_shards.append(shard_np)
-    if sharded_axis is not None and len(local_shards) > 1:
-      data = np.concatenate(local_shards, axis=sharded_axis)
-    else:
-      data = (
-        local_shards[0] if len(local_shards) == 1 else np.stack(local_shards, axis=0)
-      )
-  else:
-    data = jax.device_get(arr)
-    data = np.asarray(data)
-    if orig_dtype == jnp.bfloat16:
-      data = data.view(np.uint16)
-
-  np.save(save_dir / "all_outputs.npy", data)
-
-  # Update sharding info with outputs
-  sharding_info["dtypes"] = dtypes
-  sharding_info["specs"] = specs
-  with open(save_dir / "sharding_info.pkl", "wb") as f:
-    pickle.dump(sharding_info, f)
-
-  _debug_log(
-    f"saved all_outputs={data.shape} | spec={specs.get('all_outputs')}", proc_idx
   )
 
 
@@ -428,10 +372,6 @@ def main(config: Config):
   # DEBUG: disabled JIT for debugging fused xent backward
   # @partial(jax.jit, donate_argnums=2)
   def train_step(config: Config, batch, state: TrainState, step: int = -1):
-    # DEBUG: save full batch and weights BEFORE scan (step 0 only)
-    if step == 0:
-      debug_save_batch_and_weights(config, batch, state.params.unemb, mesh)
-
     def loss_fn(params: Transformer, microbatch_with_idx):
       microbatch_idx, inputs, targets = microbatch_with_idx
       outputs, _ = jax.vmap(
@@ -503,7 +443,7 @@ def main(config: Config):
         )
       # DEBUG: save and verify reconstruction OUTSIDE mesh context (step 0 only)
       if step == 0:
-        debug_save_outputs(all_outputs, mesh)
+        debug_save_step_data(config, batch, original_unemb, all_outputs, mesh)
         debug_verify_reconstruction(batch, original_unemb, mesh, all_outputs)
       logger.log(metrics | {"step": step})
       if (step + 1) % config.val_log_interval == 0:
