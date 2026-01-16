@@ -63,6 +63,15 @@ def main():
   _log("DEBUG GRADIENT COMPARISON SCRIPT")
   _log("=" * 60)
 
+  # Check memory at very start
+  _log("MEMORY AT START (before loading anything):")
+  for i, device in enumerate(jax.local_devices()):
+    stats = device.memory_stats()
+    if stats:
+      used = stats.get("bytes_in_use", 0) / 1e9
+      limit = stats.get("bytes_limit", 0) / 1e9
+      _log(f"  Device {i}: {used:.2f}GB / {limit:.2f}GB")
+
   # Check which variants are available
   available_variants = []
   for variant in ["fused", "nonfused"]:
@@ -91,6 +100,12 @@ def main():
       _log(f"--- Loading {variant} data ---")
       arrays, _ = load_variant_data(variant, mesh)
       variant_data[variant] = arrays
+      # Check memory after loading
+      device = jax.local_devices()[0]
+      stats = device.memory_stats()
+      if stats:
+        used = stats.get("bytes_in_use", 0) / 1e9
+        _log(f"  Memory after loading {variant}: {used:.2f}GB")
 
     # Print summary
     _log("=" * 60)
