@@ -95,7 +95,8 @@ def main(config: Config):
   def train_step(config: Config, batch, state: TrainState):
     def loss_fn(params: Transformer, microbatch: tuple[jax.Array, jax.Array]):
       inputs, targets = microbatch
-      params = jax.tree.map(lambda p: p.astype(config.model.compute_dtype), params)
+      to_compute_dtype = lambda p: p.astype(config.model.compute_dtype.value)
+      params = jax.tree.map(to_compute_dtype, params)
       model = partial(
         _transformer, config, train_attn_kernel, params, cache_params=cache_params
       )

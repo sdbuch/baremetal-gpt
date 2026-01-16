@@ -73,7 +73,7 @@ def autoregressive_rollouts(
   prompt_size: int,
 ):
   prompts, _ = next(batch_iter)
-  params = jax.tree.map(lambda p: p.astype(config.model.compute_dtype), params)
+  params = jax.tree.map(lambda p: p.astype(config.model.compute_dtype.value), params)
 
   @jax.vmap
   def batched_generate(prompt: jax.Array, cache):
@@ -111,7 +111,7 @@ def calculate_metric_on_minibatches(
 ):
   with jax.set_mesh(mesh):
     cache = init_kv_cache(config, *global_batch_size__num_microbatches, 0)
-  params = jax.tree.map(lambda p: p.astype(config.model.compute_dtype), params)
+  params = jax.tree.map(lambda p: p.astype(config.model.compute_dtype.value), params)
 
   # Loss accumulation function (avoid communication until we're done)
   @jax.jit
