@@ -259,7 +259,9 @@ def mwe():
     w_rep = jax.sharding.reshard(w, jax.P())
     gathered = w_rep.at[t].get(out_sharding=jax.P("x"))
     # loss = (gathered * x).sum()
-    loss = jnp.einsum('td,td->', gathered, x, preferred_element_type=jnp.float32)
+    loss = jnp.einsum(
+      "td,td->", gathered, x, preferred_element_type=jnp.float32, out_sharding=jax.P()
+    )
     return loss
 
   def loss_replicated(w, x, t):
@@ -268,7 +270,13 @@ def mwe():
     )
     gathered = w_rep[t_rep]
     # loss = (gathered * x_rep).sum()
-    loss = jnp.einsum('td,td->', gathered, x_rep, preferred_element_type=jnp.float32)
+    loss = jnp.einsum(
+      "td,td->",
+      gathered,
+      x_rep,
+      preferred_element_type=jnp.float32,
+      out_sharding=jax.P(),
+    )
     return loss
 
   results = defaultdict(dict)
