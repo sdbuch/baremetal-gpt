@@ -53,12 +53,13 @@ def _get_sharded_axis(spec):
   return None
 
 
-def _debug_save_microbatch_callback(outputs, targets, microbatch_idx):
+def _debug_save_microbatch_callback(outputs, targets, microbatch_idx, use_fused):
   """Callback that runs with concrete values inside scan - saves microbatch outputs."""
   import ml_dtypes
 
   proc_idx = jax.process_index()
-  save_dir = Path(f"/tmp/debug_loss_inputs/proc_{proc_idx}")
+  variant = "fused" if use_fused else "nonfused"
+  save_dir = Path(f"/tmp/debug_loss_inputs/{variant}/proc_{proc_idx}")
   save_dir.mkdir(parents=True, exist_ok=True)
   suffix = f"_mb{int(microbatch_idx)}"
 
@@ -88,9 +89,11 @@ def _debug_save_microbatch_callback(outputs, targets, microbatch_idx):
   )
 
 
-def debug_save_microbatch(outputs, targets, microbatch_idx):
+def debug_save_microbatch(outputs, targets, microbatch_idx, use_fused):
   """Save microbatch outputs/targets from inside scan using jax.debug.callback."""
-  jax.debug.callback(_debug_save_microbatch_callback, outputs, targets, microbatch_idx)
+  jax.debug.callback(
+    _debug_save_microbatch_callback, outputs, targets, microbatch_idx, use_fused
+  )
 
 
 def debug_save_step_data(config, batch, unemb, all_outputs, mesh):
@@ -109,7 +112,8 @@ def debug_save_step_data(config, batch, unemb, all_outputs, mesh):
   from omegaconf import OmegaConf
 
   proc_idx = jax.process_index()
-  save_dir = Path(f"/tmp/debug_loss_inputs/proc_{proc_idx}")
+  variant = "fused" if config.use_fused_xent_loss else "nonfused"
+  save_dir = Path(f"/tmp/debug_loss_inputs/{variant}/proc_{proc_idx}")
   save_dir.mkdir(parents=True, exist_ok=True)
 
   dtypes = {}
@@ -177,53 +181,102 @@ def debug_save_step_data(config, batch, unemb, all_outputs, mesh):
   )
 
 
-def debug_verify_reconstruction(batch, unemb, mesh, all_outputs):
+def debug_get_save_dir(variant: str) -> Path:
+  """Get save directory for current process and variant.
+
+  Args:
+    variant: "fused" or "nonfused"
+
+  Returns:
+    Path to save directory for this process
+  """
+  proc_idx = jax.process_index()
+  return Path(f"/tmp/debug_loss_inputs/{variant}/proc_{proc_idx}")
+
+
+def debug_load_sharding_info(variant: str):
+  """Load sharding info (dtypes, specs, config) for a variant.
+
+  Args:
+    variant: "fused" or "nonfused"
+
+  Returns:
+    Tuple of (dtypes dict, specs dict, config dict)
+  """
+  save_dir = debug_get_save_dir(variant)
+  with open(save_dir / "sharding_info.pkl", "rb") as f:
+    sharding_info = pickle.load(f)
+  dtypes = sharding_info.get("dtypes", {})
+  specs = sharding_info.get("specs", {})
+  config_dict = sharding_info.get("config", {})
+  return dtypes, specs, config_dict
+
+
+def debug_load_and_reconstruct(
+  name: str, variant: str, mesh, dtypes: dict, specs: dict
+):
+  """Load saved local data and reconstruct sharded array using NamedSharding.
+
+  For bfloat16: data was saved as uint16, convert via bytes for exact bit preservation.
+
+  Args:
+    name: array name (e.g. "batch_inputs", "unemb_w", "all_outputs")
+    variant: "fused" or "nonfused"
+    mesh: JAX mesh for sharding
+    dtypes: dict mapping name -> dtype string (from debug_load_sharding_info)
+    specs: dict mapping name -> PartitionSpec tuple (from debug_load_sharding_info)
+
+  Returns:
+    Reconstructed JAX array with proper sharding
+  """
+  import ml_dtypes
+  from jax.sharding import NamedSharding
+
+  save_dir = debug_get_save_dir(variant)
+  data_uint16 = np.load(save_dir / f"{name}.npy")
+  saved_shape = data_uint16.shape
+  # For bfloat16: convert uint16 -> bytes -> bfloat16 for exact bit preservation
+  if "bfloat16" in dtypes.get(name, ""):
+    raw_bytes = data_uint16.tobytes()
+    data = np.frombuffer(raw_bytes, dtype=ml_dtypes.bfloat16).reshape(saved_shape)
+  else:
+    data = data_uint16
+  spec = specs.get(name)
+  if spec is not None:
+    # Reconstruct using NamedSharding(mesh, P(*spec)) pattern from data.py
+    sharding = NamedSharding(mesh, jax.sharding.PartitionSpec(*spec))
+    reconstructed = jax.make_array_from_process_local_data(sharding, data)
+  else:
+    # No sharding info - just convert to jax array
+    reconstructed = jnp.array(data)
+  return reconstructed
+
+
+def debug_verify_reconstruction(config, batch, unemb, mesh, all_outputs):
   """Verify that saved data can be reconstructed and matches original.
 
   Called AFTER the scan completes (outside traced context).
   Uses NamedSharding(mesh, P(*spec)) pattern from data.py.
 
   Args:
+    config: training config (used to determine fused/nonfused path)
     batch: (inputs, targets) tuple from dataloader
     unemb: original unemb params from before train_step
     mesh: JAX mesh for sharding
     all_outputs: outputs from train_step scan, shape (num_mb, batch_per_mb, seq, hidden)
   """
   import ml_dtypes
-  from jax.sharding import NamedSharding
 
   proc_idx = jax.process_index()
-  save_dir = Path(f"/tmp/debug_loss_inputs/proc_{proc_idx}")
+  variant = "fused" if config.use_fused_xent_loss else "nonfused"
+  save_dir = debug_get_save_dir(variant)
 
   _debug_log("=== VERIFICATION START ===", proc_idx)
 
-  with open(save_dir / "sharding_info.pkl", "rb") as f:
-    sharding_info = pickle.load(f)
-  dtypes = sharding_info.get("dtypes", {})
-  specs = sharding_info.get("specs", {})
+  dtypes, specs, _ = debug_load_sharding_info(variant)
 
   def load_and_reconstruct(name):
-    """Load saved local data and reconstruct sharded array using NamedSharding.
-
-    For bfloat16: data was saved as uint16, convert via bytes for exact bit preservation.
-    """
-    data_uint16 = np.load(save_dir / f"{name}.npy")
-    saved_shape = data_uint16.shape
-    # For bfloat16: convert uint16 -> bytes -> bfloat16 for exact bit preservation
-    if "bfloat16" in dtypes.get(name, ""):
-      raw_bytes = data_uint16.tobytes()
-      data = np.frombuffer(raw_bytes, dtype=ml_dtypes.bfloat16).reshape(saved_shape)
-    else:
-      data = data_uint16
-    spec = specs.get(name)
-    if spec is not None:
-      # Reconstruct using NamedSharding(mesh, P(*spec)) pattern from data.py
-      sharding = NamedSharding(mesh, jax.sharding.PartitionSpec(*spec))
-      reconstructed = jax.make_array_from_process_local_data(sharding, data)
-    else:
-      # No sharding info - just convert to jax array
-      reconstructed = jnp.array(data)
-    return reconstructed
+    return debug_load_and_reconstruct(name, variant, mesh, dtypes, specs)
 
   results = {}
 
@@ -382,7 +435,9 @@ def main(config: Config):
 
       # DEBUG: save microbatch outputs/targets at step 0
       if step == 0:
-        debug_save_microbatch(outputs, targets, microbatch_idx)
+        debug_save_microbatch(
+          outputs, targets, microbatch_idx, config.use_fused_xent_loss
+        )
 
       if config.use_fused_xent_loss:
         loss = fused_softmax_cross_entropy(
@@ -444,7 +499,7 @@ def main(config: Config):
       # DEBUG: save and verify reconstruction OUTSIDE mesh context (step 0 only)
       if step == 0:
         debug_save_step_data(config, batch, original_unemb, all_outputs, mesh)
-        debug_verify_reconstruction(batch, original_unemb, mesh, all_outputs)
+        debug_verify_reconstruction(config, batch, original_unemb, mesh, all_outputs)
       logger.log(metrics | {"step": step})
       if (step + 1) % config.val_log_interval == 0:
         # Calculate val metrics
