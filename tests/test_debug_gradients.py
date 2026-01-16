@@ -15,8 +15,11 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 from jax import Array
+from omegaconf import OmegaConf
 
+from bmgpt.config import Config
 from bmgpt.losses import fused_softmax_cross_entropy, softmax_cross_entropy
+from bmgpt.model import LMHead
 from bmgpt.splash_helpers import make_lse_kernel_sharded
 from bmgpt.train import (
   _debug_log,
@@ -26,58 +29,60 @@ from bmgpt.train import (
 )
 
 
-class LMHead(NamedTuple):
-  """Mock LMHead for gradient computation."""
+def config_from_dict(config_dict: dict) -> Config:
+  """Create a Config object from a saved config dict.
 
-  w: Array
-  bias: Array
+  Creates a default Config and updates fields from the saved dict.
+  This avoids issues with MISSING values and enum conversion.
+  """
+  from bmgpt.config import (
+    DatasetConfig,
+    DatasetName,
+    DType,
+    ModelConfig,
+    ShardingConfig,
+    TokenizerType,
+    TransformerType,
+  )
 
+  # Create base config with defaults
+  config = Config()
 
-class MockConfig:
-  """Mock config with just the fields needed for loss computation."""
+  # Update sharding
+  s = config_dict["sharding"]
+  config.sharding = ShardingConfig(
+    mesh_shape=s["mesh_shape"],
+    mesh_axis_names=s["mesh_axis_names"],
+    data=s["data"],
+  )
 
-  def __init__(self, config_dict):
-    self.config_dict = config_dict
+  # Update model config
+  m = config_dict["model"]
+  config.model = ModelConfig(
+    num_heads=m["num_heads"],
+    num_layers=m["num_layers"],
+    d_model=m["d_model"],
+    d_head=m["d_head"],
+    d_ff=m["d_ff"],
+    num_vocab=m["num_vocab"],
+    max_seq_len=m["max_seq_len"],
+    param_dtype=DType[m["param_dtype"].upper().replace(".", "_")],
+    transformer_type=TransformerType(m["transformer_type"]),
+  )
 
-    # Sharding config
-    class ShardingConfig:
-      pass
+  # Update train_dataset config
+  td = config_dict["train_dataset"]
+  config.train_dataset = DatasetConfig(
+    name=DatasetName(td["name"]),
+    path=td.get("path", ""),
+    seq_len=td["seq_len"],
+    global_batch_size=td["global_batch_size"],
+    num_microbatches=td["num_microbatches"],
+    max_valid_token_id=td["max_valid_token_id"],
+    tokenizer=TokenizerType(td.get("tokenizer", 0)),
+  )
 
-    self.sharding = ShardingConfig()
-    self.sharding.data = config_dict["sharding"]["data"]
-    self.sharding.mesh_shape = config_dict["sharding"]["mesh_shape"]
-    self.sharding.mesh_axis_names = config_dict["sharding"]["mesh_axis_names"]
-
-    # Model config
-    class ModelConfig:
-      pass
-
-    self.model = ModelConfig()
-    self.model.num_vocab = config_dict["model"]["num_vocab"]
-    self.model.d_model = config_dict["model"]["d_model"]
-
-    # Train dataset config
-    class DatasetConfig:
-      pass
-
-    self.train_dataset = DatasetConfig()
-    self.train_dataset.max_valid_token_id = config_dict["train_dataset"][
-      "max_valid_token_id"
-    ]
-    self.train_dataset.seq_len = config_dict["train_dataset"]["seq_len"]
-    self.train_dataset.global_batch_size = config_dict["train_dataset"][
-      "global_batch_size"
-    ]
-    self.train_dataset.num_microbatches = config_dict["train_dataset"][
-      "num_microbatches"
-    ]
-
-    # Fused xent config
-    self.fused_xent_block_size_T = config_dict.get("fused_xent_block_size_T", 512)
-    self.fused_xent_block_size_V = config_dict.get("fused_xent_block_size_V", 512)
-    self.fused_xent_block_size_V_compute = config_dict.get(
-      "fused_xent_block_size_V_compute", 512
-    )
+  return config
 
 
 def load_variant_data(variant: str, mesh):
@@ -169,40 +174,47 @@ def main():
         diff_count = jnp.sum(fused_arr != nonfused_arr)
         _debug_log(f"  {name}: DIFFER ({diff_count} elements)")
 
-  # Create mock config for loss functions
-  config = MockConfig(config_dict)
+  # Create config from saved dict
+  try:
+    config = config_from_dict(config_dict)
+  except Exception as e:
+    _debug_log(f"Failed to create Config from dict: {e}")
+    _debug_log("Falling back to direct dict access")
+    config = None
 
-  # Create LSE kernel for fused loss
+  # Create LSE kernel for fused loss (using same logic as forward_kernels_from_config)
   _debug_log("=" * 60)
   _debug_log("CREATING LSE KERNEL")
   _debug_log("=" * 60)
+
+  # Extract needed values from config_dict directly for kernel creation
+  sharding = config_dict["sharding"]
+  train_ds = config_dict["train_dataset"]
+  model = config_dict["model"]
+
   num_toks = (
-    config.train_dataset.seq_len
-    * config.train_dataset.global_batch_size
-    // config.train_dataset.num_microbatches
+    train_ds["seq_len"] * train_ds["global_batch_size"] // train_ds["num_microbatches"]
   )
-  if config.sharding.data and config.sharding.data[0]:
-    data_axis_name = config.sharding.data[0]
-    num_data_shards = config.sharding.mesh_shape[
-      config.sharding.mesh_axis_names.index(data_axis_name)
+  if sharding["data"] and sharding["data"][0]:
+    data_axis_name = sharding["data"][0]
+    num_data_shards = sharding["mesh_shape"][
+      sharding["mesh_axis_names"].index(data_axis_name)
     ]
   else:
     num_data_shards = 1
 
   lse_kernel = make_lse_kernel_sharded(
     num_toks,
-    config.model.num_vocab,
+    model["num_vocab"],
     mesh,
-    data_sharding=config.sharding.data,
+    data_sharding=sharding["data"],
     q_seq_shards=num_data_shards,
-    block_size_mem_q=config.fused_xent_block_size_T,
-    block_size_mem_kv=config.fused_xent_block_size_V,
-    block_size_compute_kv=config.fused_xent_block_size_V_compute,
-    max_valid_id=config.train_dataset.max_valid_token_id,
+    block_size_mem_q=config_dict.get("fused_xent_block_size_T", 512),
+    block_size_mem_kv=config_dict.get("fused_xent_block_size_V", 512),
+    block_size_compute_kv=config_dict.get("fused_xent_block_size_V_compute", 512),
+    max_valid_id=train_ds["max_valid_token_id"],
   )
-  _debug_log(
-    f"LSE kernel created: num_toks={num_toks}, num_vocab={config.model.num_vocab}"
-  )
+  _debug_log(f"LSE kernel created: num_toks={num_toks}, num_vocab={model['num_vocab']}")
 
   # Use nonfused data (inputs are same between variants)
   data = variant_data["nonfused"]
@@ -211,7 +223,13 @@ def main():
   unemb_w = data["unemb_w"]  # (num_vocab, hidden)
 
   # Create LMHead with zero bias
-  unemb = LMHead(w=unemb_w, bias=jnp.zeros(config.model.num_vocab, dtype=unemb_w.dtype))
+  num_vocab = model["num_vocab"]
+  unemb = LMHead(w=unemb_w, bias=jnp.zeros(num_vocab, dtype=unemb_w.dtype))
+
+  # Ensure we have a valid config for loss functions
+  if config is None:
+    _debug_log("ERROR: Config creation failed, cannot compute gradients")
+    return
 
   num_microbatches = all_outputs.shape[0]
   _debug_log(f"Processing {num_microbatches} microbatches")
