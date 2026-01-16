@@ -224,13 +224,12 @@ def debug_verify_reconstruction(batch, unemb, mesh, all_outputs):
   results = {}
 
   def check_equal(name, orig, reconstructed):
-    """Compare JAX arrays: check dtype, shape, and values."""
-    # Check dtype first (jnp.array_equal does type promotion, so we check explicitly)
-    if orig.dtype != reconstructed.dtype:
-      results[name] = f"DTYPE_MISMATCH({orig.dtype} vs {reconstructed.dtype})"
-      return False
-    if orig.shape != reconstructed.shape:
-      results[name] = f"SHAPE_MISMATCH({orig.shape} vs {reconstructed.shape})"
+    """Compare JAX arrays: check type (dtype+shape+sharding) and values."""
+    # Check full type including dtype, shape, and sharding via jax.typeof
+    orig_type = jax.typeof(orig)
+    recon_type = jax.typeof(reconstructed)
+    if orig_type != recon_type:
+      results[name] = f"TYPE_MISMATCH({orig_type} vs {recon_type})"
       return False
     if jnp.array_equal(orig, reconstructed):
       results[name] = "EXACT"
