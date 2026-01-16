@@ -142,6 +142,9 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     # data is (num_local_shards, *shard_shape)
     local_shards = [data[i] for i in range(data.shape[0])]
     reconstructed = jax.make_array_from_process_local_data(orig_sharding, local_shards)
+    # make_array_from_process_local_data may return a list in some JAX versions
+    if isinstance(reconstructed, list):
+      reconstructed = reconstructed[0]
     # Convert back to original dtype if it was bfloat16
     if "bfloat16" in dtypes.get(name, ""):
       reconstructed = reconstructed.astype(jnp.bfloat16)
