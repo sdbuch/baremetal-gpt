@@ -14,7 +14,7 @@ import jax
 import jax.numpy as jnp
 
 from bmgpt.config import Config, mesh_from_config
-from bmgpt.losses import fused_softmax_cross_entropy
+from bmgpt.losses import fused_softmax_cross_entropy, softmax_cross_entropy
 from bmgpt.model import LMHead
 from bmgpt.splash_helpers import forward_kernels_from_config
 from bmgpt.train import (
@@ -169,41 +169,90 @@ def main():
       mb_outputs = all_outputs[mb_idx]  # (batch_per_mb, seq, hidden)
       mb_targets = batch_targets[mb_idx]  # (batch_per_mb, seq)
 
-      # Define fused loss function for gradient computation
+      # --- FUSED LOSS ---
       def fused_loss(outputs, unemb_head):
         return fused_softmax_cross_entropy(
           config, unemb_head, outputs, mb_targets, lse_kernel
         )
 
-      # Compute fused gradients only (nonfused OOMs due to full logits materialization)
       loss_f, (grad_outputs_f, grad_unemb_f) = jax.value_and_grad(
         fused_loss, argnums=(0, 1)
       )(mb_outputs, unemb)
 
-      # Log fused loss and gradient statistics
-      # Note: use sum of squares instead of ravel().norm() to work with sharded arrays
-      _log(f"  Fused loss: {float(loss_f):.6f}")
+      # Extract fused stats immediately (use sum of squares for sharded arrays)
+      fused_stats = {
+        "loss": float(loss_f),
+        "grad_out_norm": float(jnp.sqrt(jnp.sum(grad_outputs_f**2))),
+        "grad_out_mean": float(jnp.mean(grad_outputs_f)),
+        "grad_out_std": float(jnp.std(grad_outputs_f)),
+        "grad_out_min": float(jnp.min(grad_outputs_f)),
+        "grad_out_max": float(jnp.max(grad_outputs_f)),
+        "grad_w_norm": float(jnp.sqrt(jnp.sum(grad_unemb_f.w**2))),
+        "grad_w_mean": float(jnp.mean(grad_unemb_f.w)),
+        "grad_w_std": float(jnp.std(grad_unemb_f.w)),
+        "grad_w_min": float(jnp.min(grad_unemb_f.w)),
+        "grad_w_max": float(jnp.max(grad_unemb_f.w)),
+      }
+      # Delete fused gradients to free memory before nonfused
+      del loss_f, grad_outputs_f, grad_unemb_f
 
-      grad_out_f_sumsq = float(jnp.sum(grad_outputs_f**2))
-      grad_out_f_norm = float(jnp.sqrt(grad_out_f_sumsq))
-      grad_out_f_mean = float(jnp.mean(grad_outputs_f))
-      grad_out_f_std = float(jnp.std(grad_outputs_f))
-      grad_out_f_min = float(jnp.min(grad_outputs_f))
-      grad_out_f_max = float(jnp.max(grad_outputs_f))
+      # --- NONFUSED LOSS ---
+      def nonfused_loss(outputs, unemb_head):
+        return softmax_cross_entropy(config, unemb_head, outputs, mb_targets)
+
+      loss_nf, (grad_outputs_nf, grad_unemb_nf) = jax.value_and_grad(
+        nonfused_loss, argnums=(0, 1)
+      )(mb_outputs, unemb)
+
+      # Extract nonfused stats
+      nonfused_stats = {
+        "loss": float(loss_nf),
+        "grad_out_norm": float(jnp.sqrt(jnp.sum(grad_outputs_nf**2))),
+        "grad_out_mean": float(jnp.mean(grad_outputs_nf)),
+        "grad_out_std": float(jnp.std(grad_outputs_nf)),
+        "grad_out_min": float(jnp.min(grad_outputs_nf)),
+        "grad_out_max": float(jnp.max(grad_outputs_nf)),
+        "grad_w_norm": float(jnp.sqrt(jnp.sum(grad_unemb_nf.w**2))),
+        "grad_w_mean": float(jnp.mean(grad_unemb_nf.w)),
+        "grad_w_std": float(jnp.std(grad_unemb_nf.w)),
+        "grad_w_min": float(jnp.min(grad_unemb_nf.w)),
+        "grad_w_max": float(jnp.max(grad_unemb_nf.w)),
+      }
+      del loss_nf, grad_outputs_nf, grad_unemb_nf
+
+      # --- COMPARE ---
       _log(
-        f"  Grad outputs: norm={grad_out_f_norm:.4f}, mean={grad_out_f_mean:.6e}, "
-        f"std={grad_out_f_std:.6e}, min={grad_out_f_min:.6e}, max={grad_out_f_max:.6e}"
+        f"  Loss:       fused={fused_stats['loss']:.6f}, nonfused={nonfused_stats['loss']:.6f}"
       )
-
-      grad_w_f_sumsq = float(jnp.sum(grad_unemb_f.w**2))
-      grad_w_f_norm = float(jnp.sqrt(grad_w_f_sumsq))
-      grad_w_f_mean = float(jnp.mean(grad_unemb_f.w))
-      grad_w_f_std = float(jnp.std(grad_unemb_f.w))
-      grad_w_f_min = float(jnp.min(grad_unemb_f.w))
-      grad_w_f_max = float(jnp.max(grad_unemb_f.w))
       _log(
-        f"  Grad unemb.w: norm={grad_w_f_norm:.4f}, mean={grad_w_f_mean:.6e}, "
-        f"std={grad_w_f_std:.6e}, min={grad_w_f_min:.6e}, max={grad_w_f_max:.6e}"
+        f"  Grad outputs (norm):  fused={fused_stats['grad_out_norm']:.6f}, nonfused={nonfused_stats['grad_out_norm']:.6f}"
+      )
+      _log(
+        f"  Grad outputs (mean):  fused={fused_stats['grad_out_mean']:.6e}, nonfused={nonfused_stats['grad_out_mean']:.6e}"
+      )
+      _log(
+        f"  Grad outputs (std):   fused={fused_stats['grad_out_std']:.6e}, nonfused={nonfused_stats['grad_out_std']:.6e}"
+      )
+      _log(
+        f"  Grad outputs (min):   fused={fused_stats['grad_out_min']:.6e}, nonfused={nonfused_stats['grad_out_min']:.6e}"
+      )
+      _log(
+        f"  Grad outputs (max):   fused={fused_stats['grad_out_max']:.6e}, nonfused={nonfused_stats['grad_out_max']:.6e}"
+      )
+      _log(
+        f"  Grad unemb.w (norm):  fused={fused_stats['grad_w_norm']:.6f}, nonfused={nonfused_stats['grad_w_norm']:.6f}"
+      )
+      _log(
+        f"  Grad unemb.w (mean):  fused={fused_stats['grad_w_mean']:.6e}, nonfused={nonfused_stats['grad_w_mean']:.6e}"
+      )
+      _log(
+        f"  Grad unemb.w (std):   fused={fused_stats['grad_w_std']:.6e}, nonfused={nonfused_stats['grad_w_std']:.6e}"
+      )
+      _log(
+        f"  Grad unemb.w (min):   fused={fused_stats['grad_w_min']:.6e}, nonfused={nonfused_stats['grad_w_min']:.6e}"
+      )
+      _log(
+        f"  Grad unemb.w (max):   fused={fused_stats['grad_w_max']:.6e}, nonfused={nonfused_stats['grad_w_max']:.6e}"
       )
 
   _log("=" * 60)
