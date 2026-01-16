@@ -46,7 +46,6 @@ bmgpt = { path = ".", editable = true }
 exclude = [
     "tests",
     "src/bmgpt/kernels",
-    "src/bmgpt/splash_helpers.py",
 ]
 
 [tool.ruff]

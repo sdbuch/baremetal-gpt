@@ -3,7 +3,7 @@
 defaults:
   - /dataset/dclm@train_dataset  # seq len 2048
 
-val_log_interval: 250
+val_log_interval: 1000
 # These need to be tuned fairly aggressively wrt d_model
 # And for DCLM, 512 is a good V block size
 #   (256 is bad, bc we have 128K-128256=2816=256*11 leftover tokens...
@@ -14,8 +14,8 @@ fused_xent_block_size_V: 512
 fused_xent_block_size_V_compute: 512
 
 train_dataset:
-  num_steps: 4000
-  global_batch_size: 512  # about 4b tokens
+  num_steps: 8000
+  global_batch_size: 512  # about 8b tokens
   use_splash: True
   splash_block_size_q: 1024
   splash_block_size_kv: 1024
