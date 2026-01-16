@@ -299,8 +299,12 @@ def mwe():
 
     if jax.process_index() == 0:
       # Save DOT graphs to files for visualization
-      dot_sharded = compiled_sharded.as_hlo_dot_graph()
-      dot_replicated = compiled_replicated.as_hlo_dot_graph()
+      # Get HLO module and convert to DOT
+      hlo_sharded = compiled_sharded.runtime_executable().hlo_modules()[0]
+      hlo_replicated = compiled_replicated.runtime_executable().hlo_modules()[0]
+
+      dot_sharded = hlo_sharded.to_dot_graph()
+      dot_replicated = hlo_replicated.to_dot_graph()
 
       with open("/tmp/sharded_grad.dot", "w") as f:
         f.write(dot_sharded)
