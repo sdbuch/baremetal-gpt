@@ -129,6 +129,10 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
       if orig_dtype == jnp.bfloat16:
         data = data.view(np.uint16)
     np.save(save_dir / f"{name}.npy", data)
+    _debug_log(
+      f"save {name}: orig_dtype={orig_dtype}, saved_dtype={data.dtype}, shape={data.shape}",
+      proc_idx,
+    )
     return data.shape
 
   # batch is (inputs, targets), each with shape (num_microbatches, batch_per_mb, seq_len, ...)
@@ -188,6 +192,7 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     For bfloat16: data was saved as uint16, view back as bfloat16 for exact reconstruction.
     """
     data = np.load(save_dir / f"{name}.npy")
+    saved_dtype = data.dtype
     # For bfloat16: view uint16 back as bfloat16 (JAX can handle ml_dtypes.bfloat16)
     if "bfloat16" in dtypes.get(name, ""):
       import ml_dtypes
@@ -201,6 +206,11 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     else:
       # No sharding info - just convert to jax array
       reconstructed = jnp.array(data)
+    _debug_log(
+      f"load {name}: saved_dtype={saved_dtype}, view_dtype={data.dtype}, "
+      f"recon_dtype={reconstructed.dtype}, shape={data.shape}",
+      proc_idx,
+    )
     return reconstructed
 
   def to_local_numpy(arr, spec=None):
