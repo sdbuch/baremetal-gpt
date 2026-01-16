@@ -53,9 +53,15 @@ def _debug_save_microbatch_callback(outputs, targets, microbatch_idx):
   save_dir.mkdir(parents=True, exist_ok=True)
   suffix = f"_mb{int(microbatch_idx)}"
 
-  # Save arrays (concrete from callback)
-  np.save(save_dir / f"outputs{suffix}.npy", np.asarray(outputs))
-  np.save(save_dir / f"targets{suffix}.npy", np.asarray(targets))
+  # Save arrays (concrete from callback) - convert bfloat16 to float32
+  def to_numpy_safe(arr):
+    data = np.asarray(arr)
+    if data.dtype.kind == "V":  # void dtype = bfloat16
+      data = np.asarray(arr.astype(np.float32))
+    return data
+
+  np.save(save_dir / f"outputs{suffix}.npy", to_numpy_safe(outputs))
+  np.save(save_dir / f"targets{suffix}.npy", to_numpy_safe(targets))
 
   _debug_log(f"saved microbatch {int(microbatch_idx)} outputs/targets", proc_idx)
 
@@ -76,13 +82,26 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
   save_dir = Path(f"/tmp/debug_loss_inputs/proc_{proc_idx}")
   save_dir.mkdir(parents=True, exist_ok=True)
 
+  dtypes = {}  # Track original dtypes for bfloat16 handling
+
   def save_sharded(arr, name):
-    """Save sharded array - stack local shards."""
+    """Save sharded array - stack local shards. Convert bfloat16 to float32."""
+    orig_dtype = arr.dtype
+    dtypes[name] = str(orig_dtype)
+
     if hasattr(arr, "addressable_shards"):
-      local_shards = [np.asarray(s.data) for s in arr.addressable_shards]
+      local_shards = []
+      for s in arr.addressable_shards:
+        shard_data = np.asarray(s.data)
+        # bfloat16 becomes void in numpy - convert to float32
+        if shard_data.dtype.kind == "V":
+          shard_data = np.asarray(s.data.astype(jnp.float32))
+        local_shards.append(shard_data)
       data = np.stack(local_shards, axis=0)
     else:
       data = np.asarray(arr)
+      if data.dtype.kind == "V":
+        data = np.asarray(arr.astype(jnp.float32))
     np.save(save_dir / f"{name}.npy", data)
     return data.shape
 
@@ -99,6 +118,7 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
     "inputs_sharding": str(inputs.sharding) if hasattr(inputs, "sharding") else None,
     "targets_sharding": str(targets.sharding) if hasattr(targets, "sharding") else None,
     "unemb_w_sharding": str(unemb.w.sharding) if hasattr(unemb.w, "sharding") else None,
+    "dtypes": dtypes,  # Store original dtypes
   }
   with open(save_dir / "sharding_info.pkl", "wb") as f:
     pickle.dump(sharding_info, f)
@@ -119,19 +139,33 @@ def debug_verify_reconstruction(batch, unemb, mesh):
 
   _debug_log("=== VERIFICATION START ===", proc_idx)
 
-  def load_and_reconstruct(name, orig_sharding):
+  # Load sharding info to get original dtypes
+  with open(save_dir / "sharding_info.pkl", "rb") as f:
+    sharding_info = pickle.load(f)
+  dtypes = sharding_info.get("dtypes", {})
+
+  def load_and_reconstruct(name, orig_sharding, orig_dtype):
     """Load saved shards and reconstruct sharded array."""
     data = np.load(save_dir / f"{name}.npy")
     # data is (num_local_shards, *shard_shape)
     local_shards = [data[i] for i in range(data.shape[0])]
     reconstructed = jax.make_array_from_process_local_data(orig_sharding, local_shards)
+    # Convert back to original dtype if it was bfloat16
+    if "bfloat16" in dtypes.get(name, ""):
+      reconstructed = reconstructed.astype(jnp.bfloat16)
     return reconstructed
 
   def to_local_numpy(arr):
+    def safe_asarray(x):
+      data = np.asarray(x)
+      if data.dtype.kind == "V":  # void = bfloat16
+        data = np.asarray(x.astype(jnp.float32))
+      return data
+
     if hasattr(arr, "addressable_shards"):
-      local_shards = [np.asarray(s.data) for s in arr.addressable_shards]
+      local_shards = [safe_asarray(s.data) for s in arr.addressable_shards]
       return np.stack(local_shards, axis=0)
-    return np.asarray(arr)
+    return safe_asarray(arr)
 
   results = {}
 
@@ -154,9 +188,9 @@ def debug_verify_reconstruction(batch, unemb, mesh):
   inputs, targets = batch
 
   # Test 1: Reconstruct batch from saved shards
-  inputs_recon = load_and_reconstruct("batch_inputs", inputs.sharding)
-  targets_recon = load_and_reconstruct("batch_targets", targets.sharding)
-  unemb_w_recon = load_and_reconstruct("unemb_w", unemb.w.sharding)
+  inputs_recon = load_and_reconstruct("batch_inputs", inputs.sharding, inputs.dtype)
+  targets_recon = load_and_reconstruct("batch_targets", targets.sharding, targets.dtype)
+  unemb_w_recon = load_and_reconstruct("unemb_w", unemb.w.sharding, unemb.w.dtype)
 
   check_equal("batch_inputs", inputs, inputs_recon)
   check_equal("batch_targets", targets, targets_recon)
