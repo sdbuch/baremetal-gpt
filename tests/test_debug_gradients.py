@@ -115,13 +115,35 @@ def main():
           diff_count = jnp.sum(fused_arr != nonfused_arr)
           _log(f"  {name}: DIFFER ({diff_count} elements)")
 
-    # Create LSE kernel using the standard helper
+    # Check memory before creating kernels
+    _log("=" * 60)
+    _log("MEMORY CHECK BEFORE KERNELS")
+    _log("=" * 60)
+    for i, device in enumerate(jax.local_devices()):
+      stats = device.memory_stats()
+      if stats:
+        used = stats.get("bytes_in_use", 0) / 1e9
+        limit = stats.get("bytes_limit", 0) / 1e9
+        _log(f"  Device {i}: {used:.2f}GB / {limit:.2f}GB")
+
+    # Create LSE kernel using the standard helper (only needed for fused)
     _log("=" * 60)
     _log("CREATING LSE KERNEL")
     _log("=" * 60)
 
     _, lse_kernel, _, _ = forward_kernels_from_config(config, mesh)
     _log("LSE kernel created via forward_kernels_from_config")
+
+    # Check memory after creating kernels
+    _log("=" * 60)
+    _log("MEMORY CHECK AFTER KERNELS")
+    _log("=" * 60)
+    for i, device in enumerate(jax.local_devices()):
+      stats = device.memory_stats()
+      if stats:
+        used = stats.get("bytes_in_use", 0) / 1e9
+        limit = stats.get("bytes_limit", 0) / 1e9
+        _log(f"  Device {i}: {used:.2f}GB / {limit:.2f}GB")
 
     # Use nonfused data (inputs are same between variants)
     data = variant_data["nonfused"]
