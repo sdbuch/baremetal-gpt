@@ -53,15 +53,11 @@ def _debug_save_microbatch_callback(outputs, targets, microbatch_idx):
   save_dir.mkdir(parents=True, exist_ok=True)
   suffix = f"_mb{int(microbatch_idx)}"
 
-  # Save arrays (concrete from callback) - convert bfloat16 to float32
-  def to_numpy_safe(arr):
-    data = np.asarray(arr)
-    if data.dtype.kind == "V":  # void dtype = bfloat16
-      data = np.asarray(arr.astype(np.float32))
-    return data
-
-  np.save(save_dir / f"outputs{suffix}.npy", to_numpy_safe(outputs))
-  np.save(save_dir / f"targets{suffix}.npy", to_numpy_safe(targets))
+  # Save arrays (concrete from callback)
+  # In callback, arrays are already concrete numpy-compatible
+  # bfloat16 shows as float32 after going through callback
+  np.save(save_dir / f"outputs{suffix}.npy", np.asarray(outputs, dtype=np.float32))
+  np.save(save_dir / f"targets{suffix}.npy", np.asarray(targets))
 
   _debug_log(f"saved microbatch {int(microbatch_idx)} outputs/targets", proc_idx)
 
@@ -89,19 +85,15 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
     orig_dtype = arr.dtype
     dtypes[name] = str(orig_dtype)
 
+    # Convert bfloat16 to float32 BEFORE extracting shards (avoids device conflicts)
+    if arr.dtype == jnp.bfloat16:
+      arr = arr.astype(jnp.float32)
+
     if hasattr(arr, "addressable_shards"):
-      local_shards = []
-      for s in arr.addressable_shards:
-        shard_data = np.asarray(s.data)
-        # bfloat16 becomes void in numpy - convert to float32
-        if shard_data.dtype.kind == "V":
-          shard_data = np.asarray(s.data.astype(jnp.float32))
-        local_shards.append(shard_data)
+      local_shards = [np.asarray(s.data) for s in arr.addressable_shards]
       data = np.stack(local_shards, axis=0)
     else:
       data = np.asarray(arr)
-      if data.dtype.kind == "V":
-        data = np.asarray(arr.astype(jnp.float32))
     np.save(save_dir / f"{name}.npy", data)
     return data.shape
 
@@ -156,16 +148,14 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     return reconstructed
 
   def to_local_numpy(arr):
-    def safe_asarray(x):
-      data = np.asarray(x)
-      if data.dtype.kind == "V":  # void = bfloat16
-        data = np.asarray(x.astype(jnp.float32))
-      return data
+    # Convert bfloat16 to float32 before extracting (avoids device conflicts)
+    if hasattr(arr, "dtype") and arr.dtype == jnp.bfloat16:
+      arr = arr.astype(jnp.float32)
 
     if hasattr(arr, "addressable_shards"):
-      local_shards = [safe_asarray(s.data) for s in arr.addressable_shards]
+      local_shards = [np.asarray(s.data) for s in arr.addressable_shards]
       return np.stack(local_shards, axis=0)
-    return safe_asarray(arr)
+    return np.asarray(arr)
 
   results = {}
 
