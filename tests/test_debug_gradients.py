@@ -281,7 +281,10 @@ def mwe():
   for dtype_str, d in results.items():
     for loss_str, (l, g) in d.items():
       print(dtype_str, loss_str, l)
-    errs = [g0 - g1 for (g0, g1) in combinations([v[-1] for v in d.values()], 2)]
+    errs = [
+      jnp.abs(g0 - g1).sum()
+      for (g0, g1) in combinations([v[-1] for v in d.values()], 2)
+    ]
     for err in errs:
       print(dtype_str, err)
 
