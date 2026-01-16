@@ -52,25 +52,42 @@ def run_diagnostic():
     g_sharded = jax.jit(jax.grad(loss))(w_bf16, x_bf16, t)
     g_replicated = jax.jit(jax.grad(loss_replicated))(w_bf16, x_bf16, t)
 
-    # Gather everything for analysis
+    # Gather everything for analysis - ALL devices must participate
     g_sharded_full = jax.sharding.reshard(g_sharded, jax.P())
     g_replicated_full = jax.sharding.reshard(g_replicated, jax.P())
     t_full = jax.sharding.reshard(t, jax.P())
 
-    if jax.process_index() == 0:
-      diff = g_sharded_full - g_replicated_full
+    # Compute all metrics BEFORE the process_index check (all devices participate)
+    diff = g_sharded_full - g_replicated_full
 
+    l1_err = float(jnp.abs(diff).sum())
+    max_err = float(jnp.abs(diff).max())
+    grad_norm = float(jnp.linalg.norm(g_replicated_full))
+
+    # Per-row analysis
+    row_errors = jnp.abs(diff).sum(axis=1)  # [V]
+    row_hits = jnp.zeros(V, dtype=jnp.int32).at[t_full].add(1)
+    max_hits = int(row_hits.max())
+
+    # Pre-compute stats for each hit count
+    hit_stats = []
+    for n_hits in range(0, max_hits + 1):
+      mask = row_hits == n_hits
+      n_rows = int(mask.sum())
+      if n_rows > 0:
+        mean_err = float(row_errors[mask].mean())
+        max_err_row = float(row_errors[mask].max())
+        hit_stats.append((n_hits, n_rows, mean_err, max_err_row))
+
+    # Now only process 0 prints
+    if jax.process_index() == 0:
       print("=" * 60)
       print("ERROR ANALYSIS")
       print("=" * 60)
-      print(f"L1 error: {jnp.abs(diff).sum():.4f}")
-      print(f"Max element error: {jnp.abs(diff).max():.6f}")
-      print(f"Grad norm: {jnp.linalg.norm(g_replicated_full):.2f}")
+      print(f"L1 error: {l1_err:.4f}")
+      print(f"Max element error: {max_err:.6f}")
+      print(f"Grad norm: {grad_norm:.2f}")
       print()
-
-      # Per-row analysis
-      row_errors = jnp.abs(diff).sum(axis=1)  # [V]
-      row_hits = jnp.zeros(V, dtype=jnp.int32).at[t_full].add(1)
 
       print("=" * 60)
       print("ERROR vs INDEX DUPLICATES")
@@ -78,13 +95,8 @@ def run_diagnostic():
       print(f"{'Hits':<6} {'Rows':<8} {'Mean Err':<12} {'Max Err':<12}")
       print("-" * 40)
 
-      for n_hits in range(0, int(row_hits.max()) + 1):
-        mask = row_hits == n_hits
-        n_rows = int(mask.sum())
-        if n_rows > 0:
-          mean_err = float(row_errors[mask].mean())
-          max_err = float(row_errors[mask].max())
-          print(f"{n_hits:<6} {n_rows:<8} {mean_err:<12.6f} {max_err:<12.6f}")
+      for n_hits, n_rows, mean_err, max_err_row in hit_stats:
+        print(f"{n_hits:<6} {n_rows:<8} {mean_err:<12.6f} {max_err_row:<12.6f}")
 
       print()
       print("=" * 60)
