@@ -71,16 +71,36 @@ def config_from_dict(config_dict: dict) -> Config:
   else:
     transformer_type = TransformerType(transformer_type_val)
 
+  # Handle opt_dtype which might be a DType enum or a string
+  opt_dtype_val = m["opt_dtype"]
+  if isinstance(opt_dtype_val, DType):
+    opt_dtype = opt_dtype_val
+  else:
+    opt_dtype = DType[opt_dtype_val.upper().replace(".", "_")]
+
   config.model = ModelConfig(
-    num_heads=m["num_heads"],
-    num_layers=m["num_layers"],
-    d_model=m["d_model"],
-    d_head=m["d_head"],
-    d_ff=m["d_ff"],
-    num_vocab=m["num_vocab"],
-    max_seq_len=m["max_seq_len"],
-    param_dtype=param_dtype,
     transformer_type=transformer_type,
+    is_causal=m["is_causal"],
+    d_model=m["d_model"],
+    num_heads=m["num_heads"],
+    d_head=m["d_head"],
+    mlp_factor=m["mlp_factor"],
+    num_layers=m["num_layers"],
+    param_std=m["param_std"],
+    rope_theta=m["rope_theta"],
+    max_seq_len=m["max_seq_len"],
+    num_registers=m["num_registers"],
+    num_vocab=m["num_vocab"],
+    num_classes=m["num_classes"],
+    param_dtype=param_dtype,
+    opt_dtype=opt_dtype,
+    use_bias_embeddings=m["use_bias_embeddings"],
+    eps_ln=m["eps_ln"],
+    use_centering_ln=m["use_centering_ln"],
+    use_bias_ln=m["use_bias_ln"],
+    use_gating_mlp=m["use_gating_mlp"],
+    use_bias_mlp=m["use_bias_mlp"],
+    use_rope=m["use_rope"],
   )
 
   # Update train_dataset config
