@@ -275,12 +275,12 @@ def mwe():
     for loss_fn in [loss, loss_replicated]:
       with jax.set_mesh(mesh):
         w_dtype, x_dtype, t_dtype = jax.tree.map(lambda z: z.astype(dtype), (w, x, t))
-        loss, grad = jax.value_and_grad(loss_fn)(w_dtype, x_dtype, t_dtype)
-      results[loss_fn.__name__][dtype.__name__] = (loss, grad)
+        l, g = jax.value_and_grad(loss_fn)(w_dtype, x_dtype, t_dtype)
+      results[loss_fn.__name__][dtype.__name__] = (l, g)
 
   for dtype_str, d in results.items():
-    for loss_str, (loss, grad) in d.items():
-      print(dtype_str, loss_str, loss)
+    for loss_str, (l, g) in d.items():
+      print(dtype_str, loss_str, l)
     errs = [g0 - g1 for (g0, g1) in combinations([v[-1] for v in d.values()], 2)]
     for err in errs:
       print(dtype_str, err)
