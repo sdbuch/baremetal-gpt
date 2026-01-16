@@ -381,9 +381,6 @@ def main(config: Config):
     (loss, grad), raw_losses = jax.lax.scan(gradient_accum, carry, indexed_batch)
     assert raw_losses.dtype == jnp.float32
 
-    # DEBUG: verify reconstruction AFTER scan (step 0 only)
-    if step == 0:
-      debug_verify_reconstruction(batch, state.params.unemb, mesh)
     # NOTE: breaks if per-token loss masking introduced (see unsloth blog)
     loss = loss / config.train_dataset.num_microbatches
     grad = jax.tree.map(lambda x: x / config.train_dataset.num_microbatches, grad)
@@ -405,6 +402,9 @@ def main(config: Config):
     for step, batch in enumerate(batch_iter):
       with jax.set_mesh(mesh):
         metrics, train_state = train_step(config, batch, train_state, step=step)
+      # DEBUG: verify reconstruction OUTSIDE mesh context (step 0 only)
+      if step == 0:
+        debug_verify_reconstruction(batch, train_state.params.unemb, mesh)
       logger.log(metrics | {"step": step})
       if (step + 1) % config.val_log_interval == 0:
         # Calculate val metrics
