@@ -164,11 +164,11 @@ def debug_save_step_data(config, batch, unemb, all_outputs, mesh):
   unemb_shape = save_sharded(unemb.w, "unemb_w")
   outputs_shape = save_sharded(all_outputs, "all_outputs")
 
-  # Save config and sharding info
-  # throw_on_missing=False converts MISSING (???) values to None instead of raising
-  config_dict = OmegaConf.to_container(config, resolve=True, throw_on_missing=False)
+  # Save config as YAML (OmegaConf native format for clean serialization)
+  OmegaConf.save(config, save_dir / "config.yaml")
+
+  # Save sharding info (specs, dtypes) separately
   sharding_info = {
-    "config": config_dict,
     "specs": specs,
     "dtypes": dtypes,
   }
@@ -195,22 +195,28 @@ def debug_get_save_dir(variant: str) -> Path:
   return Path(f"/tmp/debug_loss_inputs/{variant}/proc_{proc_idx}")
 
 
-def debug_load_sharding_info(variant: str):
+def debug_load_sharding_info(variant: str) -> tuple[dict, dict, "Config"]:
   """Load sharding info (dtypes, specs, config) for a variant.
 
   Args:
     variant: "fused" or "nonfused"
 
   Returns:
-    Tuple of (dtypes dict, specs dict, config dict)
+    Tuple of (dtypes dict, specs dict, Config object)
   """
   save_dir = debug_get_save_dir(variant)
+
+  # Load config from YAML and convert to Config object
+  loaded_cfg = OmegaConf.load(save_dir / "config.yaml")
+  config = OmegaConf.to_object(loaded_cfg)
+
+  # Load sharding info (specs, dtypes)
   with open(save_dir / "sharding_info.pkl", "rb") as f:
     sharding_info = pickle.load(f)
   dtypes = sharding_info.get("dtypes", {})
   specs = sharding_info.get("specs", {})
-  config_dict = sharding_info.get("config", {})
-  return dtypes, specs, config_dict
+
+  return dtypes, specs, config
 
 
 def debug_load_and_reconstruct(

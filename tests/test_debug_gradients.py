@@ -10,12 +10,8 @@ Usage:
      uv run python tests/test_debug_gradients.py
 """
 
-from typing import NamedTuple
-
 import jax
 import jax.numpy as jnp
-from jax import Array
-from omegaconf import OmegaConf
 
 from bmgpt.config import Config, mesh_from_config
 from bmgpt.losses import fused_softmax_cross_entropy, softmax_cross_entropy
@@ -29,117 +25,6 @@ from bmgpt.train import (
 )
 
 
-def config_from_dict(config_dict: dict) -> Config:
-  """Create a Config object from a saved config dict.
-
-  Uses the saved values directly without inferring defaults.
-  """
-  from bmgpt.config import (
-    DatasetConfig,
-    DatasetName,
-    DType,
-    ModelConfig,
-    ShardingConfig,
-    SplitType,
-    TransformerType,
-  )
-
-  config = Config()
-
-  # Update sharding
-  s = config_dict["sharding"]
-  config.sharding = ShardingConfig(
-    mesh_shape=s["mesh_shape"],
-    mesh_axis_names=s["mesh_axis_names"],
-    data=s["data"],
-  )
-
-  # Update model config
-  m = config_dict["model"]
-
-  # Handle param_dtype which might be a DType enum or a string
-  param_dtype_val = m["param_dtype"]
-  if isinstance(param_dtype_val, DType):
-    param_dtype = param_dtype_val
-  else:
-    param_dtype = DType[param_dtype_val.upper().replace(".", "_")]
-
-  # Handle transformer_type which might be a TransformerType enum or a string
-  transformer_type_val = m["transformer_type"]
-  if isinstance(transformer_type_val, TransformerType):
-    transformer_type = transformer_type_val
-  else:
-    transformer_type = TransformerType(transformer_type_val)
-
-  # Handle opt_dtype which might be a DType enum or a string
-  opt_dtype_val = m["opt_dtype"]
-  if isinstance(opt_dtype_val, DType):
-    opt_dtype = opt_dtype_val
-  else:
-    opt_dtype = DType[opt_dtype_val.upper().replace(".", "_")]
-
-  config.model = ModelConfig(
-    transformer_type=transformer_type,
-    is_causal=m["is_causal"],
-    d_model=m["d_model"],
-    num_heads=m["num_heads"],
-    d_head=m["d_head"],
-    mlp_factor=m["mlp_factor"],
-    num_layers=m["num_layers"],
-    param_std=m["param_std"],
-    rope_theta=m["rope_theta"],
-    max_seq_len=m["max_seq_len"],
-    num_registers=m["num_registers"],
-    num_vocab=m["num_vocab"],
-    num_classes=m["num_classes"],
-    param_dtype=param_dtype,
-    opt_dtype=opt_dtype,
-    use_bias_embeddings=m["use_bias_embeddings"],
-    eps_ln=m["eps_ln"],
-    use_centering_ln=m["use_centering_ln"],
-    use_bias_ln=m["use_bias_ln"],
-    use_gating_mlp=m["use_gating_mlp"],
-    use_bias_mlp=m["use_bias_mlp"],
-    use_rope=m["use_rope"],
-  )
-
-  # Update train_dataset config
-  td = config_dict["train_dataset"]
-
-  # Handle DatasetName which might be an enum or a string
-  dataset_name_val = td["name"]
-  if isinstance(dataset_name_val, DatasetName):
-    dataset_name = dataset_name_val
-  else:
-    dataset_name = DatasetName(dataset_name_val)
-
-  # Handle SplitType which might be an enum or a string
-  split_val = td["split"]
-  if isinstance(split_val, SplitType):
-    split = split_val
-  else:
-    split = SplitType(split_val)
-
-  config.train_dataset = DatasetConfig(
-    name=dataset_name,
-    path=td["path"],
-    split=split,
-    seq_len=td["seq_len"],
-    max_valid_token_id=td["max_valid_token_id"],
-    global_batch_size=td["global_batch_size"],
-    num_microbatches=td["num_microbatches"],
-    epochs_to_loop=td["epochs_to_loop"],
-    num_steps=td["num_steps"],
-    use_splash=td["use_splash"],
-    splash_block_size_q=td["splash_block_size_q"],
-    splash_block_size_kv=td["splash_block_size_kv"],
-    splash_block_size_kv_compute=td["splash_block_size_kv_compute"],
-    splash_use_fused_bwd_kernel=td["splash_use_fused_bwd_kernel"],
-  )
-
-  return config
-
-
 def load_variant_data(variant: str, mesh):
   """Load all debug data for a variant using the tested train.py functions.
 
@@ -148,16 +33,16 @@ def load_variant_data(variant: str, mesh):
     mesh: JAX mesh for sharding
 
   Returns:
-    dict with reconstructed JAX arrays
+    Tuple of (arrays dict, Config object)
   """
-  dtypes, specs, config_dict = debug_load_sharding_info(variant)
+  dtypes, specs, config = debug_load_sharding_info(variant)
 
   arrays = {}
   for name in ["batch_inputs", "batch_targets", "unemb_w", "all_outputs"]:
     arrays[name] = debug_load_and_reconstruct(name, variant, mesh, dtypes, specs)
     _debug_log(f"loaded {name}: {arrays[name].shape} {arrays[name].dtype}")
 
-  return arrays, config_dict
+  return arrays, config
 
 
 def main():
@@ -168,7 +53,6 @@ def main():
   except RuntimeError:
     pass  # Already initialized
 
-  proc_idx = jax.process_index()
   _debug_log("=" * 60)
   _debug_log("DEBUG GRADIENT COMPARISON SCRIPT")
   _debug_log("=" * 60)
@@ -187,167 +71,169 @@ def main():
 
   # Load sharding info from first variant to get config for mesh
   first_variant = available_variants[0]
-  _, _, config_dict = debug_load_sharding_info(first_variant)
+  _, _, config = debug_load_sharding_info(first_variant)
 
-  # Create Config and mesh using the standard helpers
-  config = config_from_dict(config_dict)
+  # Create mesh using the standard helper
   mesh = mesh_from_config(config)
   _debug_log(f"Mesh: {mesh}")
 
-  # Load data for each variant
-  variant_data = {}
+  # Everything below runs inside the mesh context for proper sharding
   with jax.set_mesh(mesh):
+    # Load data for each variant
+    variant_data = {}
     for variant in available_variants:
       _debug_log(f"--- Loading {variant} data ---")
       arrays, _ = load_variant_data(variant, mesh)
       variant_data[variant] = arrays
 
-  # Print summary
-  _debug_log("=" * 60)
-  _debug_log("SUMMARY")
-  _debug_log("=" * 60)
-  for variant in available_variants:
-    _debug_log(f"{variant}:")
-    for name, arr in variant_data[variant].items():
-      _debug_log(f"  {name}: shape={arr.shape}, dtype={arr.dtype}")
-
-  # Verify inputs match between fused and nonfused (they should be identical)
-  if len(available_variants) == 2:
+    # Print summary
     _debug_log("=" * 60)
-    _debug_log("VERIFYING INPUTS MATCH BETWEEN VARIANTS")
+    _debug_log("SUMMARY")
     _debug_log("=" * 60)
-    for name in ["batch_inputs", "batch_targets", "unemb_w", "all_outputs"]:
-      fused_arr = variant_data["fused"][name]
-      nonfused_arr = variant_data["nonfused"][name]
-      if jnp.array_equal(fused_arr, nonfused_arr):
-        _debug_log(f"  {name}: MATCH")
-      else:
-        diff_count = jnp.sum(fused_arr != nonfused_arr)
-        _debug_log(f"  {name}: DIFFER ({diff_count} elements)")
+    for variant in available_variants:
+      _debug_log(f"{variant}:")
+      for name, arr in variant_data[variant].items():
+        _debug_log(f"  {name}: shape={arr.shape}, dtype={arr.dtype}")
 
-  # Create LSE kernel for fused loss (using same logic as forward_kernels_from_config)
-  _debug_log("=" * 60)
-  _debug_log("CREATING LSE KERNEL")
-  _debug_log("=" * 60)
+    # Verify inputs match between fused and nonfused (they should be identical)
+    if len(available_variants) == 2:
+      _debug_log("=" * 60)
+      _debug_log("VERIFYING INPUTS MATCH BETWEEN VARIANTS")
+      _debug_log("=" * 60)
+      for name in ["batch_inputs", "batch_targets", "unemb_w", "all_outputs"]:
+        fused_arr = variant_data["fused"][name]
+        nonfused_arr = variant_data["nonfused"][name]
+        if jnp.array_equal(fused_arr, nonfused_arr):
+          _debug_log(f"  {name}: MATCH")
+        else:
+          diff_count = jnp.sum(fused_arr != nonfused_arr)
+          _debug_log(f"  {name}: DIFFER ({diff_count} elements)")
 
-  # Extract needed values from config_dict directly for kernel creation
-  sharding = config_dict["sharding"]
-  train_ds = config_dict["train_dataset"]
-  model = config_dict["model"]
+    # Create LSE kernel for fused loss
+    _debug_log("=" * 60)
+    _debug_log("CREATING LSE KERNEL")
+    _debug_log("=" * 60)
 
-  num_toks = (
-    train_ds["seq_len"] * train_ds["global_batch_size"] // train_ds["num_microbatches"]
-  )
-  if sharding["data"] and sharding["data"][0]:
-    data_axis_name = sharding["data"][0]
-    num_data_shards = sharding["mesh_shape"][
-      sharding["mesh_axis_names"].index(data_axis_name)
-    ]
-  else:
-    num_data_shards = 1
+    num_toks = (
+      config.train_dataset.seq_len
+      * config.train_dataset.global_batch_size
+      // config.train_dataset.num_microbatches
+    )
+    if config.sharding.data and config.sharding.data[0]:
+      data_axis_name = config.sharding.data[0]
+      num_data_shards = config.sharding.mesh_shape[
+        config.sharding.mesh_axis_names.index(data_axis_name)
+      ]
+    else:
+      num_data_shards = 1
 
-  lse_kernel = make_lse_kernel_sharded(
-    num_toks,
-    model["num_vocab"],
-    mesh,
-    data_sharding=sharding["data"],
-    q_seq_shards=num_data_shards,
-    block_size_mem_q=config_dict.get("fused_xent_block_size_T", 512),
-    block_size_mem_kv=config_dict.get("fused_xent_block_size_V", 512),
-    block_size_compute_kv=config_dict.get("fused_xent_block_size_V_compute", 512),
-    max_valid_id=train_ds["max_valid_token_id"],
-  )
-  _debug_log(f"LSE kernel created: num_toks={num_toks}, num_vocab={model['num_vocab']}")
+    lse_kernel = make_lse_kernel_sharded(
+      num_toks,
+      config.model.num_vocab,
+      mesh,
+      data_sharding=config.sharding.data,
+      q_seq_shards=num_data_shards,
+      block_size_mem_q=config.fused_xent_block_size_T,
+      block_size_mem_kv=config.fused_xent_block_size_V,
+      block_size_compute_kv=config.fused_xent_block_size_V_compute,
+      max_valid_id=config.train_dataset.max_valid_token_id,
+    )
+    _debug_log(
+      f"LSE kernel created: num_toks={num_toks}, num_vocab={config.model.num_vocab}"
+    )
 
-  # Use nonfused data (inputs are same between variants)
-  data = variant_data["nonfused"]
-  all_outputs = data["all_outputs"]  # (num_mb, batch_per_mb, seq, hidden)
-  batch_targets = data["batch_targets"]  # (num_mb, batch_per_mb, seq)
-  unemb_w = data["unemb_w"]  # (num_vocab, hidden)
+    # Use nonfused data (inputs are same between variants)
+    data = variant_data["nonfused"]
+    all_outputs = data["all_outputs"]  # (num_mb, batch_per_mb, seq, hidden)
+    batch_targets = data["batch_targets"]  # (num_mb, batch_per_mb, seq)
+    unemb_w = data["unemb_w"]  # (num_vocab, hidden)
 
-  # Create LMHead with zero bias
-  num_vocab = model["num_vocab"]
-  unemb = LMHead(w=unemb_w, bias=jnp.zeros(num_vocab, dtype=unemb_w.dtype))
+    # Create LMHead with zero bias
+    unemb = LMHead(
+      w=unemb_w, bias=jnp.zeros(config.model.num_vocab, dtype=unemb_w.dtype)
+    )
 
-  num_microbatches = all_outputs.shape[0]
-  _debug_log(f"Processing {num_microbatches} microbatches")
+    num_microbatches = all_outputs.shape[0]
+    _debug_log(f"Processing {num_microbatches} microbatches")
 
-  # Log input statistics
-  _debug_log("=" * 60)
-  _debug_log("INPUT STATISTICS")
-  _debug_log("=" * 60)
-  _debug_log(f"  unemb.w: shape={unemb_w.shape}, dtype={unemb_w.dtype}")
-  _debug_log(
-    f"    mean={float(jnp.mean(unemb_w)):.6f}, std={float(jnp.std(unemb_w)):.6f}, "
-    f"min={float(jnp.min(unemb_w)):.6f}, max={float(jnp.max(unemb_w)):.6f}"
-  )
-  _debug_log(f"  all_outputs: shape={all_outputs.shape}, dtype={all_outputs.dtype}")
-  _debug_log(
-    f"    mean={float(jnp.mean(all_outputs)):.6f}, std={float(jnp.std(all_outputs)):.6f}, "
-    f"min={float(jnp.min(all_outputs)):.6f}, max={float(jnp.max(all_outputs)):.6f}"
-  )
-  # Check for extreme values that might cause precision issues
-  outputs_absmax = float(jnp.max(jnp.abs(all_outputs)))
-  unemb_absmax = float(jnp.max(jnp.abs(unemb_w)))
-  _debug_log(f"  |outputs|_max={outputs_absmax:.4f}, |unemb.w|_max={unemb_absmax:.4f}")
-  _debug_log(f"  outputs * unemb scale ~ {outputs_absmax * unemb_absmax:.4f}")
+    # Log input statistics
+    _debug_log("=" * 60)
+    _debug_log("INPUT STATISTICS")
+    _debug_log("=" * 60)
+    _debug_log(f"  unemb.w: shape={unemb_w.shape}, dtype={unemb_w.dtype}")
+    _debug_log(
+      f"    mean={float(jnp.mean(unemb_w)):.6f}, std={float(jnp.std(unemb_w)):.6f}, "
+      f"min={float(jnp.min(unemb_w)):.6f}, max={float(jnp.max(unemb_w)):.6f}"
+    )
+    _debug_log(f"  all_outputs: shape={all_outputs.shape}, dtype={all_outputs.dtype}")
+    _debug_log(
+      f"    mean={float(jnp.mean(all_outputs)):.6f}, std={float(jnp.std(all_outputs)):.6f}, "
+      f"min={float(jnp.min(all_outputs)):.6f}, max={float(jnp.max(all_outputs)):.6f}"
+    )
+    # Check for extreme values that might cause precision issues
+    outputs_absmax = float(jnp.max(jnp.abs(all_outputs)))
+    unemb_absmax = float(jnp.max(jnp.abs(unemb_w)))
+    _debug_log(
+      f"  |outputs|_max={outputs_absmax:.4f}, |unemb.w|_max={unemb_absmax:.4f}"
+    )
+    _debug_log(f"  outputs * unemb scale ~ {outputs_absmax * unemb_absmax:.4f}")
 
-  # Compare gradients per-microbatch
-  _debug_log("=" * 60)
-  _debug_log("GRADIENT COMPARISON (per microbatch)")
-  _debug_log("=" * 60)
+    # Compare gradients per-microbatch
+    _debug_log("=" * 60)
+    _debug_log("GRADIENT COMPARISON (per microbatch)")
+    _debug_log("=" * 60)
 
-  for mb_idx in range(num_microbatches):
-    _debug_log(f"--- Microbatch {mb_idx} ---")
+    for mb_idx in range(num_microbatches):
+      _debug_log(f"--- Microbatch {mb_idx} ---")
 
-    # Get microbatch data
-    mb_outputs = all_outputs[mb_idx]  # (batch_per_mb, seq, hidden)
-    mb_targets = batch_targets[mb_idx]  # (batch_per_mb, seq)
+      # Get microbatch data
+      mb_outputs = all_outputs[mb_idx]  # (batch_per_mb, seq, hidden)
+      mb_targets = batch_targets[mb_idx]  # (batch_per_mb, seq)
 
-    # Define loss functions for gradient computation
-    def nonfused_loss(outputs, unemb_head):
-      return softmax_cross_entropy(config, unemb_head, outputs, mb_targets)
+      # Define loss functions for gradient computation
+      def nonfused_loss(outputs, unemb_head):
+        return softmax_cross_entropy(config, unemb_head, outputs, mb_targets)
 
-    def fused_loss(outputs, unemb_head):
-      return fused_softmax_cross_entropy(
-        config, unemb_head, outputs, mb_targets, lse_kernel
+      def fused_loss(outputs, unemb_head):
+        return fused_softmax_cross_entropy(
+          config, unemb_head, outputs, mb_targets, lse_kernel
+        )
+
+      # Compute gradients
+      loss_nf, (grad_outputs_nf, grad_unemb_nf) = jax.value_and_grad(
+        nonfused_loss, argnums=(0, 1)
+      )(mb_outputs, unemb)
+      loss_f, (grad_outputs_f, grad_unemb_f) = jax.value_and_grad(
+        fused_loss, argnums=(0, 1)
+      )(mb_outputs, unemb)
+
+      # Compare losses
+      loss_diff = float(jnp.abs(loss_nf - loss_f))
+      _debug_log(
+        f"  Loss: nonfused={float(loss_nf):.6f}, fused={float(loss_f):.6f}, diff={loss_diff:.6e}"
       )
 
-    # Compute gradients
-    loss_nf, (grad_outputs_nf, grad_unemb_nf) = jax.value_and_grad(
-      nonfused_loss, argnums=(0, 1)
-    )(mb_outputs, unemb)
-    loss_f, (grad_outputs_f, grad_unemb_f) = jax.value_and_grad(
-      fused_loss, argnums=(0, 1)
-    )(mb_outputs, unemb)
+      # Compare output gradients
+      grad_out_diff = jnp.abs(grad_outputs_nf - grad_outputs_f)
+      grad_out_max_diff = float(jnp.max(grad_out_diff))
+      grad_out_mean_diff = float(jnp.mean(grad_out_diff))
+      grad_out_nf_norm = float(jnp.linalg.norm(grad_outputs_nf.ravel()))
+      grad_out_f_norm = float(jnp.linalg.norm(grad_outputs_f.ravel()))
+      _debug_log(
+        f"  Grad outputs: nf_norm={grad_out_nf_norm:.4f}, f_norm={grad_out_f_norm:.4f}, "
+        f"max_diff={grad_out_max_diff:.6e}, mean_diff={grad_out_mean_diff:.6e}"
+      )
 
-    # Compare losses
-    loss_diff = float(jnp.abs(loss_nf - loss_f))
-    _debug_log(
-      f"  Loss: nonfused={float(loss_nf):.6f}, fused={float(loss_f):.6f}, diff={loss_diff:.6e}"
-    )
-
-    # Compare output gradients
-    grad_out_diff = jnp.abs(grad_outputs_nf - grad_outputs_f)
-    grad_out_max_diff = float(jnp.max(grad_out_diff))
-    grad_out_mean_diff = float(jnp.mean(grad_out_diff))
-    grad_out_nf_norm = float(jnp.linalg.norm(grad_outputs_nf.ravel()))
-    grad_out_f_norm = float(jnp.linalg.norm(grad_outputs_f.ravel()))
-    _debug_log(
-      f"  Grad outputs: nf_norm={grad_out_nf_norm:.4f}, f_norm={grad_out_f_norm:.4f}, "
-      f"max_diff={grad_out_max_diff:.6e}, mean_diff={grad_out_mean_diff:.6e}"
-    )
-
-    # Compare unemb.w gradients
-    grad_w_diff = jnp.abs(grad_unemb_nf.w - grad_unemb_f.w)
-    grad_w_max_diff = float(jnp.max(grad_w_diff))
-    grad_w_mean_diff = float(jnp.mean(grad_w_diff))
-    grad_w_nf_norm = float(jnp.linalg.norm(grad_unemb_nf.w.ravel()))
-    grad_w_f_norm = float(jnp.linalg.norm(grad_unemb_f.w.ravel()))
-    _debug_log(
-      f"  Grad unemb.w: nf_norm={grad_w_nf_norm:.4f}, f_norm={grad_w_f_norm:.4f}, "
-      f"max_diff={grad_w_max_diff:.6e}, mean_diff={grad_w_mean_diff:.6e}"
-    )
+      # Compare unemb.w gradients
+      grad_w_diff = jnp.abs(grad_unemb_nf.w - grad_unemb_f.w)
+      grad_w_max_diff = float(jnp.max(grad_w_diff))
+      grad_w_mean_diff = float(jnp.mean(grad_w_diff))
+      grad_w_nf_norm = float(jnp.linalg.norm(grad_unemb_nf.w.ravel()))
+      grad_w_f_norm = float(jnp.linalg.norm(grad_unemb_f.w.ravel()))
+      _debug_log(
+        f"  Grad unemb.w: nf_norm={grad_w_nf_norm:.4f}, f_norm={grad_w_f_norm:.4f}, "
+        f"max_diff={grad_w_max_diff:.6e}, mean_diff={grad_w_mean_diff:.6e}"
+      )
 
   _debug_log("=" * 60)
   _debug_log("DONE")
