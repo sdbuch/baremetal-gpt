@@ -107,8 +107,10 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
       sharded_axis = None
 
     if hasattr(arr, "addressable_shards"):
+      # Sort shards by device index for consistent ordering
+      sorted_shards = sorted(arr.addressable_shards, key=lambda s: s.device.id)
       local_shards = []
-      for s in arr.addressable_shards:
+      for s in sorted_shards:
         shard_np = jax.device_get(s.data)
         shard_np = np.asarray(shard_np)
         # For bfloat16: view as uint16 to preserve exact bits
@@ -212,8 +214,10 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     sharded_axis = get_sharded_axis(spec)
 
     if hasattr(arr, "addressable_shards"):
+      # Sort shards by device index for consistent ordering (same as save)
+      sorted_shards = sorted(arr.addressable_shards, key=lambda s: s.device.id)
       local_shards = []
-      for s in arr.addressable_shards:
+      for s in sorted_shards:
         shard_np = jax.device_get(s.data)
         shard_np = np.asarray(shard_np)
         # For bfloat16: view as uint16 for exact bit comparison
@@ -276,9 +280,8 @@ def debug_verify_reconstruction(batch, unemb, mesh):
   # Use process_allgather to get global data in multi-host setup
   from jax.experimental.multihost_utils import process_allgather
 
-  # Gather targets globally for comparison (only needed on H0 where files exist)
-  if proc_idx == 0:
-    batch_targets_global = np.asarray(process_allgather(targets))
+  # Gather targets globally - must run on ALL processes (collective op)
+  batch_targets_global = np.asarray(process_allgather(targets, tiled=True))
 
   for mb_idx in range(2):
     suffix = f"_mb{mb_idx}"
