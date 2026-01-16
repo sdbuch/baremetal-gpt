@@ -88,6 +88,7 @@ def _mlp(config: Config, params: Mlp, x: Array):
   out = jnp.matmul(act, params.w_down.mT, out_sharding=mlp_out_spec)
   if config.model.use_bias_mlp:
     out += params.bias_down
+  assert out.dtype == config.model.compute_dtype.value
   return out
 
 
@@ -249,6 +250,8 @@ def _attn(
     out_sharding=jax.P(*config.sharding.res_stream),
   )
 
+  assert out.dtype == config.model.compute_dtype.value
+  assert kv_cache_out.dtype == config.model.compute_dtype.value
   return out, kv_cache_out
 
 
@@ -278,6 +281,7 @@ def _embedding_discrete(config: Config, params: EmbeddingDiscrete, tokens: jax.A
   emb = emb.astype(params.w.dtype)
   if config.model.use_bias_embeddings:
     emb += params.bias
+  assert emb.dtype == config.model.compute_dtype.value
   return emb
 
 
@@ -324,6 +328,7 @@ def _embedding_continuous(config: Config, params: EmbeddingContinuous, seq: jax.
   emb_with_regs = jnp.concatenate((params.registers, emb_tokens), axis=0)
   effective_seq_len = emb_with_regs.shape[0]
   emb = emb_with_regs + params.w_pos[:effective_seq_len]
+  assert emb.dtype == config.model.compute_dtype.value
   return emb
 
 
@@ -351,6 +356,7 @@ def _lm_head(config: Config, params: LMHead, x: Array):
   logits = jnp.matmul(x, params.w.mT, preferred_element_type=jnp.float32)
   if config.model.use_bias_embeddings:
     logits += params.bias
+  assert logits.dtype == jnp.float32
   return logits
 
 
@@ -376,9 +382,10 @@ def init_classification_head(config: Config, key) -> ClassificationHead:
 
 def _classification_head(config: Config, params: ClassificationHead, x: Array):
   """Input x has shape (S, D)"""
-  logits = jnp.matmul(x[:1], params.w)
+  logits = jnp.matmul(x[:1], params.w, preferred_element_type=jnp.float32)
   if config.model.use_bias_embeddings:
     logits += params.bias
+  assert logits.dtype == jnp.float32
   return logits
 
 
@@ -410,7 +417,9 @@ def _layernorm(config: Config, params: LayerNorm, x: Array):
   out = params.gamma * out
   if config.model.use_bias_ln:
     out += params.beta
-  return out.astype(x.dtype)
+  out = out.astype(x.dtype)
+  assert out.dtype == config.model.compute_dtype.value
+  return out
 
 
 ##################################
