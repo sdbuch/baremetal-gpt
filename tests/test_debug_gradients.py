@@ -276,7 +276,7 @@ def mwe():
       with jax.set_mesh(mesh):
         w_dtype, x_dtype = jax.tree.map(lambda z: z.astype(dtype), (w, x))
         l, g = jax.value_and_grad(loss_fn)(w_dtype, x_dtype, t)
-      results[loss_fn.__name__][dtype.__name__] = (l, g)
+      results[dtype.__name__][loss_fn.__name__] = (l, g)
 
   for dtype_str, d in results.items():
     for loss_str, (l, g) in d.items():
