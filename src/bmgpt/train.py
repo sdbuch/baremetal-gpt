@@ -26,7 +26,7 @@ from bmgpt.model import (
   model_spec,
 )
 from bmgpt.optimizers import (
-  cosine_decay,
+  cosine_with_warmup,
   grad_norm_and_clip,
   init_adam_state,
   opt_update_factory,
@@ -137,7 +137,7 @@ def main(config: Config):
     new_state = TrainState(params=params, opt_state=opt_state, kv_cache=state.kv_cache)
 
     metrics = {
-      "lr": cosine_decay(config, state.opt_state.step),
+      "lr": cosine_with_warmup(config, state.opt_state.emb.w.step),
       "batch_loss": loss,
       "grad_norm": global_grad_norm,
     }
