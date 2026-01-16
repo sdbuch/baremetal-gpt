@@ -165,7 +165,8 @@ def debug_save_step_data(config, batch, unemb, all_outputs, mesh):
   outputs_shape = save_sharded(all_outputs, "all_outputs")
 
   # Save config and sharding info
-  config_dict = OmegaConf.to_container(config, resolve=True)
+  # throw_on_missing=False converts MISSING (???) values to None instead of raising
+  config_dict = OmegaConf.to_container(config, resolve=True, throw_on_missing=False)
   sharding_info = {
     "config": config_dict,
     "specs": specs,
