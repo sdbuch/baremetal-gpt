@@ -81,19 +81,29 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
   dtypes = {}  # Track original dtypes for bfloat16 handling
 
   def save_sharded(arr, name):
-    """Save sharded array - stack local shards. Convert bfloat16 to float32."""
+    """Save sharded array - stack local shards. Handle bfloat16 via device_get."""
     orig_dtype = arr.dtype
     dtypes[name] = str(orig_dtype)
 
-    # Convert bfloat16 to float32 BEFORE extracting shards (avoids device conflicts)
-    if arr.dtype == jnp.bfloat16:
-      arr = arr.astype(jnp.float32)
-
     if hasattr(arr, "addressable_shards"):
-      local_shards = [np.asarray(s.data) for s in arr.addressable_shards]
+      local_shards = []
+      for s in arr.addressable_shards:
+        # Use device_get to safely extract data, then handle bfloat16
+        shard_np = jax.device_get(s.data)
+        # bfloat16 arrays from device_get can be viewed as uint16 and converted
+        if orig_dtype == jnp.bfloat16:
+          # JAX device_get returns a numpy array that we can convert
+          shard_np = np.array(shard_np, dtype=np.float32)
+        else:
+          shard_np = np.asarray(shard_np)
+        local_shards.append(shard_np)
       data = np.stack(local_shards, axis=0)
     else:
-      data = np.asarray(arr)
+      data = jax.device_get(arr)
+      if orig_dtype == jnp.bfloat16:
+        data = np.array(data, dtype=np.float32)
+      else:
+        data = np.asarray(data)
     np.save(save_dir / f"{name}.npy", data)
     return data.shape
 
@@ -151,14 +161,21 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     return reconstructed
 
   def to_local_numpy(arr):
-    # Convert bfloat16 to float32 before extracting (avoids device conflicts)
-    if hasattr(arr, "dtype") and arr.dtype == jnp.bfloat16:
-      arr = arr.astype(jnp.float32)
+    # Use device_get to safely extract data
+    is_bf16 = hasattr(arr, "dtype") and arr.dtype == jnp.bfloat16
 
     if hasattr(arr, "addressable_shards"):
-      local_shards = [np.asarray(s.data) for s in arr.addressable_shards]
+      local_shards = []
+      for s in arr.addressable_shards:
+        shard_np = jax.device_get(s.data)
+        if is_bf16:
+          shard_np = np.array(shard_np, dtype=np.float32)
+        local_shards.append(shard_np)
       return np.stack(local_shards, axis=0)
-    return np.asarray(arr)
+    data = jax.device_get(arr)
+    if is_bf16:
+      data = np.array(data, dtype=np.float32)
+    return data
 
   results = {}
 
