@@ -177,6 +177,7 @@ def main():
       mb_targets = batch_targets[mb_idx]  # (batch_per_mb, seq)
 
       # --- NONFUSED LOSS FIRST (to test if it works without fused in memory) ---
+      @jax.remat
       def nonfused_loss(outputs, unemb_head):
         return softmax_cross_entropy(config, unemb_head, outputs, mb_targets)
 
