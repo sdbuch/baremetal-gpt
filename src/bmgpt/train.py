@@ -209,19 +209,14 @@ def debug_verify_reconstruction(batch, unemb, mesh):
   def to_local_numpy(arr, spec=None):
     """Convert sharded array to per-process numpy by concatenating along sharded axis.
 
-    For bfloat16: view as uint16 for exact bit comparison.
+    Returns actual dtype (including ml_dtypes.bfloat16 for bf16 arrays).
     """
-    is_bf16 = hasattr(arr, "dtype") and arr.dtype == jnp.bfloat16
     sharded_axis = get_sharded_axis(spec)
 
     if hasattr(arr, "addressable_shards"):
       local_shards = []
       for s in arr.addressable_shards:
-        shard_np = jax.device_get(s.data)
-        shard_np = np.asarray(shard_np)
-        # For bfloat16: view as uint16 for exact bit comparison
-        if is_bf16:
-          shard_np = shard_np.view(np.uint16)
+        shard_np = np.asarray(jax.device_get(s.data))
         local_shards.append(shard_np)
       # Concatenate along sharded axis (same as save)
       if sharded_axis is not None and len(local_shards) > 1:
@@ -229,11 +224,7 @@ def debug_verify_reconstruction(batch, unemb, mesh):
       return (
         local_shards[0] if len(local_shards) == 1 else np.stack(local_shards, axis=0)
       )
-    data = jax.device_get(arr)
-    data = np.asarray(data)
-    if is_bf16:
-      data = data.view(np.uint16)
-    return data
+    return np.asarray(jax.device_get(arr))
 
   results = {}
 
@@ -243,15 +234,14 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     if orig_local.shape != recon_local.shape:
       results[name] = f"SHAPE_MISMATCH({orig_local.shape} vs {recon_local.shape})"
       return False
+    # Use array_equal for exact comparison (works with bfloat16 via ml_dtypes)
     if np.array_equal(orig_local, recon_local):
       results[name] = "EXACT"
       return True
-    # For uint16 views (bfloat16), array_equal is the only valid check
-    # Don't try float conversion on uint16 data
-    if orig_local.dtype == np.uint16:
-      num_diff = np.sum(orig_local != recon_local)
-      results[name] = f"MISMATCH({num_diff} bits differ)"
-      return False
+    # Count mismatches
+    num_diff = np.sum(orig_local != recon_local)
+    results[name] = f"MISMATCH({num_diff} values differ)"
+    return False
     # For other dtypes, try float comparison
     if np.allclose(orig_local.astype(np.float32), recon_local.astype(np.float32)):
       results[name] = "CLOSE"
@@ -271,18 +261,8 @@ def debug_verify_reconstruction(batch, unemb, mesh):
 
   check_equal("batch_inputs", inputs, inputs_recon, specs.get("batch_inputs"))
   check_equal("batch_targets", targets, targets_recon, specs.get("batch_targets"))
-
-  # For unemb_w: model params change during training, so compare reconstructed vs saved file directly
-  # (not against live model state which has been updated)
-
-  unemb_saved_uint16 = np.load(save_dir / "unemb_w.npy")
-  unemb_recon_local = to_local_numpy(unemb_w_recon, specs.get("unemb_w"))
-  # Both should be uint16 at this point
-  if np.array_equal(unemb_saved_uint16, unemb_recon_local):
-    results["unemb_w"] = "EXACT"
-  else:
-    num_diff = np.sum(unemb_saved_uint16 != unemb_recon_local)
-    results["unemb_w"] = f"MISMATCH({num_diff} bits differ)"
+  # unemb is the ORIGINAL params from before train_step (passed in explicitly)
+  check_equal("unemb_w", unemb.w, unemb_w_recon, specs.get("unemb_w"))
 
   # Test 2: Check that saved microbatches match slices of the full batch
   # Note: jax.debug.callback gathers data globally, so saved microbatches have global shape
@@ -438,11 +418,14 @@ def main(config: Config):
   with Logger(config) as logger:
     do_evals = partial(eval_loop, config, mesh=mesh, logger=logger)
     for step, batch in enumerate(batch_iter):
+      # DEBUG: save original params BEFORE train_step modifies them
+      if step == 0:
+        original_unemb = train_state.params.unemb
       with jax.set_mesh(mesh):
         metrics, train_state = train_step(config, batch, train_state, step=step)
       # DEBUG: verify reconstruction OUTSIDE mesh context (step 0 only)
       if step == 0:
-        debug_verify_reconstruction(batch, train_state.params.unemb, mesh)
+        debug_verify_reconstruction(batch, original_unemb, mesh)
       logger.log(metrics | {"step": step})
       if (step + 1) % config.val_log_interval == 0:
         # Calculate val metrics
