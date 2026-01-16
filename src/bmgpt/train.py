@@ -193,14 +193,21 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     """
     import ml_dtypes
 
-    data = np.load(save_dir / f"{name}.npy")
-    saved_dtype = data.dtype
-    saved_shape = data.shape
+    data_uint16 = np.load(save_dir / f"{name}.npy")
+    saved_dtype = data_uint16.dtype
+    saved_shape = data_uint16.shape
     # For bfloat16: convert uint16 -> bytes -> bfloat16 for exact bit preservation
     if "bfloat16" in dtypes.get(name, ""):
       # Use tobytes/frombuffer for exact bit-level conversion
-      raw_bytes = data.tobytes()
+      raw_bytes = data_uint16.tobytes()
       data = np.frombuffer(raw_bytes, dtype=ml_dtypes.bfloat16).reshape(saved_shape)
+      # Debug: print first few uint16 values from file
+      _debug_log(
+        f"load {name}: first uint16 from file: {data_uint16.flat[:3]}",
+        proc_idx,
+      )
+    else:
+      data = data_uint16
     spec = specs.get(name)
     if spec is not None:
       # Reconstruct using NamedSharding(mesh, P(*spec)) pattern from data.py
@@ -287,6 +294,15 @@ def debug_verify_reconstruction(batch, unemb, mesh):
   inputs_recon = load_and_reconstruct("batch_inputs", inputs.dtype)
   targets_recon = load_and_reconstruct("batch_targets", targets.dtype)
   unemb_w_recon = load_and_reconstruct("unemb_w", unemb.w.dtype)
+
+  # Debug: compare first few uint16 values from original and reconstructed unemb_w
+  if hasattr(unemb.w, "addressable_shards"):
+    orig_first_shard = jax.device_get(list(unemb.w.addressable_shards)[0].data)
+    orig_first_uint16 = np.asarray(orig_first_shard).view(np.uint16).flat[:3]
+    recon_first_shard = jax.device_get(list(unemb_w_recon.addressable_shards)[0].data)
+    recon_first_uint16 = np.asarray(recon_first_shard).view(np.uint16).flat[:3]
+    _debug_log(f"unemb_w orig first shard uint16: {orig_first_uint16}", proc_idx)
+    _debug_log(f"unemb_w recon first shard uint16: {recon_first_uint16}", proc_idx)
 
   check_equal("batch_inputs", inputs, inputs_recon, specs.get("batch_inputs"))
   check_equal("batch_targets", targets, targets_recon, specs.get("batch_targets"))
