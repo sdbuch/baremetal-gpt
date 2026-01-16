@@ -243,7 +243,7 @@ def mwe():
   T = 256
   V = 1024
   D = 3 * 64
-  dtype = jnp.float32
+  dtype = jnp.bfloat16
   key = jax.random.key(42)
   kx, kw, kt = jax.random.split(key, 3)
   mesh = jax.make_mesh((32,), ("x",), (jax.sharding.AxisType.Explicit,))
