@@ -116,27 +116,9 @@ def main():
       for name, arr in variant_data[variant].items():
         _log(f"  {name}: {jax.typeof(arr)}")
 
-    # Verify inputs match between fused and nonfused (they should be identical)
-    if len(available_variants) == 2:
-      _log("=" * 60)
-      _log("VERIFYING INPUTS MATCH BETWEEN VARIANTS")
-      _log("=" * 60)
-      for name in ["batch_inputs", "batch_targets", "unemb_w", "all_outputs"]:
-        fused_arr = variant_data["fused"][name]
-        nonfused_arr = variant_data["nonfused"][name]
-        result = jnp.array_equal(fused_arr, nonfused_arr)
-        # Force execution before memory check
-        jax.block_until_ready(result)
-        if result:
-          _log(f"  {name}: MATCH")
-        else:
-          diff_count = jnp.sum(fused_arr != nonfused_arr)
-          jax.block_until_ready(diff_count)
-          _log(f"  {name}: DIFFER ({diff_count} elements)")
-        # Check memory after each comparison (with execution complete)
-        stats = jax.local_devices()[0].memory_stats()
-        if stats:
-          _log(f"    mem after {name}: {stats.get('bytes_in_use', 0) / 1e9:.2f}GB")
+    # Skip verify - jnp.array_equal on sharded arrays allocates huge intermediate buffers
+    # (27GB for unemb_w comparison alone due to all-gather or similar)
+    _log("Skipping input verification to preserve memory")
 
     # Check memory before creating kernels
     _log("=" * 60)
