@@ -70,7 +70,8 @@ def debug_save_microbatch(outputs, targets, microbatch_idx):
 def debug_save_batch_and_weights(config, batch, unemb, mesh):
   """Save full batch and weights BEFORE the scan (outside traced context).
 
-  This saves the sharded arrays properly so we can verify reconstruction.
+  Saves per-process local data (not per-device) following the pattern in data.py.
+  This allows reconstruction via NamedSharding(mesh, P(*spec)).
   """
   from omegaconf import OmegaConf
 
@@ -79,25 +80,46 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
   save_dir.mkdir(parents=True, exist_ok=True)
 
   dtypes = {}  # Track original dtypes for bfloat16 handling
+  specs = {}  # Track partition specs for reconstruction
+
+  def get_sharded_axis(spec):
+    """Find which axis is sharded (has non-None value in PartitionSpec)."""
+    for i, s in enumerate(spec):
+      if s is not None:
+        return i
+    return None
 
   def save_sharded(arr, name):
-    """Save sharded array - stack local shards. Handle bfloat16 via device_get."""
+    """Save per-process local data by concatenating device shards along sharded axis."""
     orig_dtype = arr.dtype
     dtypes[name] = str(orig_dtype)
+
+    # Get partition spec from NamedSharding
+    if hasattr(arr, "sharding") and hasattr(arr.sharding, "spec"):
+      spec = tuple(arr.sharding.spec)
+      specs[name] = spec
+      sharded_axis = get_sharded_axis(spec)
+    else:
+      specs[name] = None
+      sharded_axis = None
 
     if hasattr(arr, "addressable_shards"):
       local_shards = []
       for s in arr.addressable_shards:
-        # Use device_get to safely extract data, then handle bfloat16
         shard_np = jax.device_get(s.data)
-        # bfloat16 arrays from device_get can be viewed as uint16 and converted
         if orig_dtype == jnp.bfloat16:
-          # JAX device_get returns a numpy array that we can convert
           shard_np = np.array(shard_np, dtype=np.float32)
         else:
           shard_np = np.asarray(shard_np)
         local_shards.append(shard_np)
-      data = np.stack(local_shards, axis=0)
+      # Concatenate along sharded axis to get per-process data (like dataloader produces)
+      if sharded_axis is not None and len(local_shards) > 1:
+        data = np.concatenate(local_shards, axis=sharded_axis)
+      else:
+        # No sharding or single shard - just use the first shard
+        data = (
+          local_shards[0] if len(local_shards) == 1 else np.stack(local_shards, axis=0)
+        )
     else:
       data = jax.device_get(arr)
       if orig_dtype == jnp.bfloat16:
@@ -113,26 +135,19 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
   targets_local_shape = save_sharded(targets, "batch_targets")
   unemb_local_shape = save_sharded(unemb.w, "unemb_w")
 
-  # Save config and sharding info - include GLOBAL shapes for reconstruction
+  # Save config and sharding info - include partition specs for reconstruction
   config_dict = OmegaConf.to_container(config, resolve=True)
   sharding_info = {
     "config": config_dict,
-    "inputs_sharding": str(inputs.sharding) if hasattr(inputs, "sharding") else None,
-    "targets_sharding": str(targets.sharding) if hasattr(targets, "sharding") else None,
-    "unemb_w_sharding": str(unemb.w.sharding) if hasattr(unemb.w, "sharding") else None,
-    "dtypes": dtypes,  # Store original dtypes
-    # Store GLOBAL shapes (not local) for make_array_from_process_local_data
-    "inputs_global_shape": inputs.shape,
-    "targets_global_shape": targets.shape,
-    "unemb_w_global_shape": unemb.w.shape,
+    "specs": specs,  # Partition specs as tuples
+    "dtypes": dtypes,
   }
   with open(save_dir / "sharding_info.pkl", "wb") as f:
     pickle.dump(sharding_info, f)
 
   _debug_log(
-    f"saved batch inputs={inputs_local_shape} (global={inputs.shape}) "
-    f"targets={targets_local_shape} (global={targets.shape}) "
-    f"unemb={unemb_local_shape} (global={unemb.w.shape})",
+    f"saved batch inputs={inputs_local_shape} targets={targets_local_shape} "
+    f"unemb={unemb_local_shape} | specs={specs}",
     proc_idx,
   )
 
@@ -141,45 +156,50 @@ def debug_verify_reconstruction(batch, unemb, mesh):
   """Verify that saved data can be reconstructed and matches original.
 
   Called AFTER the scan completes (outside traced context).
+  Uses NamedSharding(mesh, P(*spec)) pattern from data.py.
   """
+  from jax.sharding import NamedSharding
+
   proc_idx = jax.process_index()
   save_dir = Path(f"/tmp/debug_loss_inputs/proc_{proc_idx}")
 
   _debug_log("=== VERIFICATION START ===", proc_idx)
 
-  # Load sharding info to get original dtypes
+  # Load sharding info
   with open(save_dir / "sharding_info.pkl", "rb") as f:
     sharding_info = pickle.load(f)
   dtypes = sharding_info.get("dtypes", {})
+  specs = sharding_info.get("specs", {})
 
-  # Get global shapes for reconstruction
-  global_shapes = {
-    "batch_inputs": sharding_info.get("inputs_global_shape"),
-    "batch_targets": sharding_info.get("targets_global_shape"),
-    "unemb_w": sharding_info.get("unemb_w_global_shape"),
-  }
+  def get_sharded_axis(spec):
+    """Find which axis is sharded (has non-None value in PartitionSpec)."""
+    if spec is None:
+      return None
+    for i, s in enumerate(spec):
+      if s is not None:
+        return i
+    return None
 
-  def load_and_reconstruct(name, orig_sharding, orig_dtype):
-    """Load saved shards and reconstruct sharded array."""
+  def load_and_reconstruct(name, orig_dtype):
+    """Load saved local data and reconstruct sharded array using NamedSharding."""
     data = np.load(save_dir / f"{name}.npy")
-    # data is (num_local_shards, *shard_shape)
-    local_shards = [data[i] for i in range(data.shape[0])]
-    # Pass global shape explicitly to avoid inference errors
-    global_shape = global_shapes.get(name)
-    reconstructed = jax.make_array_from_process_local_data(
-      orig_sharding, local_shards, shape=global_shape
-    )
-    # make_array_from_process_local_data may return a list in some JAX versions
-    if isinstance(reconstructed, list):
-      reconstructed = reconstructed[0]
+    spec = specs.get(name)
+    if spec is not None:
+      # Reconstruct using NamedSharding(mesh, P(*spec)) pattern from data.py
+      sharding = NamedSharding(mesh, jax.sharding.PartitionSpec(*spec))
+      reconstructed = jax.make_array_from_process_local_data(sharding, data)
+    else:
+      # No sharding info - just convert to jax array
+      reconstructed = jnp.array(data)
     # Convert back to original dtype if it was bfloat16
     if "bfloat16" in dtypes.get(name, ""):
       reconstructed = reconstructed.astype(jnp.bfloat16)
     return reconstructed
 
-  def to_local_numpy(arr):
-    # Use device_get to safely extract data
+  def to_local_numpy(arr, spec=None):
+    """Convert sharded array to per-process numpy by concatenating along sharded axis."""
     is_bf16 = hasattr(arr, "dtype") and arr.dtype == jnp.bfloat16
+    sharded_axis = get_sharded_axis(spec)
 
     if hasattr(arr, "addressable_shards"):
       local_shards = []
@@ -188,7 +208,12 @@ def debug_verify_reconstruction(batch, unemb, mesh):
         if is_bf16:
           shard_np = np.array(shard_np, dtype=np.float32)
         local_shards.append(shard_np)
-      return np.stack(local_shards, axis=0)
+      # Concatenate along sharded axis (same as save)
+      if sharded_axis is not None and len(local_shards) > 1:
+        return np.concatenate(local_shards, axis=sharded_axis)
+      return (
+        local_shards[0] if len(local_shards) == 1 else np.stack(local_shards, axis=0)
+      )
     data = jax.device_get(arr)
     if is_bf16:
       data = np.array(data, dtype=np.float32)
@@ -196,9 +221,12 @@ def debug_verify_reconstruction(batch, unemb, mesh):
 
   results = {}
 
-  def check_equal(name, orig, reconstructed):
-    orig_local = to_local_numpy(orig)
-    recon_local = to_local_numpy(reconstructed)
+  def check_equal(name, orig, reconstructed, spec=None):
+    orig_local = to_local_numpy(orig, spec)
+    recon_local = to_local_numpy(reconstructed, spec)
+    if orig_local.shape != recon_local.shape:
+      results[name] = f"SHAPE_MISMATCH({orig_local.shape} vs {recon_local.shape})"
+      return False
     if np.array_equal(orig_local, recon_local):
       results[name] = "EXACT"
       return True
@@ -214,16 +242,17 @@ def debug_verify_reconstruction(batch, unemb, mesh):
 
   inputs, targets = batch
 
-  # Test 1: Reconstruct batch from saved shards
-  inputs_recon = load_and_reconstruct("batch_inputs", inputs.sharding, inputs.dtype)
-  targets_recon = load_and_reconstruct("batch_targets", targets.sharding, targets.dtype)
-  unemb_w_recon = load_and_reconstruct("unemb_w", unemb.w.sharding, unemb.w.dtype)
+  # Test 1: Reconstruct batch from saved local data using NamedSharding pattern
+  inputs_recon = load_and_reconstruct("batch_inputs", inputs.dtype)
+  targets_recon = load_and_reconstruct("batch_targets", targets.dtype)
+  unemb_w_recon = load_and_reconstruct("unemb_w", unemb.w.dtype)
 
-  check_equal("batch_inputs", inputs, inputs_recon)
-  check_equal("batch_targets", targets, targets_recon)
-  check_equal("unemb_w", unemb.w, unemb_w_recon)
+  check_equal("batch_inputs", inputs, inputs_recon, specs.get("batch_inputs"))
+  check_equal("batch_targets", targets, targets_recon, specs.get("batch_targets"))
+  check_equal("unemb_w", unemb.w, unemb_w_recon, specs.get("unemb_w"))
 
   # Test 2: Check that saved microbatches match slices of the full batch
+  targets_spec = specs.get("batch_targets")
   for mb_idx in range(2):
     suffix = f"_mb{mb_idx}"
     if not (save_dir / f"targets{suffix}.npy").exists():
@@ -234,9 +263,9 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     mb_targets_saved = np.load(save_dir / f"targets{suffix}.npy")
 
     # Get corresponding slice from full batch
-    # batch_targets has shape (num_local_shards, num_microbatches, batch_per_mb, seq_len)
-    batch_targets_local = to_local_numpy(targets)
-    mb_targets_from_batch = batch_targets_local[:, mb_idx, :, :]
+    # After concatenation along sharded axis, shape is (num_microbatches, local_batch, seq_len)
+    batch_targets_local = to_local_numpy(targets, targets_spec)
+    mb_targets_from_batch = batch_targets_local[mb_idx, :, :]
 
     if np.array_equal(mb_targets_saved, mb_targets_from_batch):
       results[f"mb{mb_idx}_targets"] = "EXACT"
