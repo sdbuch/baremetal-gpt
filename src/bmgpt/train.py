@@ -129,10 +129,6 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
       if orig_dtype == jnp.bfloat16:
         data = data.view(np.uint16)
     np.save(save_dir / f"{name}.npy", data)
-    _debug_log(
-      f"save {name}: orig_dtype={orig_dtype}, saved_dtype={data.dtype}, shape={data.shape}",
-      proc_idx,
-    )
     return data.shape
 
   # batch is (inputs, targets), each with shape (num_microbatches, batch_per_mb, seq_len, ...)
@@ -192,20 +188,12 @@ def debug_verify_reconstruction(batch, unemb, mesh):
 
     For bfloat16: data was saved as uint16, convert via bytes for exact bit preservation.
     """
-
     data_uint16 = np.load(save_dir / f"{name}.npy")
-    saved_dtype = data_uint16.dtype
     saved_shape = data_uint16.shape
     # For bfloat16: convert uint16 -> bytes -> bfloat16 for exact bit preservation
     if "bfloat16" in dtypes.get(name, ""):
-      # Use tobytes/frombuffer for exact bit-level conversion
       raw_bytes = data_uint16.tobytes()
       data = np.frombuffer(raw_bytes, dtype=ml_dtypes.bfloat16).reshape(saved_shape)
-      # Debug: print first few uint16 values from file
-      _debug_log(
-        f"load {name}: first uint16 from file: {data_uint16.flat[:3]}",
-        proc_idx,
-      )
     else:
       data = data_uint16
     spec = specs.get(name)
@@ -216,11 +204,6 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     else:
       # No sharding info - just convert to jax array
       reconstructed = jnp.array(data)
-    _debug_log(
-      f"load {name}: saved_dtype={saved_dtype}, loaded_dtype={data.dtype}, "
-      f"recon_dtype={reconstructed.dtype}, shape={data.shape}",
-      proc_idx,
-    )
     return reconstructed
 
   def to_local_numpy(arr, spec=None):
@@ -267,15 +250,6 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     # Don't try float conversion on uint16 data
     if orig_local.dtype == np.uint16:
       num_diff = np.sum(orig_local != recon_local)
-      # Debug: print first few values where they differ
-      diff_idx = np.where(orig_local != recon_local)
-      if len(diff_idx[0]) > 0:
-        first_diff = tuple(idx[0] for idx in diff_idx)
-        _debug_log(
-          f"{name} first diff at {first_diff}: "
-          f"orig={orig_local[first_diff]} recon={recon_local[first_diff]}",
-          proc_idx,
-        )
       results[name] = f"MISMATCH({num_diff} bits differ)"
       return False
     # For other dtypes, try float comparison
