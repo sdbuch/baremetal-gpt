@@ -10,6 +10,8 @@ Usage:
      uv run python tests/test_debug_gradients.py
 """
 
+from collections import defaultdict
+from itertools import combinations
 import jax
 import jax.numpy as jnp
 
@@ -243,14 +245,14 @@ def mwe():
   T = 256
   V = 1024
   D = 3 * 64
-  dtype = jnp.bfloat16
   key = jax.random.key(42)
   kx, kw, kt = jax.random.split(key, 3)
   mesh = jax.make_mesh((32,), ("x",), (jax.sharding.AxisType.Explicit,))
+
   with jax.set_mesh(mesh):
-    x = jax.random.normal(kx, (T, D), dtype=dtype, out_sharding=jax.P("x"))
+    x = jax.random.normal(kx, (T, D), dtype=jnp.float32, out_sharding=jax.P("x"))
     t = jax.random.randint(kt, (T,), 0, V, out_sharding=jax.P("x"))
-    w = jax.random.normal(kw, (V, D), dtype=dtype, out_sharding=jax.P(None, "x"))
+    w = jax.random.normal(kw, (V, D), dtype=jnp.float32, out_sharding=jax.P(None, "x"))
 
   def loss(w: jax.Array, x, t):
     w_rep = jax.sharding.reshard(w, jax.P())
@@ -266,13 +268,20 @@ def mwe():
     loss = (gathered * x_rep).sum()
     return loss
 
-  with jax.set_mesh(mesh):
-    loss, grad = jax.value_and_grad(loss)(w, x, t)
-    loss_rep, grad_rep = jax.value_and_grad(loss_replicated)(w, x, t)
+  results = defaultdict(dict)
 
-  print('loss', loss)
-  print('loss replicated', loss_rep)
-  print(jnp.sum(jnp.abs(grad - grad_rep)))
+  for dtype in [jnp.bfloat16, jnp.float32]:
+    for loss_fn in [loss, loss_replicated]:
+      with jax.set_mesh(mesh):
+        loss, grad = jax.value_and_grad(loss_fn)(w.astype(dtype), x.astype(dtype), t.astype(dtype))
+      results[loss_fn.__name__][dtype.__name__] = (loss, grad)
+
+  for dtype_str, d in results.items():
+    for loss_str, (loss, grad) in d.items():
+      print(dtype_str, loss_str, loss)
+    errs = [g0 - g1 for (g0, g1) in combinations([v[-1] for v in d.values()], 2)]
+    for err in errs:
+      print(dtype_str, err)
 
 
 if __name__ == "__main__":
