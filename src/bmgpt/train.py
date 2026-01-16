@@ -37,45 +37,157 @@ register_configs()
 _debug_microbatch_counter = 0  # Track which microbatch we're on
 
 
-def _debug_save_callback(outputs, targets, unemb_w, config_dict):
-  """Callback that runs with concrete values - does actual file I/O."""
-  global _debug_microbatch_counter
-  microbatch_idx = _debug_microbatch_counter
-  _debug_microbatch_counter += 1
+def _debug_log(msg, proc_idx=None, host0_only=False):
+  """Print debug message with consistent formatting."""
+  if proc_idx is None:
+    proc_idx = jax.process_index()
+  if host0_only and proc_idx != 0:
+    return
+  print(f"[DEBUG][H{proc_idx}] {msg}", flush=True)
+
+
+def _debug_save_microbatch_callback(outputs, targets, microbatch_idx):
+  """Callback that runs with concrete values inside scan - saves microbatch outputs."""
+  proc_idx = jax.process_index()
+  save_dir = Path(f"/tmp/debug_loss_inputs/proc_{proc_idx}")
+  save_dir.mkdir(parents=True, exist_ok=True)
+  suffix = f"_mb{int(microbatch_idx)}"
+
+  # Save arrays (concrete from callback)
+  np.save(save_dir / f"outputs{suffix}.npy", np.asarray(outputs))
+  np.save(save_dir / f"targets{suffix}.npy", np.asarray(targets))
+
+  _debug_log(f"saved microbatch {int(microbatch_idx)} outputs/targets", proc_idx)
+
+
+def debug_save_microbatch(outputs, targets, microbatch_idx):
+  """Save microbatch outputs/targets from inside scan using jax.debug.callback."""
+  jax.debug.callback(_debug_save_microbatch_callback, outputs, targets, microbatch_idx)
+
+
+def debug_save_batch_and_weights(config, batch, unemb, mesh):
+  """Save full batch and weights BEFORE the scan (outside traced context).
+
+  This saves the sharded arrays properly so we can verify reconstruction.
+  """
+  from omegaconf import OmegaConf
 
   proc_idx = jax.process_index()
   save_dir = Path(f"/tmp/debug_loss_inputs/proc_{proc_idx}")
   save_dir.mkdir(parents=True, exist_ok=True)
-  suffix = f"_mb{microbatch_idx}"
 
-  # Save arrays (already concrete numpy arrays from callback)
-  np.save(save_dir / f"outputs{suffix}.npy", np.asarray(outputs))
-  np.save(save_dir / f"targets{suffix}.npy", np.asarray(targets))
-  np.save(save_dir / f"unemb_w{suffix}.npy", np.asarray(unemb_w))
+  def save_sharded(arr, name):
+    """Save sharded array - stack local shards."""
+    if hasattr(arr, "addressable_shards"):
+      local_shards = [np.asarray(s.data) for s in arr.addressable_shards]
+      data = np.stack(local_shards, axis=0)
+    else:
+      data = np.asarray(arr)
+    np.save(save_dir / f"{name}.npy", data)
+    return data.shape
 
-  # Save config
-  with open(save_dir / f"config{suffix}.pkl", "wb") as f:
-    pickle.dump(config_dict, f)
+  # batch is (inputs, targets), each with shape (num_microbatches, batch_per_mb, seq_len, ...)
+  inputs, targets = batch
+  inputs_shape = save_sharded(inputs, "batch_inputs")
+  targets_shape = save_sharded(targets, "batch_targets")
+  unemb_shape = save_sharded(unemb.w, "unemb_w")
 
-  print(
-    f"[DEBUG] Saved loss inputs to {save_dir} (proc {proc_idx}, microbatch {microbatch_idx})"
+  # Save config and sharding info
+  config_dict = OmegaConf.to_container(config, resolve=True)
+  sharding_info = {
+    "config": config_dict,
+    "inputs_sharding": str(inputs.sharding) if hasattr(inputs, "sharding") else None,
+    "targets_sharding": str(targets.sharding) if hasattr(targets, "sharding") else None,
+    "unemb_w_sharding": str(unemb.w.sharding) if hasattr(unemb.w, "sharding") else None,
+  }
+  with open(save_dir / "sharding_info.pkl", "wb") as f:
+    pickle.dump(sharding_info, f)
+
+  _debug_log(
+    f"saved batch inputs={inputs_shape} targets={targets_shape} unemb={unemb_shape}",
+    proc_idx,
   )
 
 
-def debug_save_loss_inputs(config, unemb, outputs, targets, mesh):
-  """Save loss function inputs for offline debugging using jax.debug.callback.
+def debug_verify_reconstruction(batch, unemb, mesh):
+  """Verify that saved data can be reconstructed and matches original.
 
-  Uses jax.debug.callback to handle traced values from inside jax.lax.scan.
-  Saves per-process local shards to /tmp/debug_loss_inputs/
-  Assumes num_steps=1, num_microbatches=2.
+  Called AFTER the scan completes (outside traced context).
   """
-  from omegaconf import OmegaConf
+  proc_idx = jax.process_index()
+  save_dir = Path(f"/tmp/debug_loss_inputs/proc_{proc_idx}")
 
-  # Convert config to dict outside the callback (config is not traced)
-  config_dict = OmegaConf.to_container(config, resolve=True)
+  _debug_log("=== VERIFICATION START ===", proc_idx)
 
-  # Use jax.debug.callback to save with concrete values at runtime
-  jax.debug.callback(_debug_save_callback, outputs, targets, unemb.w, config_dict)
+  def load_and_reconstruct(name, orig_sharding):
+    """Load saved shards and reconstruct sharded array."""
+    data = np.load(save_dir / f"{name}.npy")
+    # data is (num_local_shards, *shard_shape)
+    local_shards = [data[i] for i in range(data.shape[0])]
+    reconstructed = jax.make_array_from_process_local_data(orig_sharding, local_shards)
+    return reconstructed
+
+  def to_local_numpy(arr):
+    if hasattr(arr, "addressable_shards"):
+      local_shards = [np.asarray(s.data) for s in arr.addressable_shards]
+      return np.stack(local_shards, axis=0)
+    return np.asarray(arr)
+
+  results = {}
+
+  def check_equal(name, orig, reconstructed):
+    orig_local = to_local_numpy(orig)
+    recon_local = to_local_numpy(reconstructed)
+    if np.array_equal(orig_local, recon_local):
+      results[name] = "EXACT"
+      return True
+    elif np.allclose(orig_local.astype(np.float32), recon_local.astype(np.float32)):
+      results[name] = "CLOSE"
+      return True
+    else:
+      max_diff = np.max(
+        np.abs(orig_local.astype(np.float32) - recon_local.astype(np.float32))
+      )
+      results[name] = f"MISMATCH(diff={max_diff:.2e})"
+      return False
+
+  inputs, targets = batch
+
+  # Test 1: Reconstruct batch from saved shards
+  inputs_recon = load_and_reconstruct("batch_inputs", inputs.sharding)
+  targets_recon = load_and_reconstruct("batch_targets", targets.sharding)
+  unemb_w_recon = load_and_reconstruct("unemb_w", unemb.w.sharding)
+
+  check_equal("batch_inputs", inputs, inputs_recon)
+  check_equal("batch_targets", targets, targets_recon)
+  check_equal("unemb_w", unemb.w, unemb_w_recon)
+
+  # Test 2: Check that saved microbatches match slices of the full batch
+  for mb_idx in range(2):
+    suffix = f"_mb{mb_idx}"
+    if not (save_dir / f"targets{suffix}.npy").exists():
+      results[f"mb{mb_idx}_targets"] = "MISSING"
+      continue
+
+    # Load microbatch targets saved from inside scan
+    mb_targets_saved = np.load(save_dir / f"targets{suffix}.npy")
+
+    # Get corresponding slice from full batch
+    # batch_targets has shape (num_local_shards, num_microbatches, batch_per_mb, seq_len)
+    batch_targets_local = to_local_numpy(targets)
+    mb_targets_from_batch = batch_targets_local[:, mb_idx, :, :]
+
+    if np.array_equal(mb_targets_saved, mb_targets_from_batch):
+      results[f"mb{mb_idx}_targets"] = "EXACT"
+    else:
+      results[f"mb{mb_idx}_targets"] = (
+        f"MISMATCH(shapes:{mb_targets_saved.shape}vs{mb_targets_from_batch.shape})"
+      )
+
+  # Print compact summary
+  summary = " | ".join(f"{k}:{v}" for k, v in results.items())
+  _debug_log(f"VERIFY: {summary}", proc_idx)
+  _debug_log("=== VERIFICATION DONE ===", proc_idx)
 
 
 # Setup for training loop
@@ -141,17 +253,21 @@ def main(config: Config):
   # DEBUG: disabled JIT for debugging fused xent backward
   # @partial(jax.jit, donate_argnums=2)
   def train_step(config: Config, batch, state: TrainState, step: int = -1):
-    def loss_fn(params: Transformer, microbatch: tuple[jax.Array, jax.Array]):
-      inputs, targets = microbatch
+    # DEBUG: save full batch and weights BEFORE scan (step 0 only)
+    if step == 0:
+      debug_save_batch_and_weights(config, batch, state.params.unemb, mesh)
+
+    def loss_fn(params: Transformer, microbatch_with_idx):
+      microbatch_idx, inputs, targets = microbatch_with_idx
       outputs, _ = jax.vmap(
         partial(
           _transformer, config, train_attn_kernel, params, cache_params=cache_params
         )
       )(inputs, state.kv_cache)
 
-      # DEBUG: save loss inputs at step 0
+      # DEBUG: save microbatch outputs/targets at step 0
       if step == 0:
-        debug_save_loss_inputs(config, params.unemb, outputs, targets, mesh)
+        debug_save_microbatch(outputs, targets, microbatch_idx)
 
       if config.use_fused_xent_loss:
         loss = fused_softmax_cross_entropy(
@@ -162,15 +278,22 @@ def main(config: Config):
       return loss
 
     # Calculate gradients: use a scan for gradient accumulation
-    def gradient_accum(loss__grad, microbatch):
+    def gradient_accum(loss__grad, microbatch_with_idx):
       loss_accum, grad_accum = loss__grad
-      loss, grad = jax.value_and_grad(loss_fn)(state.params, microbatch)
+      loss, grad = jax.value_and_grad(loss_fn)(state.params, microbatch_with_idx)
       return (loss_accum + loss, jax.tree.map(jnp.add, grad_accum, grad)), loss
 
     zeros_like_fp32 = partial(jnp.zeros_like, dtype=jnp.float32)
     carry = (jnp.zeros(()), jax.tree.map(zeros_like_fp32, state.params))
-    (loss, grad), raw_losses = jax.lax.scan(gradient_accum, carry, batch)
+    # Add microbatch indices to scan inputs
+    num_microbatches = config.train_dataset.num_microbatches
+    indexed_batch = (jnp.arange(num_microbatches), batch[0], batch[1])
+    (loss, grad), raw_losses = jax.lax.scan(gradient_accum, carry, indexed_batch)
     assert raw_losses.dtype == jnp.float32
+
+    # DEBUG: verify reconstruction AFTER scan (step 0 only)
+    if step == 0:
+      debug_verify_reconstruction(batch, state.params.unemb, mesh)
     # NOTE: breaks if per-token loss masking introduced (see unsloth blog)
     loss = loss / config.train_dataset.num_microbatches
     grad = jax.tree.map(lambda x: x / config.train_dataset.num_microbatches, grad)
