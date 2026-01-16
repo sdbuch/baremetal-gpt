@@ -169,46 +169,14 @@ def main():
       mb_outputs = all_outputs[mb_idx]  # (batch_per_mb, seq, hidden)
       mb_targets = batch_targets[mb_idx]  # (batch_per_mb, seq)
 
-      # --- FUSED LOSS ---
-      @jax.jit
-      def fused_grad_fn(outputs, unemb_head):
-        def fused_loss(outputs, unemb_head):
-          return fused_softmax_cross_entropy(
-            config, unemb_head, outputs, mb_targets, lse_kernel
-          )
+      # --- NONFUSED LOSS FIRST (to test if it works without fused in memory) ---
+      def nonfused_loss(outputs, unemb_head):
+        return softmax_cross_entropy(config, unemb_head, outputs, mb_targets)
 
-        return jax.value_and_grad(fused_loss, argnums=(0, 1))(outputs, unemb_head)
-
-      loss_f, (grad_outputs_f, grad_unemb_f) = fused_grad_fn(mb_outputs, unemb)
-
-      # Extract fused stats immediately (use sum of squares for sharded arrays)
-      fused_stats = {
-        "loss": float(loss_f),
-        "grad_out_norm": float(jnp.sqrt(jnp.sum(grad_outputs_f**2))),
-        "grad_out_mean": float(jnp.mean(grad_outputs_f)),
-        "grad_out_std": float(jnp.std(grad_outputs_f)),
-        "grad_out_min": float(jnp.min(grad_outputs_f)),
-        "grad_out_max": float(jnp.max(grad_outputs_f)),
-        "grad_w_norm": float(jnp.sqrt(jnp.sum(grad_unemb_f.w**2))),
-        "grad_w_mean": float(jnp.mean(grad_unemb_f.w)),
-        "grad_w_std": float(jnp.std(grad_unemb_f.w)),
-        "grad_w_min": float(jnp.min(grad_unemb_f.w)),
-        "grad_w_max": float(jnp.max(grad_unemb_f.w)),
-      }
-      # Delete fused gradients and clear caches to free memory before nonfused
-      del loss_f, grad_outputs_f, grad_unemb_f
-      jax.clear_caches()
-
-      # --- NONFUSED LOSS ---
-      # JIT compile to enable better memory management like in training
-      @jax.jit
-      def nonfused_grad_fn(outputs, unemb_head):
-        def nonfused_loss(outputs, unemb_head):
-          return softmax_cross_entropy(config, unemb_head, outputs, mb_targets)
-
-        return jax.value_and_grad(nonfused_loss, argnums=(0, 1))(outputs, unemb_head)
-
-      loss_nf, (grad_outputs_nf, grad_unemb_nf) = nonfused_grad_fn(mb_outputs, unemb)
+      _log("  Computing nonfused gradients...")
+      loss_nf, (grad_outputs_nf, grad_unemb_nf) = jax.value_and_grad(
+        nonfused_loss, argnums=(0, 1)
+      )(mb_outputs, unemb)
 
       # Extract nonfused stats
       nonfused_stats = {
@@ -225,7 +193,33 @@ def main():
         "grad_w_max": float(jnp.max(grad_unemb_nf.w)),
       }
       del loss_nf, grad_outputs_nf, grad_unemb_nf
+      jax.clear_caches()
 
+      # --- FUSED LOSS ---
+      def fused_loss(outputs, unemb_head):
+        return fused_softmax_cross_entropy(
+          config, unemb_head, outputs, mb_targets, lse_kernel
+        )
+
+      _log("  Computing fused gradients...")
+      loss_f, (grad_outputs_f, grad_unemb_f) = jax.value_and_grad(
+        fused_loss, argnums=(0, 1)
+      )(mb_outputs, unemb)
+
+      # Extract fused stats immediately (use sum of squares for sharded arrays)
+      fused_stats = {
+        "loss": float(loss_f),
+        "grad_out_norm": float(jnp.sqrt(jnp.sum(grad_outputs_f**2))),
+        "grad_out_mean": float(jnp.mean(grad_outputs_f)),
+        "grad_out_std": float(jnp.std(grad_outputs_f)),
+        "grad_out_min": float(jnp.min(grad_outputs_f)),
+        "grad_out_max": float(jnp.max(grad_outputs_f)),
+        "grad_w_norm": float(jnp.sqrt(jnp.sum(grad_unemb_f.w**2))),
+        "grad_w_mean": float(jnp.mean(grad_unemb_f.w)),
+        "grad_w_std": float(jnp.std(grad_unemb_f.w)),
+        "grad_w_min": float(jnp.min(grad_unemb_f.w)),
+        "grad_w_max": float(jnp.max(grad_unemb_f.w)),
+      }
       # --- COMPARE ---
       _log(
         f"  Loss:       fused={fused_stats['loss']:.6f}, nonfused={nonfused_stats['loss']:.6f}"
