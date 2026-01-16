@@ -203,13 +203,12 @@ def debug_load_sharding_info(variant: str) -> tuple[dict, dict, "Config"]:
     variant: "fused" or "nonfused"
 
   Returns:
-    Tuple of (dtypes dict, specs dict, Config object)
+    Tuple of (dtypes dict, specs dict, Config DictConfig)
   """
   save_dir = debug_get_save_dir(variant)
 
-  # Load config from YAML and convert to Config object
-  loaded_cfg = OmegaConf.load(save_dir / "config.yaml")
-  config = OmegaConf.to_object(loaded_cfg)
+  # Load config from YAML (returns DictConfig which supports attribute access)
+  config = OmegaConf.load(save_dir / "config.yaml")
 
   # Load sharding info (specs, dtypes)
   with open(save_dir / "sharding_info.pkl", "rb") as f:
