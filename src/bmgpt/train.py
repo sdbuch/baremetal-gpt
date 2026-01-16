@@ -257,6 +257,15 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     # Don't try float conversion on uint16 data
     if orig_local.dtype == np.uint16:
       num_diff = np.sum(orig_local != recon_local)
+      # Debug: print first few values where they differ
+      diff_idx = np.where(orig_local != recon_local)
+      if len(diff_idx[0]) > 0:
+        first_diff = tuple(idx[0] for idx in diff_idx)
+        _debug_log(
+          f"{name} first diff at {first_diff}: "
+          f"orig={orig_local[first_diff]} recon={recon_local[first_diff]}",
+          proc_idx,
+        )
       results[name] = f"MISMATCH({num_diff} bits differ)"
       return False
     # For other dtypes, try float comparison
