@@ -95,11 +95,11 @@ def main(config: Config):
   def train_step(config: Config, batch, state: TrainState):
     def loss_fn(params: Transformer, microbatch: tuple[jax.Array, jax.Array]):
       inputs, targets = microbatch
-      outputs, _ = jax.vmap(
-        partial(
-          _transformer, config, train_attn_kernel, params, cache_params=cache_params
-        )
-      )(inputs, state.kv_cache)
+      params = jax.tree.map(lambda p: p.astype(config.model.compute_dtype), params)
+      model = partial(
+        _transformer, config, train_attn_kernel, params, cache_params=cache_params
+      )
+      outputs, _ = jax.vmap(model)(inputs, state.kv_cache)
       if config.use_fused_xent_loss:
         loss = fused_softmax_cross_entropy(
           config, params.unemb, outputs, targets, train_lse_kernel

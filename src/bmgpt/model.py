@@ -141,11 +141,7 @@ def _apply_rope(
 ):
   x_1, x_2 = x[:, : config.model.d_head // 2], x[:, config.model.d_head // 2 :]
   c, s = cos.at[positions].get(), sin.at[positions].get()
-  return jnp.concatenate(
-    (c * x_1 - s * x_2, c * x_2 + s * x_1),
-    axis=-1,
-    dtype=config.model.param_dtype.value,
-  )
+  return jnp.concatenate((c * x_1 - s * x_2, c * x_2 + s * x_1), axis=-1, dtype=x.dtype)
 
 
 def _make_causal_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
@@ -240,11 +236,11 @@ def _attn(
       mask = ~_make_cache_mask(s, t, 0)  # full attention
     mask = mask[None, ...]  # broadcast over heads
     # Scale and causal mask
-    logits = jnp.einsum("nsh,nth->nst", q, k).astype(jnp.float32)
+    logits = jnp.einsum("nsh,nth->nst", q, k, preferred_element_type=jnp.float32)
     logits *= 1.0 / config.model.d_head**0.5
     logits = jnp.where(mask, logits, -jnp.inf)
     probs = jax.nn.softmax(logits, axis=2)  # type: ignore[reportArgumentType]
-    probs = probs.astype(config.model.param_dtype.value)
+    probs = probs.astype(q.dtype)
     attn_out = jnp.einsum("nst,nth->nsh", probs, v)
   out = jnp.einsum(
     "nsh,dnh->sd",
@@ -279,7 +275,7 @@ def init_embedding_discrete(config: Config, key) -> EmbeddingDiscrete:
 def _embedding_discrete(config: Config, params: EmbeddingDiscrete, tokens: jax.Array):
   w_f32 = params.w.astype(jnp.float32)  # upcast to perform the bwd scatter-add in fp32
   emb = w_f32.at[tokens].get(out_sharding=jax.P(*config.sharding.res_stream))
-  emb = emb.astype(config.model.param_dtype.value)
+  emb = emb.astype(params.w.dtype)
   if config.model.use_bias_embeddings:
     emb += params.bias
   return emb
@@ -407,14 +403,14 @@ def init_layernorm(config: Config) -> LayerNorm:
 
 def _layernorm(config: Config, params: LayerNorm, x: Array):
   """Naive three-pass layernorm algorithm. (layer/RMS norm, with/without bias)"""
-  x = x.astype(jnp.float32)
+  out = x.astype(jnp.float32)
   if config.model.use_centering_ln:
-    x = x - x.mean()
-  x = x * jax.lax.rsqrt(config.model.eps_ln + (x**2).mean())
-  out = params.gamma * x
+    out = out - out.mean()
+  out = out * jax.lax.rsqrt(config.model.eps_ln + (out**2).mean())
+  out = params.gamma * out
   if config.model.use_bias_ln:
     out += params.beta
-  return out.astype(config.model.param_dtype.value)
+  return out.astype(x.dtype)
 
 
 ##################################
@@ -532,7 +528,7 @@ def init_kv_cache(
       cache_capacity,
       config.model.d_head,
     ),
-    dtype=config.model.param_dtype.value,
+    dtype=config.model.compute_dtype.value,
     out_sharding=sharding,
   )
 

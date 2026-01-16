@@ -146,8 +146,9 @@ class ModelConfig:
   num_classes: int = MISSING  # output dim (equals input dim for text tf)
 
   # Model dtypes
-  # Select operations (layernorm, logits, rope) always done in FP32
+  # Select operations (layernorm, logits, rope) always done in fp32
   param_dtype: DType = DType.BFLOAT16  # master weights dtype
+  compute_dtype: DType = DType.BFLOAT16  # forward/backward pass dtype
   opt_dtype: DType = DType.FLOAT32  # optimizer state dtype
 
   # Model call-time params
