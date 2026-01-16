@@ -282,19 +282,8 @@ def debug_verify_reconstruction(batch, unemb, mesh, all_outputs):
       ).reshape(mb_targets_saved_np.shape)
     mb_targets_saved = jnp.array(mb_targets_saved_np)
 
-    # Get corresponding slice from full batch (as JAX array)
-    mb_targets_from_batch = batch_targets_global[mb_idx]
-
-    # Check dtype, shape, and values
-    if mb_targets_saved.dtype != mb_targets_from_batch.dtype:
-      results[f"mb{mb_idx}_targets"] = (
-        f"DTYPE_MISMATCH({mb_targets_saved.dtype} vs {mb_targets_from_batch.dtype})"
-      )
-    elif jnp.array_equal(mb_targets_saved, mb_targets_from_batch):
-      results[f"mb{mb_idx}_targets"] = "EXACT"
-    else:
-      num_diff = jnp.sum(mb_targets_saved != mb_targets_from_batch)
-      results[f"mb{mb_idx}_targets"] = f"MISMATCH({num_diff} values differ)"
+    # Compare against slice from full batch
+    check_equal(f"mb{mb_idx}_targets", batch_targets_global[mb_idx], mb_targets_saved)
 
     # Load microbatch outputs and compare against train_step outputs
     mb_outputs_saved_np = np.load(save_dir / f"outputs{suffix}.npy")
@@ -304,19 +293,8 @@ def debug_verify_reconstruction(batch, unemb, mesh, all_outputs):
       ).reshape(mb_outputs_saved_np.shape)
     mb_outputs_saved = jnp.array(mb_outputs_saved_np)
 
-    # Get corresponding outputs from train_step (as JAX array)
-    mb_outputs_from_step = all_outputs_global[mb_idx]
-
-    # Check dtype, shape, and values
-    if mb_outputs_saved.dtype != mb_outputs_from_step.dtype:
-      results[f"mb{mb_idx}_outputs"] = (
-        f"DTYPE_MISMATCH({mb_outputs_saved.dtype} vs {mb_outputs_from_step.dtype})"
-      )
-    elif jnp.array_equal(mb_outputs_saved, mb_outputs_from_step):
-      results[f"mb{mb_idx}_outputs"] = "EXACT"
-    else:
-      num_diff = jnp.sum(mb_outputs_saved != mb_outputs_from_step)
-      results[f"mb{mb_idx}_outputs"] = f"MISMATCH({num_diff} values differ)"
+    # Compare against outputs from train_step
+    check_equal(f"mb{mb_idx}_outputs", all_outputs_global[mb_idx], mb_outputs_saved)
 
   # Print compact summary
   summary = " | ".join(f"{k}:{v}" for k, v in results.items())
