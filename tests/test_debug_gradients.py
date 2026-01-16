@@ -46,7 +46,7 @@ def load_variant_data(variant: str, mesh):
   arrays = {}
   for name in ["batch_inputs", "batch_targets", "unemb_w", "all_outputs"]:
     arrays[name] = debug_load_and_reconstruct(name, variant, mesh, dtypes, specs)
-    _log(f"loaded {name}: {arrays[name].shape} {arrays[name].dtype}")
+    _log(f"loaded {name}: {jax.typeof(arrays[name])}")
 
   return arrays, config
 
@@ -99,7 +99,7 @@ def main():
     for variant in available_variants:
       _log(f"{variant}:")
       for name, arr in variant_data[variant].items():
-        _log(f"  {name}: shape={arr.shape}, dtype={arr.dtype}")
+        _log(f"  {name}: {jax.typeof(arr)}")
 
     # Verify inputs match between fused and nonfused (they should be identical)
     if len(available_variants) == 2:
@@ -141,12 +141,12 @@ def main():
     _log("=" * 60)
     _log("INPUT STATISTICS")
     _log("=" * 60)
-    _log(f"  unemb.w: shape={unemb_w.shape}, dtype={unemb_w.dtype}")
+    _log(f"  unemb.w: {jax.typeof(unemb_w)}")
     _log(
       f"    mean={float(jnp.mean(unemb_w)):.6f}, std={float(jnp.std(unemb_w)):.6f}, "
       f"min={float(jnp.min(unemb_w)):.6f}, max={float(jnp.max(unemb_w)):.6f}"
     )
-    _log(f"  all_outputs: shape={all_outputs.shape}, dtype={all_outputs.dtype}")
+    _log(f"  all_outputs: {jax.typeof(all_outputs)}")
     _log(
       f"    mean={float(jnp.mean(all_outputs)):.6f}, std={float(jnp.std(all_outputs)):.6f}, "
       f"min={float(jnp.min(all_outputs)):.6f}, max={float(jnp.max(all_outputs)):.6f}"
