@@ -85,7 +85,8 @@ def fused_softmax_cross_entropy(
   # lse = lse_sharded(lse_kernel, q / d**0.25, k / d**0.25, v, segment_ids)
   lse = lse_sharded(lse_kernel, q, k).squeeze(0)
   # per_token_unembs = w_unemb.at[targets].get(out_sharding=jax.P(*config.sharding.data))
-  per_token_unembs = w_unemb.at[targets].get()
+  # per_token_unembs = w_unemb.at[targets].get(out_sharding=jax.P(*config.sharding.data))
+  per_token_unembs = w_unemb[targets]
   label_logits = jnp.einsum(
     "td,td->t", outputs, per_token_unembs, preferred_element_type=jnp.float32
   )
