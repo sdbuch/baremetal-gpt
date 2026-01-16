@@ -275,7 +275,9 @@ def init_embedding_discrete(config: Config, key) -> EmbeddingDiscrete:
 
 
 def _embedding_discrete(config: Config, params: EmbeddingDiscrete, tokens: jax.Array):
-  emb = params.w.at[tokens].get(out_sharding=jax.P(*config.sharding.res_stream))
+  w_f32 = params.w.astype(jnp.float32) # upcast to perform the bwd scatter-add in fp32
+  emb = w_f32.at[tokens].get(out_sharding=jax.P(*config.sharding.res_stream))
+  emb = emb.astype(config.model.param_dtype.value)
   if config.model.use_bias_embeddings:
     emb += params.bias
   return emb

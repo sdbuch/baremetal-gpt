@@ -82,9 +82,11 @@ def fused_softmax_cross_entropy(
   # TODO: does the usual logit scaling make sense for outputs too?
   # lse = lse_sharded(lse_kernel, q / d**0.25, k / d**0.25, v, segment_ids)
   lse = lse_sharded(lse_kernel, q, k).squeeze(0)
-  per_token_unembs = w_unemb.at[targets].get(out_sharding=jax.P(*config.sharding.data))
+  w_unemb_f32 = w_unemb.astype(jnp.float32) # perform the bwd scatter-add in fp32
+  target_unembs = w_unemb_f32.at[targets].get(out_sharding=jax.P(*config.sharding.data))
+  target_unembs = target_unembs.astype(w_unemb.dtype)
   label_logits = jnp.einsum(
-    "td,td->t", outputs, per_token_unembs, preferred_element_type=jnp.float32
+    "td,td->t", outputs, target_unembs, preferred_element_type=jnp.float32
   )
   loss = lse - label_logits
   if reduce:
