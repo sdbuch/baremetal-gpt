@@ -109,11 +109,11 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
 
   # batch is (inputs, targets), each with shape (num_microbatches, batch_per_mb, seq_len, ...)
   inputs, targets = batch
-  inputs_shape = save_sharded(inputs, "batch_inputs")
-  targets_shape = save_sharded(targets, "batch_targets")
-  unemb_shape = save_sharded(unemb.w, "unemb_w")
+  inputs_local_shape = save_sharded(inputs, "batch_inputs")
+  targets_local_shape = save_sharded(targets, "batch_targets")
+  unemb_local_shape = save_sharded(unemb.w, "unemb_w")
 
-  # Save config and sharding info
+  # Save config and sharding info - include GLOBAL shapes for reconstruction
   config_dict = OmegaConf.to_container(config, resolve=True)
   sharding_info = {
     "config": config_dict,
@@ -121,12 +121,18 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
     "targets_sharding": str(targets.sharding) if hasattr(targets, "sharding") else None,
     "unemb_w_sharding": str(unemb.w.sharding) if hasattr(unemb.w, "sharding") else None,
     "dtypes": dtypes,  # Store original dtypes
+    # Store GLOBAL shapes (not local) for make_array_from_process_local_data
+    "inputs_global_shape": inputs.shape,
+    "targets_global_shape": targets.shape,
+    "unemb_w_global_shape": unemb.w.shape,
   }
   with open(save_dir / "sharding_info.pkl", "wb") as f:
     pickle.dump(sharding_info, f)
 
   _debug_log(
-    f"saved batch inputs={inputs_shape} targets={targets_shape} unemb={unemb_shape}",
+    f"saved batch inputs={inputs_local_shape} (global={inputs.shape}) "
+    f"targets={targets_local_shape} (global={targets.shape}) "
+    f"unemb={unemb_local_shape} (global={unemb.w.shape})",
     proc_idx,
   )
 
@@ -146,12 +152,23 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     sharding_info = pickle.load(f)
   dtypes = sharding_info.get("dtypes", {})
 
+  # Get global shapes for reconstruction
+  global_shapes = {
+    "batch_inputs": sharding_info.get("inputs_global_shape"),
+    "batch_targets": sharding_info.get("targets_global_shape"),
+    "unemb_w": sharding_info.get("unemb_w_global_shape"),
+  }
+
   def load_and_reconstruct(name, orig_sharding, orig_dtype):
     """Load saved shards and reconstruct sharded array."""
     data = np.load(save_dir / f"{name}.npy")
     # data is (num_local_shards, *shard_shape)
     local_shards = [data[i] for i in range(data.shape[0])]
-    reconstructed = jax.make_array_from_process_local_data(orig_sharding, local_shards)
+    # Pass global shape explicitly to avoid inference errors
+    global_shape = global_shapes.get(name)
+    reconstructed = jax.make_array_from_process_local_data(
+      orig_sharding, local_shards, shape=global_shape
+    )
     # make_array_from_process_local_data may return a list in some JAX versions
     if isinstance(reconstructed, list):
       reconstructed = reconstructed[0]
