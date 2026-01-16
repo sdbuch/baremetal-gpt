@@ -298,7 +298,22 @@ def mwe():
     text_replicated = compiled_replicated.as_text()
 
     if jax.process_index() == 0:
+      # Save DOT graphs to files for visualization
+      dot_sharded = compiled_sharded.as_hlo_dot_graph()
+      dot_replicated = compiled_replicated.as_hlo_dot_graph()
+
+      with open("/tmp/sharded_grad.dot", "w") as f:
+        f.write(dot_sharded)
+      with open("/tmp/replicated_grad.dot", "w") as f:
+        f.write(dot_replicated)
+
       print("=" * 60)
+      print("DOT files written to /tmp/sharded_grad.dot and /tmp/replicated_grad.dot")
+      print("To visualize: dot -Tpng /tmp/sharded_grad.dot -o sharded.png")
+      print("Or paste into: https://dreampuf.github.io/GraphvizOnline/")
+      print("=" * 60)
+
+      # Also print text HLO for reference
       print("SHARDED GRAD HLO")
       print("=" * 60)
       print(text_sharded)
