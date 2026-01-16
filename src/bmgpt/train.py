@@ -90,7 +90,10 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
     return None
 
   def save_sharded(arr, name):
-    """Save per-process local data by concatenating device shards along sharded axis."""
+    """Save per-process local data by concatenating device shards along sharded axis.
+
+    For bfloat16: view as uint16 to preserve exact bits (numpy doesn't support bfloat16).
+    """
     orig_dtype = arr.dtype
     dtypes[name] = str(orig_dtype)
 
@@ -107,10 +110,10 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
       local_shards = []
       for s in arr.addressable_shards:
         shard_np = jax.device_get(s.data)
+        shard_np = np.asarray(shard_np)
+        # For bfloat16: view as uint16 to preserve exact bits
         if orig_dtype == jnp.bfloat16:
-          shard_np = np.array(shard_np, dtype=np.float32)
-        else:
-          shard_np = np.asarray(shard_np)
+          shard_np = shard_np.view(np.uint16)
         local_shards.append(shard_np)
       # Concatenate along sharded axis to get per-process data (like dataloader produces)
       if sharded_axis is not None and len(local_shards) > 1:
@@ -122,10 +125,9 @@ def debug_save_batch_and_weights(config, batch, unemb, mesh):
         )
     else:
       data = jax.device_get(arr)
+      data = np.asarray(data)
       if orig_dtype == jnp.bfloat16:
-        data = np.array(data, dtype=np.float32)
-      else:
-        data = np.asarray(data)
+        data = data.view(np.uint16)
     np.save(save_dir / f"{name}.npy", data)
     return data.shape
 
@@ -181,8 +183,16 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     return None
 
   def load_and_reconstruct(name, orig_dtype):
-    """Load saved local data and reconstruct sharded array using NamedSharding."""
+    """Load saved local data and reconstruct sharded array using NamedSharding.
+
+    For bfloat16: data was saved as uint16, view back as bfloat16 for exact reconstruction.
+    """
     data = np.load(save_dir / f"{name}.npy")
+    # For bfloat16: view uint16 back as bfloat16 (JAX can handle ml_dtypes.bfloat16)
+    if "bfloat16" in dtypes.get(name, ""):
+      import ml_dtypes
+
+      data = data.view(ml_dtypes.bfloat16)
     spec = specs.get(name)
     if spec is not None:
       # Reconstruct using NamedSharding(mesh, P(*spec)) pattern from data.py
@@ -191,13 +201,13 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     else:
       # No sharding info - just convert to jax array
       reconstructed = jnp.array(data)
-    # Convert back to original dtype if it was bfloat16
-    if "bfloat16" in dtypes.get(name, ""):
-      reconstructed = reconstructed.astype(jnp.bfloat16)
     return reconstructed
 
   def to_local_numpy(arr, spec=None):
-    """Convert sharded array to per-process numpy by concatenating along sharded axis."""
+    """Convert sharded array to per-process numpy by concatenating along sharded axis.
+
+    For bfloat16: view as uint16 for exact bit comparison.
+    """
     is_bf16 = hasattr(arr, "dtype") and arr.dtype == jnp.bfloat16
     sharded_axis = get_sharded_axis(spec)
 
@@ -205,8 +215,10 @@ def debug_verify_reconstruction(batch, unemb, mesh):
       local_shards = []
       for s in arr.addressable_shards:
         shard_np = jax.device_get(s.data)
+        shard_np = np.asarray(shard_np)
+        # For bfloat16: view as uint16 for exact bit comparison
         if is_bf16:
-          shard_np = np.array(shard_np, dtype=np.float32)
+          shard_np = shard_np.view(np.uint16)
         local_shards.append(shard_np)
       # Concatenate along sharded axis (same as save)
       if sharded_axis is not None and len(local_shards) > 1:
@@ -215,8 +227,9 @@ def debug_verify_reconstruction(batch, unemb, mesh):
         local_shards[0] if len(local_shards) == 1 else np.stack(local_shards, axis=0)
       )
     data = jax.device_get(arr)
+    data = np.asarray(data)
     if is_bf16:
-      data = np.array(data, dtype=np.float32)
+      data = data.view(np.uint16)
     return data
 
   results = {}
@@ -252,20 +265,21 @@ def debug_verify_reconstruction(batch, unemb, mesh):
   check_equal("unemb_w", unemb.w, unemb_w_recon, specs.get("unemb_w"))
 
   # Test 2: Check that saved microbatches match slices of the full batch
-  targets_spec = specs.get("batch_targets")
+  # Note: jax.debug.callback gathers data globally, so saved microbatches have global shape
+  # Only H0 has the files (callback runs once per step)
   for mb_idx in range(2):
     suffix = f"_mb{mb_idx}"
     if not (save_dir / f"targets{suffix}.npy").exists():
       results[f"mb{mb_idx}_targets"] = "MISSING"
       continue
 
-    # Load microbatch targets saved from inside scan
+    # Load microbatch targets saved from inside scan (global shape from callback)
     mb_targets_saved = np.load(save_dir / f"targets{suffix}.npy")
 
-    # Get corresponding slice from full batch
-    # After concatenation along sharded axis, shape is (num_microbatches, local_batch, seq_len)
-    batch_targets_local = to_local_numpy(targets, targets_spec)
-    mb_targets_from_batch = batch_targets_local[mb_idx, :, :]
+    # Get corresponding slice from full batch - need GLOBAL data since callback gathers
+    # device_get on sharded array gathers all shards to get global array
+    batch_targets_global = np.asarray(jax.device_get(targets))
+    mb_targets_from_batch = batch_targets_global[mb_idx, :, :]
 
     if np.array_equal(mb_targets_saved, mb_targets_from_batch):
       results[f"mb{mb_idx}_targets"] = "EXACT"
