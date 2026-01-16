@@ -187,8 +187,11 @@ def main():
           f"  Memory before nonfused grad: {stats.get('bytes_in_use', 0) / 1e9:.2f}GB"
         )
       _log("  Computing nonfused gradients...")
-      loss_nf, (grad_outputs_nf, grad_unemb_nf) = jax.value_and_grad(
-        nonfused_loss, argnums=(0, 1)
+      # loss_nf, (grad_outputs_nf, grad_unemb_nf) = jax.value_and_grad(
+      #   nonfused_loss, argnums=(0, 1)
+      # )(mb_outputs, unemb)
+      loss_nf, (grad_outputs_nf,) = jax.value_and_grad(
+        nonfused_loss, argnums=(0,)
       )(mb_outputs, unemb)
 
       # Extract nonfused stats
