@@ -147,7 +147,7 @@ class ModelConfig:
 
   # Model dtypes
   # Select operations (layernorm, logits, rope) always done in fp32
-  param_dtype: DType = DType.BFLOAT16  # master weights dtype
+  param_dtype: DType = DType.FLOAT32  # master weights dtype
   compute_dtype: DType = DType.BFLOAT16  # forward/backward pass dtype
   opt_dtype: DType = DType.FLOAT32  # optimizer state dtype
 
