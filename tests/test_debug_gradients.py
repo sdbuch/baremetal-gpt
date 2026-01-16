@@ -12,6 +12,7 @@ Usage:
 
 from collections import defaultdict
 from itertools import combinations
+
 import jax
 import jax.numpy as jnp
 
@@ -272,8 +273,9 @@ def mwe():
 
   for dtype in [jnp.bfloat16, jnp.float32]:
     for loss_fn in [loss, loss_replicated]:
+      w_dtype, x_dtype, t_dtype = jax.tree.map(lambda z: z.astype(dtype), (w, x, t))
       with jax.set_mesh(mesh):
-        loss, grad = jax.value_and_grad(loss_fn)(w.astype(dtype), x.astype(dtype), t.astype(dtype))
+        loss, grad = jax.value_and_grad(loss_fn)(w_dtype, x_dtype, t_dtype)
       results[loss_fn.__name__][dtype.__name__] = (loss, grad)
 
   for dtype_str, d in results.items():
