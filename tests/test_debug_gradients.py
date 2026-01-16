@@ -253,8 +253,8 @@ def mwe():
     w = jax.random.normal(kw, (V, D), dtype=jnp.float32, out_sharding=jax.P(None, "x"))
 
   def loss(w: jax.Array, x, t):
-    w_rep = jax.sharding.reshard(w, jax.P())
-    gathered = w_rep.at[t].get(out_sharding=jax.P("x"))
+    w_rep = jax.sharding.reshard(w, jax.P()).astype(jnp.float32)
+    gathered = w_rep.at[t].get(out_sharding=jax.P("x")).astype(w.dtype)
     # loss = (gathered * x).sum()
     loss = jnp.einsum(
       "td,td->", gathered, x, preferred_element_type=jnp.float32, out_sharding=jax.P()
