@@ -298,30 +298,18 @@ def mwe():
     text_replicated = compiled_replicated.as_text()
 
     if jax.process_index() == 0:
-      # Save DOT graphs to files for visualization
-      # Get HLO module and convert to DOT
-      hlo_sharded = compiled_sharded.runtime_executable().hlo_modules()[0]
-      hlo_replicated = compiled_replicated.runtime_executable().hlo_modules()[0]
-
-      dot_sharded = hlo_sharded.to_dot_graph()
-      dot_replicated = hlo_replicated.to_dot_graph()
-
-      with open("/tmp/sharded_grad.dot", "w") as f:
-        f.write(dot_sharded)
-      with open("/tmp/replicated_grad.dot", "w") as f:
-        f.write(dot_replicated)
+      # Save text HLO to files
+      with open("/tmp/sharded_grad.hlo", "w") as f:
+        f.write(text_sharded)
+      with open("/tmp/replicated_grad.hlo", "w") as f:
+        f.write(text_replicated)
 
       print("=" * 60)
-      print("DOT files written to /tmp/sharded_grad.dot and /tmp/replicated_grad.dot")
-      print("To visualize: dot -Tpng /tmp/sharded_grad.dot -o sharded.png")
-      print("Or paste into: https://dreampuf.github.io/GraphvizOnline/")
+      print("HLO files written to /tmp/sharded_grad.hlo and /tmp/replicated_grad.hlo")
       print("=" * 60)
-
-      # Also print text HLO for reference
       print("SHARDED GRAD HLO")
       print("=" * 60)
       print(text_sharded)
-
       print("=" * 60)
       print("REPLICATED GRAD HLO")
       print("=" * 60)
