@@ -40,7 +40,7 @@ def config_from_dict(config_dict: dict) -> Config:
     DType,
     ModelConfig,
     ShardingConfig,
-    TokenizerType,
+    SplitType,
     TransformerType,
   )
 
@@ -113,21 +113,28 @@ def config_from_dict(config_dict: dict) -> Config:
   else:
     dataset_name = DatasetName(dataset_name_val)
 
-  # Handle TokenizerType which might be an enum or an int
-  tokenizer_val = td["tokenizer"]
-  if isinstance(tokenizer_val, TokenizerType):
-    tokenizer = tokenizer_val
+  # Handle SplitType which might be an enum or a string
+  split_val = td["split"]
+  if isinstance(split_val, SplitType):
+    split = split_val
   else:
-    tokenizer = TokenizerType(tokenizer_val)
+    split = SplitType(split_val)
 
   config.train_dataset = DatasetConfig(
     name=dataset_name,
     path=td["path"],
+    split=split,
     seq_len=td["seq_len"],
+    max_valid_token_id=td["max_valid_token_id"],
     global_batch_size=td["global_batch_size"],
     num_microbatches=td["num_microbatches"],
-    max_valid_token_id=td["max_valid_token_id"],
-    tokenizer=tokenizer,
+    epochs_to_loop=td["epochs_to_loop"],
+    num_steps=td["num_steps"],
+    use_splash=td["use_splash"],
+    splash_block_size_q=td["splash_block_size_q"],
+    splash_block_size_kv=td["splash_block_size_kv"],
+    splash_block_size_kv_compute=td["splash_block_size_kv_compute"],
+    splash_use_fused_bwd_kernel=td["splash_use_fused_bwd_kernel"],
   )
 
   return config
@@ -223,12 +230,7 @@ def main():
         _debug_log(f"  {name}: DIFFER ({diff_count} elements)")
 
   # Create config from saved dict
-  try:
-    config = config_from_dict(config_dict)
-  except Exception as e:
-    _debug_log(f"Failed to create Config from dict: {e}")
-    _debug_log("Falling back to direct dict access")
-    config = None
+  config = config_from_dict(config_dict)
 
   # Create LSE kernel for fused loss (using same logic as forward_kernels_from_config)
   _debug_log("=" * 60)
@@ -273,11 +275,6 @@ def main():
   # Create LMHead with zero bias
   num_vocab = model["num_vocab"]
   unemb = LMHead(w=unemb_w, bias=jnp.zeros(num_vocab, dtype=unemb_w.dtype))
-
-  # Ensure we have a valid config for loss functions
-  if config is None:
-    _debug_log("ERROR: Config creation failed, cannot compute gradients")
-    return
 
   num_microbatches = all_outputs.shape[0]
   _debug_log(f"Processing {num_microbatches} microbatches")
