@@ -243,7 +243,7 @@ def main():
 
 
 def mwe():
-  T = 2
+  T = 32
   V = 4
   D = 3
   key = jax.random.key(42)
