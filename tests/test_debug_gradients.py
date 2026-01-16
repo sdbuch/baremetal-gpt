@@ -165,24 +165,21 @@ def main():
     for mb_idx in range(num_microbatches):
       _log(f"--- Microbatch {mb_idx} ---")
 
-      # Get microbatch data - use smaller slice for nonfused to avoid OOM
-      # Full logits would be ~8GB per device, which exceeds available memory
+      # Get microbatch data
       mb_outputs = all_outputs[mb_idx]  # (batch_per_mb, seq, hidden)
       mb_targets = batch_targets[mb_idx]  # (batch_per_mb, seq)
-      # For nonfused comparison, use only first 2 sequences (reduces logits from 8GB to 1GB)
-      mb_outputs_small = mb_outputs[:2]
-      mb_targets_small = mb_targets[:2]
 
-      # --- FUSED LOSS (on small batch for comparison) ---
-      # Use small batch for both fused and nonfused to enable direct comparison
-      def fused_loss_small(outputs, unemb_head):
-        return fused_softmax_cross_entropy(
-          config, unemb_head, outputs, mb_targets_small, lse_kernel
-        )
+      # --- FUSED LOSS ---
+      @jax.jit
+      def fused_grad_fn(outputs, unemb_head):
+        def fused_loss(outputs, unemb_head):
+          return fused_softmax_cross_entropy(
+            config, unemb_head, outputs, mb_targets, lse_kernel
+          )
 
-      loss_f, (grad_outputs_f, grad_unemb_f) = jax.value_and_grad(
-        fused_loss_small, argnums=(0, 1)
-      )(mb_outputs_small, unemb)
+        return jax.value_and_grad(fused_loss, argnums=(0, 1))(outputs, unemb_head)
+
+      loss_f, (grad_outputs_f, grad_unemb_f) = fused_grad_fn(mb_outputs, unemb)
 
       # Extract fused stats immediately (use sum of squares for sharded arrays)
       fused_stats = {
@@ -202,13 +199,16 @@ def main():
       del loss_f, grad_outputs_f, grad_unemb_f
       jax.clear_caches()
 
-      # --- NONFUSED LOSS (on same small batch) ---
-      def nonfused_loss(outputs, unemb_head):
-        return softmax_cross_entropy(config, unemb_head, outputs, mb_targets_small)
+      # --- NONFUSED LOSS ---
+      # JIT compile to enable better memory management like in training
+      @jax.jit
+      def nonfused_grad_fn(outputs, unemb_head):
+        def nonfused_loss(outputs, unemb_head):
+          return softmax_cross_entropy(config, unemb_head, outputs, mb_targets)
 
-      loss_nf, (grad_outputs_nf, grad_unemb_nf) = jax.value_and_grad(
-        nonfused_loss, argnums=(0, 1)
-      )(mb_outputs_small, unemb)
+        return jax.value_and_grad(nonfused_loss, argnums=(0, 1))(outputs, unemb_head)
+
+      loss_nf, (grad_outputs_nf, grad_unemb_nf) = nonfused_grad_fn(mb_outputs, unemb)
 
       # Extract nonfused stats
       nonfused_stats = {
