@@ -298,22 +298,22 @@ def mwe():
     text_replicated = compiled_replicated.as_text()
 
     if jax.process_index() == 0:
-      # Save text HLO to files
-      with open("/tmp/sharded_grad.hlo", "w") as f:
-        f.write(text_sharded)
-      with open("/tmp/replicated_grad.hlo", "w") as f:
-        f.write(text_replicated)
-
-      print("=" * 60)
-      print("HLO files written to /tmp/sharded_grad.hlo and /tmp/replicated_grad.hlo")
-      print("=" * 60)
-      print("SHARDED GRAD HLO")
-      print("=" * 60)
-      print(text_sharded)
-      print("=" * 60)
-      print("REPLICATED GRAD HLO")
-      print("=" * 60)
-      print(text_replicated)
+      # # Save text HLO to files
+      # with open("/tmp/sharded_grad.hlo", "w") as f:
+      #   f.write(text_sharded)
+      # with open("/tmp/replicated_grad.hlo", "w") as f:
+      #   f.write(text_replicated)
+      #
+      # print("=" * 60)
+      # print("HLO files written to /tmp/sharded_grad.hlo and /tmp/replicated_grad.hlo")
+      # print("=" * 60)
+      # print("SHARDED GRAD HLO")
+      # print("=" * 60)
+      # print(text_sharded)
+      # print("=" * 60)
+      # print("REPLICATED GRAD HLO")
+      # print("=" * 60)
+      # print(text_replicated)
 
     # Run and compare results
     g_sharded = grad_sharded(w_dtype, x_dtype, t)
