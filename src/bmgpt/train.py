@@ -243,15 +243,21 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     if np.array_equal(orig_local, recon_local):
       results[name] = "EXACT"
       return True
-    elif np.allclose(orig_local.astype(np.float32), recon_local.astype(np.float32)):
+    # For uint16 views (bfloat16), array_equal is the only valid check
+    # Don't try float conversion on uint16 data
+    if orig_local.dtype == np.uint16:
+      num_diff = np.sum(orig_local != recon_local)
+      results[name] = f"MISMATCH({num_diff} bits differ)"
+      return False
+    # For other dtypes, try float comparison
+    if np.allclose(orig_local.astype(np.float32), recon_local.astype(np.float32)):
       results[name] = "CLOSE"
       return True
-    else:
-      max_diff = np.max(
-        np.abs(orig_local.astype(np.float32) - recon_local.astype(np.float32))
-      )
-      results[name] = f"MISMATCH(diff={max_diff:.2e})"
-      return False
+    max_diff = np.max(
+      np.abs(orig_local.astype(np.float32) - recon_local.astype(np.float32))
+    )
+    results[name] = f"MISMATCH(diff={max_diff:.2e})"
+    return False
 
   inputs, targets = batch
 
@@ -267,6 +273,13 @@ def debug_verify_reconstruction(batch, unemb, mesh):
   # Test 2: Check that saved microbatches match slices of the full batch
   # Note: jax.debug.callback gathers data globally, so saved microbatches have global shape
   # Only H0 has the files (callback runs once per step)
+  # Use process_allgather to get global data in multi-host setup
+  from jax.experimental.multihost_utils import process_allgather
+
+  # Gather targets globally for comparison (only needed on H0 where files exist)
+  if proc_idx == 0:
+    batch_targets_global = np.asarray(process_allgather(targets))
+
   for mb_idx in range(2):
     suffix = f"_mb{mb_idx}"
     if not (save_dir / f"targets{suffix}.npy").exists():
@@ -276,9 +289,7 @@ def debug_verify_reconstruction(batch, unemb, mesh):
     # Load microbatch targets saved from inside scan (global shape from callback)
     mb_targets_saved = np.load(save_dir / f"targets{suffix}.npy")
 
-    # Get corresponding slice from full batch - need GLOBAL data since callback gathers
-    # device_get on sharded array gathers all shards to get global array
-    batch_targets_global = np.asarray(jax.device_get(targets))
+    # Get corresponding slice from full batch
     mb_targets_from_batch = batch_targets_global[mb_idx, :, :]
 
     if np.array_equal(mb_targets_saved, mb_targets_from_batch):
