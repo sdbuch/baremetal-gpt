@@ -53,8 +53,8 @@ def softmax_cross_entropy(
   )
   logits = jnp.where(valid_ids_mask, logits, -jnp.inf)
   lse = jax.nn.logsumexp(logits, axis=-1)
-  # loss = lse - label_logits
-  loss = -label_logits
+  loss = lse - label_logits
+  # loss = -label_logits
   # loss = lse
   if reduce:
     return loss.mean()
@@ -84,27 +84,15 @@ def fused_softmax_cross_entropy(
   # TODO: does the usual logit scaling make sense for outputs too?
   # lse = lse_sharded(lse_kernel, q / d**0.25, k / d**0.25, v, segment_ids)
   lse = lse_sharded(lse_kernel, q, k).squeeze(0)
-  # per_token_unembs = w_unemb.at[targets].get(out_sharding=jax.P(*config.sharding.data))
-  targets = jax.sharding.reshard(targets, out_shardings=jax.P())
-  outputs = jax.sharding.reshard(outputs, out_shardings=jax.P())
-  per_token_unembs = w_unemb[targets]
-  # Gather rows from w_unemb at target indices
-  # per_token_unembs = jax.lax.gather(
-  #     w_unemb,
-  #     targets[:, None],  # (num_tokens, 1)
-  #     dimension_numbers=jax.lax.GatherDimensionNumbers(
-  #         offset_dims=(1,),           # hidden dim is offset
-  #         collapsed_slice_dims=(0,),  # collapse the indexed vocab dim
-  #         start_index_map=(0,),       # index into dim 0 (vocab)
-  #     ),
-  #     slice_sizes=(1, w_unemb.shape[1]),
-  # )
-  # per_token_unembs shape: (num_tokens, hidden)
+  per_token_unembs = w_unemb.at[targets].get(out_sharding=jax.P(*config.sharding.data))
+  # targets = jax.sharding.reshard(targets, out_shardings=jax.P())
+  # outputs = jax.sharding.reshard(outputs, out_shardings=jax.P())
+  # per_token_unembs = w_unemb[targets]
   label_logits = jnp.einsum(
     "td,td->t", outputs, per_token_unembs, preferred_element_type=jnp.float32
   )
-  # loss = lse - label_logits
-  loss = -label_logits
+  loss = lse - label_logits
+  # loss = -label_logits
   # loss = lse
   if reduce:
     return loss.mean()
