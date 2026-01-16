@@ -191,7 +191,6 @@ def debug_verify_reconstruction(batch, unemb, mesh):
 
     For bfloat16: data was saved as uint16, convert via bytes for exact bit preservation.
     """
-    import ml_dtypes
 
     data_uint16 = np.load(save_dir / f"{name}.npy")
     saved_dtype = data_uint16.dtype
@@ -295,18 +294,21 @@ def debug_verify_reconstruction(batch, unemb, mesh):
   targets_recon = load_and_reconstruct("batch_targets", targets.dtype)
   unemb_w_recon = load_and_reconstruct("unemb_w", unemb.w.dtype)
 
-  # Debug: compare first few uint16 values from original and reconstructed unemb_w
-  if hasattr(unemb.w, "addressable_shards"):
-    orig_first_shard = jax.device_get(list(unemb.w.addressable_shards)[0].data)
-    orig_first_uint16 = np.asarray(orig_first_shard).view(np.uint16).flat[:3]
-    recon_first_shard = jax.device_get(list(unemb_w_recon.addressable_shards)[0].data)
-    recon_first_uint16 = np.asarray(recon_first_shard).view(np.uint16).flat[:3]
-    _debug_log(f"unemb_w orig first shard uint16: {orig_first_uint16}", proc_idx)
-    _debug_log(f"unemb_w recon first shard uint16: {recon_first_uint16}", proc_idx)
-
   check_equal("batch_inputs", inputs, inputs_recon, specs.get("batch_inputs"))
   check_equal("batch_targets", targets, targets_recon, specs.get("batch_targets"))
-  check_equal("unemb_w", unemb.w, unemb_w_recon, specs.get("unemb_w"))
+
+  # For unemb_w: model params change during training, so compare reconstructed vs saved file directly
+  # (not against live model state which has been updated)
+  import ml_dtypes
+
+  unemb_saved_uint16 = np.load(save_dir / "unemb_w.npy")
+  unemb_recon_local = to_local_numpy(unemb_w_recon, specs.get("unemb_w"))
+  # Both should be uint16 at this point
+  if np.array_equal(unemb_saved_uint16, unemb_recon_local):
+    results["unemb_w"] = "EXACT"
+  else:
+    num_diff = np.sum(unemb_saved_uint16 != unemb_recon_local)
+    results["unemb_w"] = f"MISMATCH({num_diff} bits differ)"
 
   # Test 2: Check that saved microbatches match slices of the full batch
   # Note: jax.debug.callback gathers data globally, so saved microbatches have global shape
