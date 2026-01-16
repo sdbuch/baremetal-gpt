@@ -129,6 +129,10 @@ def main():
         else:
           diff_count = jnp.sum(fused_arr != nonfused_arr)
           _log(f"  {name}: DIFFER ({diff_count} elements)")
+        # Check memory after each comparison
+        stats = jax.local_devices()[0].memory_stats()
+        if stats:
+          _log(f"    mem after {name}: {stats.get('bytes_in_use', 0) / 1e9:.2f}GB")
 
     # Check memory before creating kernels
     _log("=" * 60)
