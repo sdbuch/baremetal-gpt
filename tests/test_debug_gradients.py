@@ -32,8 +32,7 @@ from bmgpt.train import (
 def config_from_dict(config_dict: dict) -> Config:
   """Create a Config object from a saved config dict.
 
-  Creates a default Config and updates fields from the saved dict.
-  This avoids issues with MISSING values and enum conversion.
+  Uses the saved values directly without inferring defaults.
   """
   from bmgpt.config import (
     DatasetConfig,
@@ -45,7 +44,6 @@ def config_from_dict(config_dict: dict) -> Config:
     TransformerType,
   )
 
-  # Create base config with defaults
   config = Config()
 
   # Update sharding
@@ -56,49 +54,60 @@ def config_from_dict(config_dict: dict) -> Config:
     data=s["data"],
   )
 
-  # Update model config (use .get() with defaults for fields that might be missing)
+  # Update model config
   m = config_dict["model"]
 
   # Handle param_dtype which might be a DType enum or a string
-  param_dtype_val = m.get("param_dtype", "bfloat16")
+  param_dtype_val = m["param_dtype"]
   if isinstance(param_dtype_val, DType):
     param_dtype = param_dtype_val
-  elif isinstance(param_dtype_val, str):
-    param_dtype = DType[param_dtype_val.upper().replace(".", "_")]
   else:
-    param_dtype = DType.BFLOAT16
+    param_dtype = DType[param_dtype_val.upper().replace(".", "_")]
 
   # Handle transformer_type which might be a TransformerType enum or a string
-  transformer_type_val = m.get("transformer_type", "discrete")
+  transformer_type_val = m["transformer_type"]
   if isinstance(transformer_type_val, TransformerType):
     transformer_type = transformer_type_val
-  elif isinstance(transformer_type_val, str):
-    transformer_type = TransformerType(transformer_type_val)
   else:
-    transformer_type = TransformerType.DISCRETE
+    transformer_type = TransformerType(transformer_type_val)
 
   config.model = ModelConfig(
-    num_heads=m.get("num_heads", 12),
-    num_layers=m.get("num_layers", 12),
-    d_model=m.get("d_model", 768),
-    d_head=m.get("d_head", 64),
-    d_ff=m.get("d_ff", m.get("d_model", 768) * 4),  # Default to 4x d_model
-    num_vocab=m["num_vocab"],  # Required
-    max_seq_len=m.get("max_seq_len", 2048),
+    num_heads=m["num_heads"],
+    num_layers=m["num_layers"],
+    d_model=m["d_model"],
+    d_head=m["d_head"],
+    d_ff=m["d_ff"],
+    num_vocab=m["num_vocab"],
+    max_seq_len=m["max_seq_len"],
     param_dtype=param_dtype,
     transformer_type=transformer_type,
   )
 
   # Update train_dataset config
   td = config_dict["train_dataset"]
+
+  # Handle DatasetName which might be an enum or a string
+  dataset_name_val = td["name"]
+  if isinstance(dataset_name_val, DatasetName):
+    dataset_name = dataset_name_val
+  else:
+    dataset_name = DatasetName(dataset_name_val)
+
+  # Handle TokenizerType which might be an enum or an int
+  tokenizer_val = td["tokenizer"]
+  if isinstance(tokenizer_val, TokenizerType):
+    tokenizer = tokenizer_val
+  else:
+    tokenizer = TokenizerType(tokenizer_val)
+
   config.train_dataset = DatasetConfig(
-    name=DatasetName(td["name"]),
-    path=td.get("path", ""),
+    name=dataset_name,
+    path=td["path"],
     seq_len=td["seq_len"],
     global_batch_size=td["global_batch_size"],
     num_microbatches=td["num_microbatches"],
     max_valid_token_id=td["max_valid_token_id"],
-    tokenizer=TokenizerType(td.get("tokenizer", 0)),
+    tokenizer=tokenizer,
   )
 
   return config
