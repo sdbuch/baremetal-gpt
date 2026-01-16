@@ -202,9 +202,11 @@ def main():
       )(mb_outputs, unemb)
 
       # Log fused loss and gradient statistics
+      # Note: use sum of squares instead of ravel().norm() to work with sharded arrays
       _debug_log(f"  Fused loss: {float(loss_f):.6f}")
 
-      grad_out_f_norm = float(jnp.linalg.norm(grad_outputs_f.ravel()))
+      grad_out_f_sumsq = float(jnp.sum(grad_outputs_f**2))
+      grad_out_f_norm = float(jnp.sqrt(grad_out_f_sumsq))
       grad_out_f_mean = float(jnp.mean(grad_outputs_f))
       grad_out_f_std = float(jnp.std(grad_outputs_f))
       grad_out_f_min = float(jnp.min(grad_outputs_f))
@@ -214,7 +216,8 @@ def main():
         f"std={grad_out_f_std:.6e}, min={grad_out_f_min:.6e}, max={grad_out_f_max:.6e}"
       )
 
-      grad_w_f_norm = float(jnp.linalg.norm(grad_unemb_f.w.ravel()))
+      grad_w_f_sumsq = float(jnp.sum(grad_unemb_f.w**2))
+      grad_w_f_norm = float(jnp.sqrt(grad_w_f_sumsq))
       grad_w_f_mean = float(jnp.mean(grad_unemb_f.w))
       grad_w_f_std = float(jnp.std(grad_unemb_f.w))
       grad_w_f_min = float(jnp.min(grad_unemb_f.w))
