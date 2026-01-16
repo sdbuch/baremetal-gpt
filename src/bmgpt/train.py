@@ -189,15 +189,18 @@ def debug_verify_reconstruction(batch, unemb, mesh):
   def load_and_reconstruct(name, orig_dtype):
     """Load saved local data and reconstruct sharded array using NamedSharding.
 
-    For bfloat16: data was saved as uint16, view back as bfloat16 for exact reconstruction.
+    For bfloat16: data was saved as uint16, convert via bytes for exact bit preservation.
     """
+    import ml_dtypes
+
     data = np.load(save_dir / f"{name}.npy")
     saved_dtype = data.dtype
-    # For bfloat16: view uint16 back as bfloat16 (JAX can handle ml_dtypes.bfloat16)
+    saved_shape = data.shape
+    # For bfloat16: convert uint16 -> bytes -> bfloat16 for exact bit preservation
     if "bfloat16" in dtypes.get(name, ""):
-      import ml_dtypes
-
-      data = data.view(ml_dtypes.bfloat16)
+      # Use tobytes/frombuffer for exact bit-level conversion
+      raw_bytes = data.tobytes()
+      data = np.frombuffer(raw_bytes, dtype=ml_dtypes.bfloat16).reshape(saved_shape)
     spec = specs.get(name)
     if spec is not None:
       # Reconstruct using NamedSharding(mesh, P(*spec)) pattern from data.py
@@ -207,7 +210,7 @@ def debug_verify_reconstruction(batch, unemb, mesh):
       # No sharding info - just convert to jax array
       reconstructed = jnp.array(data)
     _debug_log(
-      f"load {name}: saved_dtype={saved_dtype}, view_dtype={data.dtype}, "
+      f"load {name}: saved_dtype={saved_dtype}, loaded_dtype={data.dtype}, "
       f"recon_dtype={reconstructed.dtype}, shape={data.shape}",
       proc_idx,
     )
