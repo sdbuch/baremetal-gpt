@@ -312,15 +312,18 @@ def mwe():
     g_sharded = grad_sharded(w_dtype, x_dtype, t)
     g_replicated = grad_replicated(w_dtype, x_dtype, t)
 
+    # Compute all reductions on all processes (collective ops)
     err = jnp.abs(g_sharded - g_replicated).sum()
+    norm_sharded = jnp.linalg.norm(g_sharded)
+    norm_replicated = jnp.linalg.norm(g_replicated)
 
     if jax.process_index() == 0:
       print("=" * 60)
       print("RESULTS")
       print("=" * 60)
       print(f"Gradient L1 error: {err}")
-      print(f"Sharded grad norm: {jnp.linalg.norm(g_sharded)}")
-      print(f"Replicated grad norm: {jnp.linalg.norm(g_replicated)}")
+      print(f"Sharded grad norm: {norm_sharded}")
+      print(f"Replicated grad norm: {norm_replicated}")
 
 
 if __name__ == "__main__":
