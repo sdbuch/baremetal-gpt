@@ -172,13 +172,9 @@ def main():
     for mb_idx in [0]:
       _log(f"--- Microbatch {mb_idx} ---")
 
-      # Get microbatch data - slice to first 2 sequences to reduce memory
-      mb_outputs = all_outputs[
-        mb_idx, :2
-      ]  # (2, seq, hidden) instead of (8, seq, hidden)
-      mb_targets = batch_targets[mb_idx, :2]  # (2, seq)
-      _log(f"  mb_outputs slice: {jax.typeof(mb_outputs)}")
-      _log(f"  mb_targets slice: {jax.typeof(mb_targets)}")
+      # Get microbatch data
+      mb_outputs = all_outputs[mb_idx]  # (batch_per_mb, seq, hidden)
+      mb_targets = batch_targets[mb_idx]  # (batch_per_mb, seq)
 
       # --- NONFUSED LOSS FIRST (to test if it works without fused in memory) ---
       def nonfused_loss(outputs, unemb_head):
