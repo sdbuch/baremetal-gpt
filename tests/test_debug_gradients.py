@@ -334,5 +334,5 @@ def mwe():
 
 
 if __name__ == "__main__":
-  # main()
-  mwe()
+  main()
+  # mwe()
