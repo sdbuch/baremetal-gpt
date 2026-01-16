@@ -184,6 +184,12 @@ def main():
       def nonfused_loss(outputs, unemb_head):
         return softmax_cross_entropy(config, unemb_head, outputs, mb_targets)
 
+      # Memory check right before gradient computation
+      stats = jax.local_devices()[0].memory_stats()
+      if stats:
+        _log(
+          f"  Memory before nonfused grad: {stats.get('bytes_in_use', 0) / 1e9:.2f}GB"
+        )
       _log("  Computing nonfused gradients...")
       loss_nf, (grad_outputs_nf, grad_unemb_nf) = jax.value_and_grad(
         nonfused_loss, argnums=(0, 1)
