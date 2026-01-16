@@ -257,7 +257,8 @@ def mwe():
     loss = (gathered * x).sum()
     return loss
 
-  grad = jax.grad(loss)(w, x, t)
+  with jax.set_mesh(mesh):
+    grad = jax.grad(loss)(w, x, t)
 
 
 if __name__ == "__main__":
