@@ -287,23 +287,26 @@ def mwe():
     grad_sharded = jax.jit(jax.grad(loss))
     grad_replicated = jax.jit(jax.grad(loss_replicated))
 
-    # Lower and compile on all processes (required for multi-host)
+    # Lower, compile, and get text on all processes (required for multi-host)
     # but only print on process 0
     lowered_sharded = grad_sharded.lower(w_dtype, x_dtype, t)
     compiled_sharded = lowered_sharded.compile()
+    text_sharded = compiled_sharded.as_text()
+
     lowered_replicated = grad_replicated.lower(w_dtype, x_dtype, t)
     compiled_replicated = lowered_replicated.compile()
+    text_replicated = compiled_replicated.as_text()
 
     if jax.process_index() == 0:
       print("=" * 60)
       print("SHARDED GRAD HLO")
       print("=" * 60)
-      print(compiled_sharded.as_text())
+      print(text_sharded)
 
       print("=" * 60)
       print("REPLICATED GRAD HLO")
       print("=" * 60)
-      print(compiled_replicated.as_text())
+      print(text_replicated)
 
     # Run and compare results
     g_sharded = grad_sharded(w_dtype, x_dtype, t)
