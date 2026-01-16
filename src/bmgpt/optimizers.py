@@ -58,19 +58,65 @@ def init_adam_state(config: Config, param: jax.Array) -> OptState:
   )
 
 
+def init_sgd_state(config: Config, param: jax.Array) -> OptState:
+  return OptState(
+    mu=jnp.zeros_like(param, dtype=config.model.opt_dtype.value),
+    nu=jnp.array(()),
+    step=jnp.array(0, dtype=jnp.int32),
+  )
+
+
+##############################
+#   Learning Rate Schedules
+##############################
+
+
+def linear_warmup(config: Config, step: jax.Array):
+  """Range from base_lr to peak_lr over num_warmup_steps, then cap."""
+  base_lr = config.optimizer.base_lr
+  peak_lr = config.optimizer.peak_lr
+  max_step = config.optimizer.num_warmup_steps - 1
+  if max_step <= 0:
+    return jnp.array(peak_lr)
+  linear_ramp = lambda eta: base_lr + eta * (peak_lr - base_lr) / max_step
+  return jnp.minimum(linear_ramp(step), peak_lr)
+
+
+def cosine_decay(config: Config, step: jax.Array, num_warmup_steps: int = 0):
+  """Cosine decay schedule from peak_lr to base_lr over num_steps."""
+  peak_lr = config.optimizer.peak_lr
+  min_lr = config.optimizer.min_lr
+  max_step = config.train_dataset.num_steps - num_warmup_steps - 1
+  assert max_step >= 0  # NOTE: doesn't support epoch-based currently
+
+  progress = jnp.array(1.0) if max_step == 0 else jnp.clip(step / max_step, 0, 1)
+  cosine_decay = 0.5 * (1 + jnp.cos(jnp.pi * progress))
+  return min_lr + (peak_lr - min_lr) * cosine_decay
+
+
+def cosine_with_warmup(config: Config, step: jax.Array):
+  num_warmup_steps = max(config.optimizer.num_warmup_steps, 1)
+  return jnp.where(
+    step < num_warmup_steps,
+    linear_warmup(config, step),
+    cosine_decay(config, step - num_warmup_steps + 1, num_warmup_steps=num_warmup_steps - 1),
+  )
+
+
 ##############################
 #          Updates
 ##############################
 
+# TODO: Expose configuration options for LR schedulers
 
 def adamw_update(
   config: Config, wd_mask: bool, param: jax.Array, grad: jax.Array, state: OptState
 ):
   beta1 = config.optimizer.beta1
   beta2 = config.optimizer.beta2
-  lr = config.optimizer.lr
   eps = config.optimizer.eps_adam
   weight_decay = config.optimizer.weight_decay
+  lr = cosine_with_warmup(config, state.step)
 
   mu = beta1 * state.mu + (1 - beta1) * grad
   nu = beta2 * state.nu + (1 - beta2) * grad**2
@@ -88,7 +134,16 @@ def adamw_update(
 def sgd_update(
   config: Config, wd_mask: bool, param: jax.Array, grad: jax.Array, state: OptState
 ):
-  update = -config.optimizer.lr * grad
+  beta1 = config.optimizer.beta1
+  weight_decay = config.optimizer.weight_decay
+  lr = cosine_with_warmup(config, state.step)
+
+  mu = beta1 * state.mu + (1 - beta1) * grad
+  new_state = OptState(mu=mu, nu=state.nu, step=state.step + 1)
+
+  # simulate initializing the buffers with initial gradients via pre-incrementing step
+  mu_debias = mu / (1 - beta1**new_state.step)
+  update = -lr * mu_debias
   if wd_mask:
-    update = update - config.optimizer.lr * config.optimizer.weight_decay * param
+    update = update - lr * weight_decay * param
   return update.astype(config.model.param_dtype.value), state

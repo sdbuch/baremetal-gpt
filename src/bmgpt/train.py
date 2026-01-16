@@ -25,7 +25,12 @@ from bmgpt.model import (
   init_transformer,
   model_spec,
 )
-from bmgpt.optimizers import grad_norm_and_clip, init_adam_state, opt_update_factory
+from bmgpt.optimizers import (
+  cosine_decay,
+  grad_norm_and_clip,
+  init_adam_state,
+  opt_update_factory,
+)
 from bmgpt.splash_helpers import forward_kernels_from_config
 
 register_configs()
@@ -131,7 +136,11 @@ def main(config: Config):
     params = jax.tree.map(jnp.add, state.params, update)
     new_state = TrainState(params=params, opt_state=opt_state, kv_cache=state.kv_cache)
 
-    metrics = {"batch_loss": loss, "grad_norm": global_grad_norm}
+    metrics = {
+      "lr": cosine_decay(config, state.opt_state.step),
+      "batch_loss": loss,
+      "grad_norm": global_grad_norm,
+    }
     return metrics, new_state
 
   # Training loop

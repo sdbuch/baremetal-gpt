@@ -116,7 +116,10 @@ class OptimizerConfig:
   """Optimizer params. optimizers.py"""
 
   type: OptType = OptType.ADAMW
-  lr: float = 3e-4
+  base_lr: float = 1e-6
+  peak_lr: float = 3e-4
+  min_lr: float = 3e-6
+  num_warmup_steps: int = 200
   beta1: float = 0.9
   beta2: float = 0.999
   eps_adam: float = 1e-8
