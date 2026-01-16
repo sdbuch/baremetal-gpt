@@ -245,7 +245,7 @@ def main():
 def mwe():
   T = 32
   V = 4
-  D = 3
+  D = 32
   key = jax.random.key(42)
   kx, kw, kt = jax.random.split(key, 3)
   mesh = jax.make_mesh((32,), ("x",), (jax.sharding.AxisType.Explicit,))
