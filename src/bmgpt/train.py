@@ -224,7 +224,11 @@ def debug_verify_reconstruction(batch, unemb, mesh, all_outputs):
   results = {}
 
   def check_equal(name, orig, reconstructed):
-    """Compare JAX arrays directly using jnp.array_equal."""
+    """Compare JAX arrays: check dtype, shape, and values."""
+    # Check dtype first (jnp.array_equal does type promotion, so we check explicitly)
+    if orig.dtype != reconstructed.dtype:
+      results[name] = f"DTYPE_MISMATCH({orig.dtype} vs {reconstructed.dtype})"
+      return False
     if orig.shape != reconstructed.shape:
       results[name] = f"SHAPE_MISMATCH({orig.shape} vs {reconstructed.shape})"
       return False
@@ -281,7 +285,12 @@ def debug_verify_reconstruction(batch, unemb, mesh, all_outputs):
     # Get corresponding slice from full batch (as JAX array)
     mb_targets_from_batch = batch_targets_global[mb_idx]
 
-    if jnp.array_equal(mb_targets_saved, mb_targets_from_batch):
+    # Check dtype, shape, and values
+    if mb_targets_saved.dtype != mb_targets_from_batch.dtype:
+      results[f"mb{mb_idx}_targets"] = (
+        f"DTYPE_MISMATCH({mb_targets_saved.dtype} vs {mb_targets_from_batch.dtype})"
+      )
+    elif jnp.array_equal(mb_targets_saved, mb_targets_from_batch):
       results[f"mb{mb_idx}_targets"] = "EXACT"
     else:
       num_diff = jnp.sum(mb_targets_saved != mb_targets_from_batch)
@@ -298,7 +307,12 @@ def debug_verify_reconstruction(batch, unemb, mesh, all_outputs):
     # Get corresponding outputs from train_step (as JAX array)
     mb_outputs_from_step = all_outputs_global[mb_idx]
 
-    if jnp.array_equal(mb_outputs_saved, mb_outputs_from_step):
+    # Check dtype, shape, and values
+    if mb_outputs_saved.dtype != mb_outputs_from_step.dtype:
+      results[f"mb{mb_idx}_outputs"] = (
+        f"DTYPE_MISMATCH({mb_outputs_saved.dtype} vs {mb_outputs_from_step.dtype})"
+      )
+    elif jnp.array_equal(mb_outputs_saved, mb_outputs_from_step):
       results[f"mb{mb_idx}_outputs"] = "EXACT"
     else:
       num_diff = jnp.sum(mb_outputs_saved != mb_outputs_from_step)
