@@ -14,7 +14,6 @@ from pathlib import Path
 
 import jax
 
-from bmgpt.config import mesh_from_config
 from bmgpt.train import (
   _debug_log,
   debug_get_save_dir,
@@ -69,15 +68,16 @@ def main():
     return
 
   # Load sharding info from first variant to get config for mesh
-  from omegaconf import OmegaConf
-
   first_variant = available_variants[0]
   _, _, config_dict = debug_load_sharding_info(first_variant)
-  config = OmegaConf.create(config_dict)
-  config = OmegaConf.to_object(config)
 
-  # Create mesh
-  mesh = mesh_from_config(config)
+  # Create mesh directly from config_dict (avoid OmegaConf.to_object which fails on None values)
+  sharding = config_dict["sharding"]
+  mesh = jax.make_mesh(
+    sharding["mesh_shape"],
+    sharding["mesh_axis_names"],
+    len(sharding["mesh_shape"]) * (jax.sharding.AxisType.Explicit,),
+  )
   _debug_log(f"Mesh: {mesh}")
 
   # Load data for each variant
