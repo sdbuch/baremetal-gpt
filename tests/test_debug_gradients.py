@@ -17,7 +17,7 @@ import jax.numpy as jnp
 from jax import Array
 from omegaconf import OmegaConf
 
-from bmgpt.config import Config
+from bmgpt.config import Config, mesh_from_config
 from bmgpt.losses import fused_softmax_cross_entropy, softmax_cross_entropy
 from bmgpt.model import LMHead
 from bmgpt.splash_helpers import make_lse_kernel_sharded
@@ -189,13 +189,9 @@ def main():
   first_variant = available_variants[0]
   _, _, config_dict = debug_load_sharding_info(first_variant)
 
-  # Create mesh directly from config_dict (avoid OmegaConf.to_object which fails on None values)
-  sharding = config_dict["sharding"]
-  mesh = jax.make_mesh(
-    sharding["mesh_shape"],
-    sharding["mesh_axis_names"],
-    len(sharding["mesh_shape"]) * (jax.sharding.AxisType.Explicit,),
-  )
+  # Create Config and mesh using the standard helpers
+  config = config_from_dict(config_dict)
+  mesh = mesh_from_config(config)
   _debug_log(f"Mesh: {mesh}")
 
   # Load data for each variant
@@ -228,9 +224,6 @@ def main():
       else:
         diff_count = jnp.sum(fused_arr != nonfused_arr)
         _debug_log(f"  {name}: DIFFER ({diff_count} elements)")
-
-  # Create config from saved dict
-  config = config_from_dict(config_dict)
 
   # Create LSE kernel for fused loss (using same logic as forward_kernels_from_config)
   _debug_log("=" * 60)
