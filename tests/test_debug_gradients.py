@@ -10,9 +10,6 @@ Usage:
      uv run python tests/test_debug_gradients.py
 """
 
-from collections import defaultdict
-from itertools import combinations
-
 import jax
 import jax.numpy as jnp
 
@@ -243,9 +240,9 @@ def main():
 
 
 def mwe():
-  T = 32
-  V = 4
-  D = 32
+  T = 256
+  V = 1024
+  D = 3 * 64
   key = jax.random.key(42)
   kx, kw, kt = jax.random.split(key, 3)
   mesh = jax.make_mesh((32,), ("x",), (jax.sharding.AxisType.Explicit,))
@@ -279,24 +276,44 @@ def mwe():
     )
     return loss
 
-  results = defaultdict(dict)
+  # Only test bf16 since that's where the issue is most visible
+  dtype = jnp.bfloat16
 
-  for dtype in [jnp.bfloat16, jnp.float32]:
-    for loss_fn in [loss, loss_replicated]:
-      with jax.set_mesh(mesh):
-        w_dtype, x_dtype = jax.tree.map(lambda z: z.astype(dtype), (w, x))
-        l, g = jax.value_and_grad(loss_fn)(w_dtype, x_dtype, t)
-      results[dtype.__name__][loss_fn.__name__] = (l, g)
+  with jax.set_mesh(mesh):
+    w_dtype = w.astype(dtype)
+    x_dtype = x.astype(dtype)
 
-  for dtype_str, d in results.items():
-    for loss_str, (l, g) in d.items():
-      print(dtype_str, loss_str, l)
-    errs = [
-      jnp.abs(g0 - g1).sum()
-      for (g0, g1) in combinations([v[-1] for v in d.values()], 2)
-    ]
-    for err in errs:
-      print(dtype_str, err)
+    # JIT compile the grad functions
+    grad_sharded = jax.jit(jax.grad(loss))
+    grad_replicated = jax.jit(jax.grad(loss_replicated))
+
+    # Lower and print HLO for sharded version
+    if jax.process_index() == 0:
+      print("=" * 60)
+      print("SHARDED GRAD HLO")
+      print("=" * 60)
+      lowered_sharded = grad_sharded.lower(w_dtype, x_dtype, t)
+      print(lowered_sharded.compile().as_text())
+
+      print("=" * 60)
+      print("REPLICATED GRAD HLO")
+      print("=" * 60)
+      lowered_replicated = grad_replicated.lower(w_dtype, x_dtype, t)
+      print(lowered_replicated.compile().as_text())
+
+    # Run and compare results
+    g_sharded = grad_sharded(w_dtype, x_dtype, t)
+    g_replicated = grad_replicated(w_dtype, x_dtype, t)
+
+    err = jnp.abs(g_sharded - g_replicated).sum()
+
+    if jax.process_index() == 0:
+      print("=" * 60)
+      print("RESULTS")
+      print("=" * 60)
+      print(f"Gradient L1 error: {err}")
+      print(f"Sharded grad norm: {jnp.linalg.norm(g_sharded)}")
+      print(f"Replicated grad norm: {jnp.linalg.norm(g_replicated)}")
 
 
 if __name__ == "__main__":
