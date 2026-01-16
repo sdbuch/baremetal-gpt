@@ -21,14 +21,15 @@ def opt_update_factory(opt_type: OptType):
 def grad_norm_and_clip(
   config: Config, model: Transformer
 ) -> tuple[Transformer, Transformer, float]:
-  # Gradient norms in param precision (NOTE: might want fp32?)
-  grad_norms_squared = jax.tree.map(lambda grad: jnp.sum(grad**2), model)
+  # Gradient norms in fp32
+  norm_sq = lambda x: jnp.einsum('...,...->', x, x, preferred_element_type=jnp.float32)
+  grad_norms_squared = jax.tree.map(norm_sq, model)
   global_grad_norm = jax.tree.reduce(operator.add, grad_norms_squared) ** 0.5
   truncated_norm = jax.lax.select(
     global_grad_norm >= config.optimizer.clip_grad,
     global_grad_norm,
     jnp.ones_like(global_grad_norm),
-  )
+  ).astype(config.model.param_dtype.value)
   return (
     jax.tree.map(lambda grad: grad / truncated_norm, model),
     grad_norms_squared,
