@@ -164,6 +164,7 @@ def debug_verify_reconstruction(batch, unemb, mesh):
   Called AFTER the scan completes (outside traced context).
   Uses NamedSharding(mesh, P(*spec)) pattern from data.py.
   """
+  import ml_dtypes
   from jax.sharding import NamedSharding
 
   proc_idx = jax.process_index()
@@ -299,7 +300,6 @@ def debug_verify_reconstruction(batch, unemb, mesh):
 
   # For unemb_w: model params change during training, so compare reconstructed vs saved file directly
   # (not against live model state which has been updated)
-  import ml_dtypes
 
   unemb_saved_uint16 = np.load(save_dir / "unemb_w.npy")
   unemb_recon_local = to_local_numpy(unemb_w_recon, specs.get("unemb_w"))
