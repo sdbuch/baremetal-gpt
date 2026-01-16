@@ -56,18 +56,18 @@ def config_from_dict(config_dict: dict) -> Config:
     data=s["data"],
   )
 
-  # Update model config
+  # Update model config (use .get() with defaults for fields that might be missing)
   m = config_dict["model"]
   config.model = ModelConfig(
-    num_heads=m["num_heads"],
-    num_layers=m["num_layers"],
-    d_model=m["d_model"],
-    d_head=m["d_head"],
-    d_ff=m["d_ff"],
-    num_vocab=m["num_vocab"],
-    max_seq_len=m["max_seq_len"],
-    param_dtype=DType[m["param_dtype"].upper().replace(".", "_")],
-    transformer_type=TransformerType(m["transformer_type"]),
+    num_heads=m.get("num_heads", 12),
+    num_layers=m.get("num_layers", 12),
+    d_model=m.get("d_model", 768),
+    d_head=m.get("d_head", 64),
+    d_ff=m.get("d_ff", m.get("d_model", 768) * 4),  # Default to 4x d_model
+    num_vocab=m["num_vocab"],  # Required
+    max_seq_len=m.get("max_seq_len", 2048),
+    param_dtype=DType[m.get("param_dtype", "bfloat16").upper().replace(".", "_")],
+    transformer_type=TransformerType(m.get("transformer_type", "discrete")),
   )
 
   # Update train_dataset config
