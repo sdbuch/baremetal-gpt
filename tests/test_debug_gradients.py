@@ -253,12 +253,25 @@ def mwe():
 
   def loss(w: jax.Array, x, t):
     w_rep = jax.sharding.reshard(w, jax.P())
-    gathered = w_rep.at[t].get(out_sharding=jax.P('x'))
+    gathered = w_rep.at[t].get(out_sharding=jax.P("x"))
     loss = (gathered * x).sum()
     return loss
 
+  def loss_replicated(w, x, t):
+    w_rep, x_rep, t_rep = jax.tree.map(
+      lambda z: jax.sharding.reshard(z, jax.P()), (w, x, t)
+    )
+    gathered = w_rep[t_rep]
+    loss = (gathered * x_rep).sum()
+    return loss
+
   with jax.set_mesh(mesh):
-    grad = jax.grad(loss)(w, x, t)
+    loss, grad = jax.value_and_grad(loss)(w, x, t)
+    loss_rep, grad_rep = jax.value_and_grad(loss_replicated)(w, x, t)
+
+  print('loss', loss)
+  print('loss replicated', loss_rep)
+  print(jnp.sum(jnp.abs(grad - grad_rep)))
 
 
 if __name__ == "__main__":
