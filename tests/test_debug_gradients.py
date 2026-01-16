@@ -222,17 +222,17 @@ def main():
   _debug_log("=" * 60)
   _debug_log(f"  unemb.w: shape={unemb_w.shape}, dtype={unemb_w.dtype}")
   _debug_log(
-    f"    mean={jnp.mean(unemb_w):.6f}, std={jnp.std(unemb_w):.6f}, "
-    f"min={jnp.min(unemb_w):.6f}, max={jnp.max(unemb_w):.6f}"
+    f"    mean={float(jnp.mean(unemb_w)):.6f}, std={float(jnp.std(unemb_w)):.6f}, "
+    f"min={float(jnp.min(unemb_w)):.6f}, max={float(jnp.max(unemb_w)):.6f}"
   )
   _debug_log(f"  all_outputs: shape={all_outputs.shape}, dtype={all_outputs.dtype}")
   _debug_log(
-    f"    mean={jnp.mean(all_outputs):.6f}, std={jnp.std(all_outputs):.6f}, "
-    f"min={jnp.min(all_outputs):.6f}, max={jnp.max(all_outputs):.6f}"
+    f"    mean={float(jnp.mean(all_outputs)):.6f}, std={float(jnp.std(all_outputs)):.6f}, "
+    f"min={float(jnp.min(all_outputs)):.6f}, max={float(jnp.max(all_outputs)):.6f}"
   )
   # Check for extreme values that might cause precision issues
-  outputs_absmax = jnp.max(jnp.abs(all_outputs))
-  unemb_absmax = jnp.max(jnp.abs(unemb_w))
+  outputs_absmax = float(jnp.max(jnp.abs(all_outputs)))
+  unemb_absmax = float(jnp.max(jnp.abs(unemb_w)))
   _debug_log(f"  |outputs|_max={outputs_absmax:.4f}, |unemb.w|_max={unemb_absmax:.4f}")
   _debug_log(f"  outputs * unemb scale ~ {outputs_absmax * unemb_absmax:.4f}")
 
@@ -266,17 +266,17 @@ def main():
     )(mb_outputs, unemb)
 
     # Compare losses
-    loss_diff = jnp.abs(loss_nf - loss_f)
+    loss_diff = float(jnp.abs(loss_nf - loss_f))
     _debug_log(
-      f"  Loss: nonfused={loss_nf:.6f}, fused={loss_f:.6f}, diff={loss_diff:.6e}"
+      f"  Loss: nonfused={float(loss_nf):.6f}, fused={float(loss_f):.6f}, diff={loss_diff:.6e}"
     )
 
     # Compare output gradients
     grad_out_diff = jnp.abs(grad_outputs_nf - grad_outputs_f)
-    grad_out_max_diff = jnp.max(grad_out_diff)
-    grad_out_mean_diff = jnp.mean(grad_out_diff)
-    grad_out_nf_norm = jnp.linalg.norm(grad_outputs_nf.ravel())
-    grad_out_f_norm = jnp.linalg.norm(grad_outputs_f.ravel())
+    grad_out_max_diff = float(jnp.max(grad_out_diff))
+    grad_out_mean_diff = float(jnp.mean(grad_out_diff))
+    grad_out_nf_norm = float(jnp.linalg.norm(grad_outputs_nf.ravel()))
+    grad_out_f_norm = float(jnp.linalg.norm(grad_outputs_f.ravel()))
     _debug_log(
       f"  Grad outputs: nf_norm={grad_out_nf_norm:.4f}, f_norm={grad_out_f_norm:.4f}, "
       f"max_diff={grad_out_max_diff:.6e}, mean_diff={grad_out_mean_diff:.6e}"
@@ -284,10 +284,10 @@ def main():
 
     # Compare unemb.w gradients
     grad_w_diff = jnp.abs(grad_unemb_nf.w - grad_unemb_f.w)
-    grad_w_max_diff = jnp.max(grad_w_diff)
-    grad_w_mean_diff = jnp.mean(grad_w_diff)
-    grad_w_nf_norm = jnp.linalg.norm(grad_unemb_nf.w.ravel())
-    grad_w_f_norm = jnp.linalg.norm(grad_unemb_f.w.ravel())
+    grad_w_max_diff = float(jnp.max(grad_w_diff))
+    grad_w_mean_diff = float(jnp.mean(grad_w_diff))
+    grad_w_nf_norm = float(jnp.linalg.norm(grad_unemb_nf.w.ravel()))
+    grad_w_f_norm = float(jnp.linalg.norm(grad_unemb_f.w.ravel()))
     _debug_log(
       f"  Grad unemb.w: nf_norm={grad_w_nf_norm:.4f}, f_norm={grad_w_f_norm:.4f}, "
       f"max_diff={grad_w_max_diff:.6e}, mean_diff={grad_w_mean_diff:.6e}"
