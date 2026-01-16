@@ -58,6 +58,25 @@ def config_from_dict(config_dict: dict) -> Config:
 
   # Update model config (use .get() with defaults for fields that might be missing)
   m = config_dict["model"]
+
+  # Handle param_dtype which might be a DType enum or a string
+  param_dtype_val = m.get("param_dtype", "bfloat16")
+  if isinstance(param_dtype_val, DType):
+    param_dtype = param_dtype_val
+  elif isinstance(param_dtype_val, str):
+    param_dtype = DType[param_dtype_val.upper().replace(".", "_")]
+  else:
+    param_dtype = DType.BFLOAT16
+
+  # Handle transformer_type which might be a TransformerType enum or a string
+  transformer_type_val = m.get("transformer_type", "discrete")
+  if isinstance(transformer_type_val, TransformerType):
+    transformer_type = transformer_type_val
+  elif isinstance(transformer_type_val, str):
+    transformer_type = TransformerType(transformer_type_val)
+  else:
+    transformer_type = TransformerType.DISCRETE
+
   config.model = ModelConfig(
     num_heads=m.get("num_heads", 12),
     num_layers=m.get("num_layers", 12),
@@ -66,8 +85,8 @@ def config_from_dict(config_dict: dict) -> Config:
     d_ff=m.get("d_ff", m.get("d_model", 768) * 4),  # Default to 4x d_model
     num_vocab=m["num_vocab"],  # Required
     max_seq_len=m.get("max_seq_len", 2048),
-    param_dtype=DType[m.get("param_dtype", "bfloat16").upper().replace(".", "_")],
-    transformer_type=TransformerType(m.get("transformer_type", "discrete")),
+    param_dtype=param_dtype,
+    transformer_type=transformer_type,
   )
 
   # Update train_dataset config
