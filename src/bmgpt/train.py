@@ -34,7 +34,6 @@ register_configs()
 
 
 # DEBUG: Save loss inputs for debugging fused xent backward
-_debug_microbatch_counter = 0  # Track which microbatch we're on
 
 
 def _debug_log(msg, proc_idx=None):
@@ -198,7 +197,7 @@ def debug_verify_reconstruction(batch, unemb, mesh, all_outputs):
   dtypes = sharding_info.get("dtypes", {})
   specs = sharding_info.get("specs", {})
 
-  def load_and_reconstruct(name, orig_dtype):
+  def load_and_reconstruct(name):
     """Load saved local data and reconstruct sharded array using NamedSharding.
 
     For bfloat16: data was saved as uint16, convert via bytes for exact bit preservation.
@@ -241,9 +240,9 @@ def debug_verify_reconstruction(batch, unemb, mesh, all_outputs):
   inputs, targets = batch
 
   # Test 1: Reconstruct batch from saved local data using NamedSharding pattern
-  inputs_recon = load_and_reconstruct("batch_inputs", inputs.dtype)
-  targets_recon = load_and_reconstruct("batch_targets", targets.dtype)
-  unemb_w_recon = load_and_reconstruct("unemb_w", unemb.w.dtype)
+  inputs_recon = load_and_reconstruct("batch_inputs")
+  targets_recon = load_and_reconstruct("batch_targets")
+  unemb_w_recon = load_and_reconstruct("unemb_w")
 
   check_equal("batch_inputs", inputs, inputs_recon)
   check_equal("batch_targets", targets, targets_recon)
