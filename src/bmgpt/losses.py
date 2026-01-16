@@ -54,8 +54,8 @@ def softmax_cross_entropy(
   logits = jnp.where(valid_ids_mask, logits, -jnp.inf)
   lse = jax.nn.logsumexp(logits, axis=-1)
   # loss = lse - label_logits
-  # loss = -label_logits
-  loss = lse
+  loss = -label_logits
+  # loss = lse
   if reduce:
     return loss.mean()
   else:
@@ -89,8 +89,8 @@ def fused_softmax_cross_entropy(
     "td,td->t", outputs, per_token_unembs, preferred_element_type=jnp.float32
   )
   # loss = lse - label_logits
-  # loss = -label_logits
-  loss = lse
+  loss = -label_logits
+  # loss = lse
   if reduce:
     return loss.mean()
   else:
