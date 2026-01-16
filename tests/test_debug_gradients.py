@@ -164,25 +164,9 @@ def main():
     num_microbatches = all_outputs.shape[0]
     _log(f"Processing {num_microbatches} microbatches")
 
-    # Log input statistics
-    _log("=" * 60)
-    _log("INPUT STATISTICS")
-    _log("=" * 60)
+    # Skip input statistics - reductions on sharded arrays allocate huge buffers
     _log(f"  unemb.w: {jax.typeof(unemb_w)}")
-    _log(
-      f"    mean={float(jnp.mean(unemb_w)):.6f}, std={float(jnp.std(unemb_w)):.6f}, "
-      f"min={float(jnp.min(unemb_w)):.6f}, max={float(jnp.max(unemb_w)):.6f}"
-    )
     _log(f"  all_outputs: {jax.typeof(all_outputs)}")
-    _log(
-      f"    mean={float(jnp.mean(all_outputs)):.6f}, std={float(jnp.std(all_outputs)):.6f}, "
-      f"min={float(jnp.min(all_outputs)):.6f}, max={float(jnp.max(all_outputs)):.6f}"
-    )
-    # Check for extreme values that might cause precision issues
-    outputs_absmax = float(jnp.max(jnp.abs(all_outputs)))
-    unemb_absmax = float(jnp.max(jnp.abs(unemb_w)))
-    _log(f"  |outputs|_max={outputs_absmax:.4f}, |unemb.w|_max={unemb_absmax:.4f}")
-    _log(f"  outputs * unemb scale ~ {outputs_absmax * unemb_absmax:.4f}")
 
     # Compare gradients per-microbatch
     _log("=" * 60)
