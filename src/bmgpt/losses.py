@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from bmgpt.config import Config
+from bmgpt.config import Config, TransformerType
 from bmgpt.data import DataloaderOutputType
 from bmgpt.model import ClassificationHead, LMHead, transformer_variant_factory
 
@@ -37,6 +37,14 @@ def calculate_logits(
   return logits
 
 
+def get_output_dim_size(config: Config):
+  match config.model.transformer_type:
+    case TransformerType.DISCRETE:
+      return config.model.num_vocab
+    case TransformerType.CONTINUOUS:
+      return config.model.num_classes
+
+
 def softmax_cross_entropy(
   config: Config,
   unembedding: LMHead | ClassificationHead,
@@ -49,7 +57,7 @@ def softmax_cross_entropy(
   logits = jax.vmap(partial(calculate_logits, config, unembedding))(outputs)
   label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1).squeeze(-1)
   valid_ids_mask = (
-    jnp.arange(config.model.num_vocab) <= config.train_dataset.max_valid_token_id
+    jnp.arange(get_output_dim_size(config)) <= config.train_dataset.max_valid_token_id
   )
   logits = jnp.where(valid_ids_mask, logits, -jnp.inf)
   lse = jax.nn.logsumexp(logits, axis=-1)
@@ -82,7 +90,7 @@ def fused_softmax_cross_entropy(
   # TODO: does the usual logit scaling make sense for outputs too?
   # lse = lse_sharded(lse_kernel, q / d**0.25, k / d**0.25, v, segment_ids)
   lse = lse_sharded(lse_kernel, q, k).squeeze(0)
-  w_unemb_f32 = w_unemb.astype(jnp.float32) # perform the bwd scatter-add in fp32
+  w_unemb_f32 = w_unemb.astype(jnp.float32)  # perform the bwd scatter-add in fp32
   target_unembs = w_unemb_f32.at[targets].get(out_sharding=jax.P(*config.sharding.data))
   target_unembs = target_unembs.astype(w_unemb.dtype)
   label_logits = jnp.einsum(
