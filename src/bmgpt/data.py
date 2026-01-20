@@ -222,7 +222,7 @@ def get_distributed_batch_iter(
 
   def make_microbatch(batch):
     return jax.tree.map(
-      lambda x: x.reshape(num_microbatches, local_microbatch_size, -1), batch
+      lambda x: x.reshape(num_microbatches, local_microbatch_size, *x.shape[1:]), batch
     )
 
   data, dataloader_factory = dataset_dataloader_factory(dataset_config)
