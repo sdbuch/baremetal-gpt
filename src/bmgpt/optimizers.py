@@ -147,10 +147,10 @@ def adamw_update(
   # simulate initializing the buffers with initial gradients via pre-incrementing step
   mu_debias = mu / (1 - beta1**new_state.step)
   nu_debias = nu / (1 - beta2**new_state.step)
-  update = -lr * mu_debias / (eps + jnp.sqrt(nu_debias))
+  update = -mu_debias / (eps + jnp.sqrt(nu_debias))
   if wd_mask:
-    update = update - lr * weight_decay * param
-  return update.astype(config.model.param_dtype.value), lr, new_state
+    update = update - weight_decay * param.astype(config.model.opt_dtype.value)
+  return (lr * update).astype(config.model.param_dtype.value), new_state, lr
 
 
 def sgd_update(
@@ -167,5 +167,5 @@ def sgd_update(
   mu_debias = mu / (1 - beta1**new_state.step)
   update = -mu_debias
   if wd_mask:
-    update = update - weight_decay * param
-  return update.astype(config.model.param_dtype.value), lr, state
+    update = update - weight_decay * param.astype(config.model.opt_dtype.value)
+  return (lr * update).astype(config.model.param_dtype.value), new_state, lr

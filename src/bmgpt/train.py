@@ -132,11 +132,10 @@ def main(config: Config):
     # Update parameters
     grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
     update_tree = jax.tree.map(opt_update, state.params, grad_clipped, state.opt_state)
-    update, lr, opt_state = [
+    update, opt_state, lr = [
       jax.tree.map(lambda _, y: y[i], state.params, update_tree) for i in range(3)
     ]
-    # params = jax.tree.map(lambda p, lr, u: p + lr * u, state.params, lr, update)
-    params = jax.tree.map(lambda p, lr, u: p + u, state.params, lr, update)
+    params = jax.tree.map(jnp.add, state.params, update)
     new_state = TrainState(params=params, opt_state=opt_state, kv_cache=state.kv_cache)
 
     metrics = {
