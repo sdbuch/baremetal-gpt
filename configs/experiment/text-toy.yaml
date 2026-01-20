@@ -3,6 +3,8 @@
 defaults:
   - /dataset/staircase@train_dataset
 
+use_fused_xent_loss: False
+
 train_dataset:
   num_steps: 100
 
