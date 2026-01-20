@@ -5,6 +5,7 @@ defaults:
 
 
 val_log_interval: 468 # every epoch
+use_fused_xent_loss: False
 
 train_dataset:
   path: "data/mnist/patch_7x7"
