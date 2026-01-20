@@ -64,7 +64,7 @@ data parallel, first download the dataset to each host:
 Then run the training script:
 
 ```
-./deploy/run.sh tpu-v4-32 +deploy=v4-16 +experiment=tiny-shakespeare
+./deploy/run.sh tpu-v4-32 +deploy=v4-16 +experiment=tiny-shakespeare +sharding=data-parallel
 ```
 
 ### DCLM
@@ -80,7 +80,7 @@ To train on DCLM, first:
 Then run the training script:
 
 ```
-./deploy/run.sh tpu-v4-32 +deploy=v4-16 +experiment=dclm
+./deploy/run.sh tpu-v4-32 +deploy=v4-16 +experiment=dclm +model=290M +sharding=fsdp
 ```
 
 
