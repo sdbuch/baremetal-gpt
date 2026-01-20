@@ -122,7 +122,7 @@ class EvaluationConfig:
 class OptimizerConfig:
   """Optimizer params. optimizers.py"""
 
-  schedule_type = LRScheduleType.COSINE_WITH_WARMUP
+  schedule_type: LRScheduleType = LRScheduleType.COSINE_WITH_WARMUP
   base_lr: float = 1e-6
   peak_lr: float = 3e-4
   min_lr: float = 3e-6
