@@ -81,4 +81,3 @@ model:
 
 optimizer:
   weight_decay: 1e-4
-  lr: 3e-4
