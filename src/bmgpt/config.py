@@ -32,6 +32,13 @@ class OptType(Enum):
   SGD = "sgd"
 
 
+class LRScheduleType(Enum):
+  """Different LR schedulers we can use. optimizers.py"""
+
+  WARMUP_STABLE = "warmup_stable"
+  COSINE_WITH_WARMUP = "cosine_with_warmup"
+
+
 class LoggerType(Enum):
   """Different loggers we can use. loggers.py"""
 
@@ -78,7 +85,11 @@ class DatasetConfig:
   path: str = MISSING
   split: SplitType = SplitType.VAL
   seq_len: int = MISSING
+  max_valid_token_id: int = MISSING  # For padded embeddings, mask invalid token ids
+
+  # microbatch_size = global_batch_size / num_microbatches
   global_batch_size: int = MISSING
+  num_microbatches: int = 1
 
   ## Duration parameters
   # For some datasets, epochs makes sense; others are too large.
@@ -88,9 +99,15 @@ class DatasetConfig:
   epochs_to_loop: int = -1  # -1 means indefinite; otherwise, fixed num epochs
   num_steps: int = 10**3  # if 0 or less, will train until dataloader exhausted
 
-  ## Call-time parameters
-  # It makes sense to do these here, instead of model, since they're data-specific
+  ## Splash Attention kernel parameters (dataset-specific)
   use_splash: bool = True  # use splash attention pallas kernel or jax-xla attention
+  splash_block_size_q: int = 128
+  splash_block_size_kv: int = 128
+  splash_block_size_kv_compute: int = 128
+  # Heuristic: if model is small enough, use fused splash backward
+  # Formula is (num_kv_blocks) * q.size * 2 <bf16> <= 64MB (mem per batch element)
+  # likely a bug in the splash kernel (gradients should accum in fp32, not output type)
+  splash_use_fused_bwd_kernel: bool = False
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -105,11 +122,17 @@ class EvaluationConfig:
 class OptimizerConfig:
   """Optimizer params. optimizers.py"""
 
+  schedule_type: LRScheduleType = LRScheduleType.COSINE_WITH_WARMUP
+  base_lr: float = 1e-6
+  peak_lr: float = 3e-4
+  min_lr: float = 3e-6
+  num_warmup_steps: int = 200
+
   type: OptType = OptType.ADAMW
-  lr: float = 3e-4
   beta1: float = 0.9
   beta2: float = 0.999
   eps_adam: float = 1e-8
+
   weight_decay: float = 1e-2
   clip_grad: float = 1.0  # global ell^2 norm
 
@@ -126,7 +149,7 @@ class ModelConfig:
   d_model: int = 768
   num_heads: int = 12
   d_head: int = 64
-  mlp_factor: float = 8/3
+  mlp_factor: float = 8 / 3
   num_layers: int = 12
   param_std: float = 0.02
   rope_theta: float = 10000.0
@@ -136,9 +159,10 @@ class ModelConfig:
   num_classes: int = MISSING  # output dim (equals input dim for text tf)
 
   # Model dtypes
-  param_dtype: DType = DType.BFLOAT16  # weights, activations
-  compute_dtype: DType = DType.FLOAT32  # layernorm, attn logits, rope
-  optimizer_dtype: DType = DType.FLOAT32  # optimizer state
+  # Select operations (layernorm, logits, rope) always done in fp32
+  param_dtype: DType = DType.FLOAT32  # master weights dtype
+  compute_dtype: DType = DType.BFLOAT16  # forward/backward pass dtype
+  opt_dtype: DType = DType.FLOAT32  # optimizer state dtype
 
   # Model call-time params
   use_bias_embeddings: bool = False  # bias in emb / unemb
@@ -164,19 +188,27 @@ class InferenceConfig:
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class ShardingConfig:
-  """Model sharding params (args to jax.P)-- list of mesh_axis_names els or None"""
+  """Model sharding params (args to jax.P)-- list of mesh_axis_names els or None.
 
-  # NOTE: technically jax.P can merge axes, e.g. (('x', 'y')), but we reject this
+  Note: activation shardings go as deep as possible (no batch/seq for MLPs).
+  See configs/ directory for examples (dp, fsdp).
+  """
+
+  # NOTE: technically jax.P can merge axes, e.g. (('x', 'y')), but hydra rejects this
   mesh_shape: list[int] = MISSING
-  mesh_axis_names: list[str] = field(default_factory=lambda: ["dp"])
-  data: list[str | None] = field(default_factory=lambda: ["dp"])
-  wqkv: list[str | None] = field(default_factory=list)  # D x 3 x N x H
-  wo: list[str | None] = field(default_factory=list)  # D x N x H
-  wup: list[str | None] = field(default_factory=list)  # D x 4D
-  wdown: list[str | None] = field(default_factory=list)  # 4D x D
-  mlp_hidden: list[str | None] = field(default_factory=list)  # 4D
-  res_stream: list[str | None] = field(default_factory=list)  # D
-  att_qkv: list[str | None] = field(default_factory=list)  # 3 x S x N x H
+  mesh_axis_names: list[str] = MISSING
+  # Parameter sharding specs
+  wqkv: list[str | None] = MISSING  # D x 3 x N x H
+  wo: list[str | None] = MISSING  # H x N x D
+  wup: list[str | None] = MISSING  # D x F
+  wdown: list[str | None] = MISSING  # F x D
+  wemb: list[str | None] = MISSING  # V x D
+  wunemb: list[str | None] = MISSING  # D x V
+  # Activation sharding specs
+  data: list[str | None] = MISSING  # M (accum_steps x micro_bs = global_bs)
+  mlp_hidden: list[str | None] = MISSING  # F
+  res_stream: list[str | None] = MISSING  # D
+  att_qkv: list[str | None] = MISSING  # 3 x S x N x H
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -188,6 +220,10 @@ class Config:
   project_name: str = "bmgpt-debug"
   run_name: str = ""
   val_log_interval: int = 1000  # log validation metrics every <this many> batches
+  use_fused_xent_loss: bool = True  # requires vocab size divisible by 128
+  fused_xent_block_size_T: int = 512  # block size along batch axis
+  fused_xent_block_size_V: int = 512  # block size along vocab axis
+  fused_xent_block_size_V_compute: int = 512  # block size along vocab axis for dots
 
   train_dataset: DatasetConfig = MISSING
   val_list: list[EvaluationConfig] = field(default_factory=list)  # validation metrics
@@ -218,12 +254,24 @@ def mesh_from_config(config: Config):
 
 
 def config_post_init(config: Config):
-  """Input validation."""
-  # Check arguments
+  """Input validation. Call after jax.distributed.initialize()"""
+  # model arguments
   assert config.model.d_head % 2 == 0, (
     "Head dimension needs to be divisible by 2 for RoPE"
   )
-  assert config.train_dataset.global_batch_size % jax.process_count() == 0 and all(
-    eval.dataset.global_batch_size % jax.process_count() == 0
-    for eval in config.eval_list
-  ), "Number of hosts needs to divide the global batch size for all data"
+  # batch size checking
+  num_hosts = jax.process_count()
+
+  def check_batch_size_division(dataset: DatasetConfig):
+    assert dataset.global_batch_size % dataset.num_microbatches == 0, (
+      f"Number of gradient accumulation steps must divide global batch size {dataset}"
+    )
+    assert (dataset.global_batch_size // dataset.num_microbatches) % num_hosts == 0, (
+      f"Number of hosts needs to divide microbatch size {dataset}"
+    )
+
+  check_batch_size_division(config.train_dataset)
+  for eval in config.val_list:
+    check_batch_size_division(eval.dataset)
+  for eval in config.eval_list:
+    check_batch_size_division(eval.dataset)

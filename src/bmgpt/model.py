@@ -29,20 +29,20 @@ def init_mlp(config: Config, key) -> Mlp:
   d_hidden = int(config.model.mlp_factor * config.model.d_model)
   w_up = config.model.param_std * jax.random.normal(
     k_w_up,
-    (config.model.d_model, d_hidden),
+    (d_hidden, config.model.d_model),
     config.model.param_dtype.value,
     out_sharding=jax.P(*config.sharding.wup),
   )
   w_gate = config.model.param_std * jax.random.normal(
     k_w_up,
-    (config.model.d_model, d_hidden),
+    (d_hidden, config.model.d_model),
     config.model.param_dtype.value,
     out_sharding=jax.P(*config.sharding.wup),
   )
   w_down = config.model.param_std * (
     jax.random.normal(
       k_w_down,
-      (d_hidden, config.model.d_model),
+      (config.model.d_model, d_hidden),
       config.model.param_dtype.value,
       out_sharding=jax.P(*config.sharding.wdown),
     )
@@ -73,19 +73,22 @@ def init_mlp(config: Config, key) -> Mlp:
 
 
 def _mlp(config: Config, params: Mlp, x: Array):
-  preact = jnp.matmul(x, params.w_up, out_sharding=jax.P(*config.sharding.mlp_hidden))
+  mlp_hidden_spec = jax.P(*config.sharding.mlp_hidden)
+  mlp_out_spec = jax.P(*config.sharding.res_stream)
+  preact = jnp.matmul(x, params.w_up.mT, out_sharding=mlp_hidden_spec)
   if config.model.use_bias_mlp:
     # PERF: check that compiler fuses these
     preact += params.bias_up
   act = jax.nn.swish(preact)
   if config.model.use_gating_mlp:
-    gate = jnp.matmul(x, params.w_gate, out_sharding=jax.P(*config.sharding.mlp_hidden))
+    gate = jnp.matmul(x, params.w_gate.mT, out_sharding=mlp_hidden_spec)
     if config.model.use_bias_mlp:
       gate += params.bias_gate
     act *= gate
-  out = jnp.matmul(act, params.w_down, out_sharding=jax.P(*config.sharding.res_stream))
+  out = jnp.matmul(act, params.w_down.mT, out_sharding=mlp_out_spec)
   if config.model.use_bias_mlp:
     out += params.bias_down
+  assert out.dtype == config.model.compute_dtype.value
   return out
 
 
@@ -103,14 +106,14 @@ def init_attn(config: Config, key) -> Attn:
   k_qkv, k_o = jax.random.split(key, 2)
   w_qkv = config.model.param_std * jax.random.normal(
     k_qkv,
-    (config.model.d_model, 3, config.model.num_heads, config.model.d_head),
+    (3, config.model.num_heads, config.model.d_head, config.model.d_model),
     config.model.param_dtype.value,
     out_sharding=jax.P(*config.sharding.wqkv),
   )
   w_out = config.model.param_std * (
     jax.random.normal(
       k_o,
-      (config.model.d_head, config.model.num_heads, config.model.d_model),
+      (config.model.d_model, config.model.num_heads, config.model.d_head),
       config.model.param_dtype.value,
       out_sharding=jax.P(*config.sharding.wo),
     )
@@ -120,7 +123,7 @@ def init_attn(config: Config, key) -> Attn:
 
 def _precompute_rope_cossin(config: Config):
   freqs = jnp.exp(
-    -jnp.log(config.model.rope_theta).astype(config.model.compute_dtype.value)
+    -jnp.log(config.model.rope_theta).astype(jnp.float32)
     * 2
     / config.model.d_head
     * jnp.arange(config.model.d_head // 2, out_sharding=jax.P())
@@ -139,11 +142,7 @@ def _apply_rope(
 ):
   x_1, x_2 = x[:, : config.model.d_head // 2], x[:, config.model.d_head // 2 :]
   c, s = cos.at[positions].get(), sin.at[positions].get()
-  return jnp.concatenate(
-    (c * x_1 - s * x_2, c * x_2 + s * x_1),
-    axis=-1,
-    dtype=config.model.param_dtype.value,
-  )
+  return jnp.concatenate((c * x_1 - s * x_2, c * x_2 + s * x_1), axis=-1, dtype=x.dtype)
 
 
 def _make_causal_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
@@ -174,7 +173,7 @@ def _attn(
   # x_seq: s x d
 
   q, k, v = jnp.einsum(
-    "sd,d3nh->3nsh",
+    "sd,3nhd->3nsh",
     x_seq,
     params.w_qkv,
     out_sharding=jax.P(*config.sharding.att_qkv),
@@ -238,19 +237,21 @@ def _attn(
       mask = ~_make_cache_mask(s, t, 0)  # full attention
     mask = mask[None, ...]  # broadcast over heads
     # Scale and causal mask
-    logits = jnp.einsum("nsh,nth->nst", q, k).astype(config.model.compute_dtype.value)
+    logits = jnp.einsum("nsh,nth->nst", q, k, preferred_element_type=jnp.float32)
     logits *= 1.0 / config.model.d_head**0.5
     logits = jnp.where(mask, logits, -jnp.inf)
     probs = jax.nn.softmax(logits, axis=2)  # type: ignore[reportArgumentType]
-    probs = probs.astype(config.model.param_dtype.value)
+    probs = probs.astype(q.dtype)
     attn_out = jnp.einsum("nst,nth->nsh", probs, v)
   out = jnp.einsum(
-    "nsh,hnd->sd",
+    "nsh,dnh->sd",
     attn_out,
     params.w_o,
     out_sharding=jax.P(*config.sharding.res_stream),
   )
 
+  assert out.dtype == config.model.compute_dtype.value
+  assert kv_cache_out.dtype == config.model.compute_dtype.value
   return out, kv_cache_out
 
 
@@ -275,9 +276,12 @@ def init_embedding_discrete(config: Config, key) -> EmbeddingDiscrete:
 
 
 def _embedding_discrete(config: Config, params: EmbeddingDiscrete, tokens: jax.Array):
-  emb = params.w.at[tokens].get(out_sharding=jax.P(*config.sharding.res_stream))
+  w_f32 = params.w.astype(jnp.float32)  # upcast to perform the bwd scatter-add in fp32
+  emb = w_f32.at[tokens].get(out_sharding=jax.P(*config.sharding.res_stream))
+  emb = emb.astype(params.w.dtype)
   if config.model.use_bias_embeddings:
     emb += params.bias
+  assert emb.dtype == config.model.compute_dtype.value
   return emb
 
 
@@ -294,7 +298,7 @@ def init_embedding_continuous(config: Config, key) -> EmbeddingContinuous:
     key_emb,
     (config.model.num_vocab, config.model.d_model),
     config.model.param_dtype.value,
-    out_sharding=jax.P(*([None] + config.sharding.res_stream)),
+    out_sharding=jax.P(*config.sharding.wemb),
   )
   w_reg = config.model.param_std * jax.random.normal(
     key_reg,
@@ -324,6 +328,7 @@ def _embedding_continuous(config: Config, params: EmbeddingContinuous, seq: jax.
   emb_with_regs = jnp.concatenate((params.registers, emb_tokens), axis=0)
   effective_seq_len = emb_with_regs.shape[0]
   emb = emb_with_regs + params.w_pos[:effective_seq_len]
+  assert emb.dtype == config.model.compute_dtype.value
   return emb
 
 
@@ -335,22 +340,23 @@ class LMHead(NamedTuple):
 def init_lm_head(config: Config, key) -> LMHead:
   unemb = config.model.param_std * jax.random.normal(
     key,
-    (config.model.d_model, config.model.num_vocab),
+    (config.model.num_vocab, config.model.d_model),
     config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.res_stream),
+    out_sharding=jax.P(*config.sharding.wunemb),
   )
   bias = jnp.zeros(
     (config.model.num_vocab,),
     config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.res_stream),
+    out_sharding=jax.P(),
   )
   return LMHead(w=unemb, bias=bias)
 
 
 def _lm_head(config: Config, params: LMHead, x: Array):
-  logits = jnp.matmul(x, params.w)
+  logits = jnp.matmul(x, params.w.mT, preferred_element_type=jnp.float32)
   if config.model.use_bias_embeddings:
     logits += params.bias
+  assert logits.dtype == jnp.float32
   return logits
 
 
@@ -375,9 +381,11 @@ def init_classification_head(config: Config, key) -> ClassificationHead:
 
 
 def _classification_head(config: Config, params: ClassificationHead, x: Array):
-  logits = jnp.matmul(x[:1], params.w)
+  """Input x has shape (S, D)"""
+  logits = jnp.matmul(x[:1], params.w, preferred_element_type=jnp.float32)
   if config.model.use_bias_embeddings:
     logits += params.bias
+  assert logits.dtype == jnp.float32
   return logits
 
 
@@ -402,13 +410,15 @@ def init_layernorm(config: Config) -> LayerNorm:
 
 def _layernorm(config: Config, params: LayerNorm, x: Array):
   """Naive three-pass layernorm algorithm. (layer/RMS norm, with/without bias)"""
-  x = x.astype(config.model.compute_dtype.value)
+  out = x.astype(jnp.float32)
   if config.model.use_centering_ln:
-    x = x - x.mean()
-  x = x * jax.lax.rsqrt(config.model.eps_ln + (x**2).mean())
-  out = params.gamma * x.astype(config.model.param_dtype.value)
+    out = out - out.mean()
+  out = out * jax.lax.rsqrt(config.model.eps_ln + (out**2).mean())
+  out = params.gamma * out
   if config.model.use_bias_ln:
     out += params.beta
+  out = out.astype(x.dtype)
+  assert out.dtype == config.model.compute_dtype.value
   return out
 
 
@@ -490,7 +500,7 @@ def _transformer(
   cache: jax.Array,
   cache_params: CacheParams,
 ):
-  _, __, _embedding, _unembedding = transformer_variant_factory(config)
+  _, _, _embedding, _unembedding = transformer_variant_factory(config)
   x_seq = _embedding(config, params.emb, tokens)
 
   @partial(jax.remat, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)
@@ -500,8 +510,6 @@ def _transformer(
 
   out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache))
 
-  out = _unembedding(config, params.unemb, out)
-
   return out, cache_out
 
 
@@ -510,8 +518,10 @@ def _transformer(
 #####################################
 
 
-# TODO: update sharding if attention sharding is modified
-def init_kv_cache(config: Config, global_batch_size: int, cache_capacity: int):
+def init_kv_cache(
+  config: Config, global_batch_size: int, num_microbatches: int, cache_capacity: int
+):
+  """Cache is shape (B//num_micro, L, 2, N, max_seq_len, H)"""
   if not config.sharding.data:
     sharding_batch_layer = [None, None]
   else:
@@ -520,14 +530,14 @@ def init_kv_cache(config: Config, global_batch_size: int, cache_capacity: int):
 
   return jnp.zeros(
     (
-      global_batch_size,
+      global_batch_size // num_microbatches,
       config.model.num_layers,
       2,
       config.model.num_heads,
       cache_capacity,
       config.model.d_head,
     ),
-    dtype=config.model.param_dtype.value,
+    dtype=config.model.compute_dtype.value,
     out_sharding=sharding,
   )
 
@@ -540,14 +550,15 @@ def init_kv_cache(config: Config, global_batch_size: int, cache_capacity: int):
 def model_spec(model: Transformer) -> Any:
   # Make the spec (we need some way to pass metadata around)
   # HACK: not great... disadvantage of bare metal without custom pytree
+  # TODO: Check and update these later... reasonable to do (in, out)?
   def _make_spec_from_str(path: str) -> tuple[int, int] | None:
     param_str = path[-1].__str__()
     matrix_axes_dict = {
-      ".w_qkv": (-4, -1),
-      ".w_o": (-3, -1),
-      ".w_up": (-2, -1),
-      ".w_gate": (-2, -1),
-      ".w_down": (-2, -1),
+      ".w_qkv": (-1, -2),
+      ".w_o": (-1, -3),
+      ".w_up": (-1, -2),
+      ".w_gate": (-1, -2),
+      ".w_down": (-1, -2),
       ".w": (-2, -1),
       ".w_emb": (-2, -1),
       ".w_pos": (-2, -1),
@@ -562,13 +573,13 @@ def model_spec(model: Transformer) -> Any:
 def transformer_variant_factory(config: Config):
   if config.model.transformer_type == TransformerType.DISCRETE:
     init_embedding = init_embedding_discrete
-    fun_embedding = _embedding_discrete
+    fn_embedding = _embedding_discrete
     init_unembedding = init_lm_head
-    fun_unembedding = _lm_head
+    fn_unembedding = _lm_head
   else:
     init_embedding = init_embedding_continuous
-    fun_embedding = _embedding_continuous
+    fn_embedding = _embedding_continuous
     init_unembedding = init_classification_head
-    fun_unembedding = _classification_head
+    fn_unembedding = _classification_head
 
-  return (init_embedding, init_unembedding, fun_embedding, fun_unembedding)
+  return (init_embedding, init_unembedding, fn_embedding, fn_unembedding)

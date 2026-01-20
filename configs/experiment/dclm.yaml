@@ -1,22 +1,39 @@
 # @package _global_
 
 defaults:
-  - /dataset/dclm@train_dataset
+  - /dataset/dclm@train_dataset  # seq len 2048
 
-val_log_interval: 250
+val_log_interval: 1000
+# These need to be tuned fairly aggressively wrt d_model
+# And for DCLM, 512 is a good V block size
+#   (256 is bad, bc we have 128K-128256=2816=256*11 leftover tokens...
+#    and this seems to trigger the JAX splash masklib bug, since that bug
+#    is avoided only when we end with a partial mask)
+fused_xent_block_size_T: 256
+fused_xent_block_size_V: 512
+fused_xent_block_size_V_compute: 512
 
-train_dataset:  # about 2b tokens
-  num_steps: 4000
-  global_batch_size: 256
+train_dataset:
+  num_steps: 8000
+  global_batch_size: 512  # about 8b tokens
+  use_splash: True
+  splash_block_size_q: 1024
+  splash_block_size_kv: 1024
+  splash_block_size_kv_compute: 1024
+  splash_use_fused_bwd_kernel: True
 
 val_list:
   - dataset:
       name: DCLM
       path: ${train_dataset.path}
       split: VAL
-      seq_len: ${train_dataset.seq_len}  # At inference time, this functions like prompt size
-      global_batch_size: ${train_dataset.global_batch_size}
-      num_steps: 64  # about 32M tokens
+      seq_len: ${train_dataset.seq_len}
+      global_batch_size: 256  # 512K tokens
+      num_steps: 64  # about 34M tokens
+      use_splash: True
+      splash_block_size_q: ${train_dataset.splash_block_size_q}
+      splash_block_size_kv: ${train_dataset.splash_block_size_kv}
+      splash_block_size_kv_compute: ${train_dataset.splash_block_size_kv_compute}
     evaluator: NLL
 
 eval_list:
@@ -41,4 +58,4 @@ optimizer:
 
 inference:
   tokenizer: LLAMA3
-  max_tokens_to_generate: 1024
+  max_tokens_to_generate: 1023

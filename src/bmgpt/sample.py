@@ -2,8 +2,10 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+from jax import Array
 
 from bmgpt.config import Config
+from bmgpt.losses import calculate_logits
 from bmgpt.model import CacheParams, Transformer, _transformer
 
 
@@ -16,13 +18,18 @@ def sample_one_prompt(
   cache_in: jax.Array,
   cache_size: int,
   temperature: float,
-):
+) -> tuple[Array, Array, int]:
   """Expects seq and cache_in to have no batch axis."""
   cache_params = CacheParams(enabled=True, size=cache_size)
-  y, cache_out = _transformer(config, kernel, params, seq, cache_in, cache_params)
-  logits = y.astype(config.model.compute_dtype.value)
+  out, cache_out = _transformer(config, kernel, params, seq, cache_in, cache_params)
   cache_size = cache_size + seq.shape[-1]
-  next_token = jnp.array((jax.random.categorical(key, logits[-1] / temperature),))
+  logits = calculate_logits(config, params.unemb, out).astype(jnp.float32)
+  logits = logits[-1]
+  valid_ids_mask = (
+    jnp.arange(config.model.num_vocab) <= config.train_dataset.max_valid_token_id
+  )
+  logits = jnp.where(valid_ids_mask, logits, -jnp.inf)
+  next_token = jnp.array((jax.random.categorical(key, logits / temperature),))
   return next_token, cache_out, cache_size
 
 
@@ -32,12 +39,12 @@ def generate(
   key,
   kernel,
   params: Transformer,
-  prompt: jax.Array,
-  cache: jax.Array,
+  prompt: Array,
+  cache: Array,
   cache_size: int,
-) -> tuple[jax.Array, jax.Array, int]:
+) -> tuple[Array, Array, int]:
   """Expects prompt and cache to have no batch axis."""
-  # Note: next_token is a length-1 sequence throughout
+  # Note: next_token is a shape (1,) Array throughout
   # Prefill
   key, sk = jax.random.split(key)
   next_token, cache, cache_size = sample_one_prompt(
@@ -52,8 +59,8 @@ def generate(
   )
   prefill = jnp.concatenate((prompt, next_token))
 
-  # Generation loop
-  def loop_fn(next_token__cache__cache_size, key):
+  # Decode
+  def loop_fn(next_token__cache__cache_size: tuple[Array, Array, int], key):
     next_token, cache, cache_size = sample_one_prompt(
       config,
       key,

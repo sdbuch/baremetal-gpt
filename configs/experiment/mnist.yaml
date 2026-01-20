@@ -4,7 +4,8 @@ defaults:
   - /dataset/mnist@train_dataset
 
 
-val_log_interval: 468 # every epoch
+val_log_interval: 468 # every epoch @ batch 128
+use_fused_xent_loss: False
 
 train_dataset:
   path: "data/mnist/patch_7x7"
@@ -12,7 +13,7 @@ train_dataset:
   seq_len: 16  # 7x7 patches
   global_batch_size: 128
   epochs_to_loop: 15
-  num_steps: 0
+  num_steps: 7020  # hardcoded: 15 epochs, 128 batch, 60k train set size (drop last)
   use_splash: False
 
 val_list:
@@ -50,7 +51,7 @@ eval_list:
       path: "data/mnist/patch_7x7"
       split: TEST
       seq_len: 16
-      global_batch_size: 6000
+      global_batch_size: 32
       epochs_to_loop: 1
       use_splash: False
     evaluator: ACCURACY
@@ -81,4 +82,3 @@ model:
 
 optimizer:
   weight_decay: 1e-4
-  lr: 3e-4

@@ -9,7 +9,6 @@ import jax.numpy as jnp
 from bmgpt.config import (
   Config,
   EvaluationConfig,
-  EvaluatorType,
   config_post_init,
   mesh_from_config,
   register_configs,
@@ -17,6 +16,7 @@ from bmgpt.config import (
 from bmgpt.data import get_distributed_batch_iter
 from bmgpt.evaluators import evaluator_factory
 from bmgpt.loggers import Logger, logger_factory
+from bmgpt.losses import fused_softmax_cross_entropy, softmax_cross_entropy
 from bmgpt.model import (
   CacheParams,
   Transformer,
@@ -30,7 +30,7 @@ from bmgpt.optimizers import (
   init_adam_state,
   opt_update_factory,
 )
-from bmgpt.splash_helpers import make_splash_kernel
+from bmgpt.splash_helpers import forward_kernels_from_config
 
 register_configs()
 
@@ -46,7 +46,12 @@ class TrainState(NamedTuple):
 def init_train_state(key, config: Config) -> TrainState:
   model_params = init_transformer(key, config)
   adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
-  cache = init_kv_cache(config, config.train_dataset.global_batch_size, 0)
+  cache = init_kv_cache(
+    config,
+    config.train_dataset.global_batch_size,
+    config.train_dataset.num_microbatches,
+    0,
+  )
   return TrainState(params=model_params, opt_state=adam_state, kv_cache=cache)
 
 
@@ -80,52 +85,62 @@ def main(config: Config):
   cache_params = CacheParams(enabled=False, size=0)
 
   # Configure forward pass (attention kernels)
-  shard_mapped__kernel = make_splash_kernel(config, config.train_dataset, 0, mesh)
-  val_kernels = []
-  eval_kernels = []
-  for evaluation in config.val_list:
-    val_kernels.append(make_splash_kernel(config, evaluation.dataset, 0, mesh))
-  for evaluation in config.eval_list:
-    eval_kernels.append(make_splash_kernel(config, evaluation.dataset, 0, mesh))
-  assert len(val_kernels) == len(config.val_list)
-  assert len(eval_kernels) == len(config.eval_list)
+  train_attn_kernel, train_lse_kernel, val_kernels, eval_kernels = (
+    forward_kernels_from_config(config, mesh)
+  )
 
   # Configure optimization
   spec = model_spec(train_state.params)
-  opt_update = opt_update_factory(config.optimizer.type)
   weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
+  opt_update = opt_update_factory(config.optimizer.type)
+  opt_update = partial(opt_update, config, weight_decay_mask)
 
   @partial(jax.jit, donate_argnums=2)
-  def train_step(config: Config, batch, train_state: TrainState):
-    def loss_fn(params: Transformer):
-      inputs, targets = batch
-      logits, _ = jax.vmap(
-        partial(
-          _transformer, config, shard_mapped__kernel, params, cache_params=cache_params
+  def train_step(config: Config, batch, state: TrainState):
+    def loss_fn(params: Transformer, microbatch: tuple[jax.Array, jax.Array]):
+      inputs, targets = microbatch
+      to_compute_dtype = lambda p: p.astype(config.model.compute_dtype.value)
+      params = jax.tree.map(to_compute_dtype, params)
+      model = partial(
+        _transformer, config, train_attn_kernel, params, cache_params=cache_params
+      )
+      outputs, _ = jax.vmap(model)(inputs, state.kv_cache)
+      if config.use_fused_xent_loss:
+        loss = fused_softmax_cross_entropy(
+          config, params.unemb, outputs, targets, train_lse_kernel
         )
-      )(inputs, train_state.kv_cache)
-      logprobs = jax.nn.log_softmax(logits, axis=-1)
-      return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).mean()
+      else:
+        loss = softmax_cross_entropy(config, params.unemb, outputs, targets)
+      return loss
 
-    loss, grad = jax.value_and_grad(loss_fn)(train_state.params)
+    # Calculate gradients: use a scan for gradient accumulation
+    def gradient_accum(loss__grad, microbatch):
+      loss_accum, grad_accum = loss__grad
+      loss, grad = jax.value_and_grad(loss_fn)(state.params, microbatch)
+      return (loss_accum + loss, jax.tree.map(jnp.add, grad_accum, grad)), loss
+
+    zeros_like_f32 = partial(jnp.zeros_like, dtype=jnp.float32)
+    carry = (jnp.zeros(()), jax.tree.map(zeros_like_f32, state.params))
+    (loss, grad), raw_losses = jax.lax.scan(gradient_accum, carry, batch)
+    assert raw_losses.dtype == jnp.float32
+    # NOTE: breaks if per-token loss masking introduced (see unsloth blog)
+    loss = loss / config.train_dataset.num_microbatches
+    grad = jax.tree.map(lambda x: x / config.train_dataset.num_microbatches, grad)
+
+    # Update parameters
     grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
-    update__opt_state = jax.tree.map(
-      partial(opt_update, config),
-      train_state.params,
-      grad_clipped,
-      train_state.opt_state,
-      weight_decay_mask,
-    )
-    # Transpose the output tree to get update tree and state tree
-    update, opt_state = map(
-      lambda i: jax.tree.map(lambda x, y: y[i], grad, update__opt_state), range(2)
-    )
-    params = jax.tree.map(lambda x, y: x + y, train_state.params, update)
-    new_state = TrainState(
-      params=params, opt_state=opt_state, kv_cache=train_state.kv_cache
-    )
+    update_tree = jax.tree.map(opt_update, state.params, grad_clipped, state.opt_state)
+    update, opt_state, lr = [
+      jax.tree.map(lambda _, y: y[i], state.params, update_tree) for i in range(3)
+    ]
+    params = jax.tree.map(jnp.add, state.params, update)
+    new_state = TrainState(params=params, opt_state=opt_state, kv_cache=state.kv_cache)
 
-    metrics = {"batch_loss": loss, "grad_norm": global_grad_norm}
+    metrics = {
+      "lr": jax.tree.leaves(lr)[0],
+      "batch_loss": loss,
+      "grad_norm": global_grad_norm,
+    }
     return metrics, new_state
 
   # Training loop
@@ -162,6 +177,10 @@ def eval_loop(
   for evaluation, shard_mapped__kernel in evals_and_kernels:
     key, key_d, key_e = jax.random.split(key, 3)
     batch_iter = get_distributed_batch_iter(config, evaluation.dataset, key_d, mesh)
+    assert evaluation.dataset.num_microbatches == 1, (
+      "Microbatching for evaluators not supported"
+    )
+    batch_iter = map(lambda b: jax.tree.map(lambda x: x.squeeze(0), b), batch_iter)
     evaluation_fn = evaluator_factory(evaluation)
     metrics = evaluation_fn(
       config, key_e, shard_mapped__kernel, mesh, params, batch_iter

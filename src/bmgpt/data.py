@@ -130,7 +130,7 @@ def dataloader_dclm(
   to_jax_array = lambda x: jnp.array(x, dtype=jnp.int32)
 
   dataloader = (
-    wds.WebDataset(data, shardshuffle=False)
+    wds.WebDataset(data, shardshuffle=False)  # type: ignore[attr-defined]
     .decode()  # Auto-decompress gzip and decode JSON
     .to_tuple("json.gz")  # Extract json.gz key-value, no metadata, as (1,) shape tuple
     .select(lambda ctx: all(token != PAD_TOKEN for token in ctx[0]))  # no PAD tokens
@@ -201,11 +201,11 @@ def dataloader_without_replacement(
 
 # Helper to map a dataloader with make_array_from_process_local_data
 def get_dataset_on_device(
-  config: Config, dataloader: DataloaderOutputType, mesh: Mesh
+  dataloader: DataloaderOutputType, mesh: Mesh, sharding_data: list[str | None]
 ) -> DataloaderOutputType:
   return map(
     lambda batch: jax.make_array_from_process_local_data(
-      NamedSharding(mesh, jax.P(*config.sharding.data)), batch
+      NamedSharding(mesh, jax.P(*sharding_data)), batch
     ),
     dataloader,
   )
@@ -215,5 +215,16 @@ def get_dataset_on_device(
 def get_distributed_batch_iter(
   config: Config, dataset_config: DatasetConfig, key, mesh
 ):
-  data, dataloader = dataset_dataloader_factory(dataset_config)
-  return get_dataset_on_device(config, dataloader(key, dataset_config, data), mesh)
+  # Microbatch the batch axis for gradient accumulation
+  num_microbatches = dataset_config.num_microbatches
+  local_batch_size = dataset_config.global_batch_size // jax.process_count()
+  local_microbatch_size = local_batch_size // num_microbatches
+
+  def make_microbatch(batch):
+    return jax.tree.map(
+      lambda x: x.reshape(num_microbatches, local_microbatch_size, *x.shape[1:]), batch
+    )
+
+  data, dataloader_factory = dataset_dataloader_factory(dataset_config)
+  dataloader = map(make_microbatch, dataloader_factory(key, dataset_config, data))
+  return get_dataset_on_device(dataloader, mesh, [None] + config.sharding.data)

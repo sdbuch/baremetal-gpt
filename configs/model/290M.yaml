@@ -1,0 +1,11 @@
+# @package _global_
+
+# about 290M params with DCLM tokenizer embeddings
+# gpt2-small-ish settings
+model:
+  d_model: 768
+  num_heads: 12
+  d_head: 64
+  num_layers: 12
+
+  use_gating_mlp: True

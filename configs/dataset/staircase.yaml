@@ -3,3 +3,4 @@ path: ""
 split: TRAIN
 seq_len: 256
 global_batch_size: 128
+max_valid_token_id: 9

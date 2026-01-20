@@ -22,7 +22,7 @@ val_list:
       path: ${train_dataset.path}
       split: VAL
       seq_len: 128  # At inference time, this functions like prompt size
-      global_batch_size: 16
+      global_batch_size: ${sharding.mesh_shape[0]}
       use_splash: False
     evaluator: AUTOREGRESSIVE_ROLLOUTS
 
@@ -32,7 +32,7 @@ eval_list:
       path: ${train_dataset.path}
       split: VAL
       seq_len: 128  # At inference time, this functions like prompt size
-      global_batch_size: 16
+      global_batch_size: ${sharding.mesh_shape[0]}
       use_splash: False
     evaluator: AUTOREGRESSIVE_ROLLOUTS
 
@@ -40,7 +40,7 @@ model:
   transformer_type: DISCRETE
   max_seq_len: ${train_dataset.seq_len}  # no longer than train
   is_causal: True
-  num_vocab: 50257  # gpt2 tokenizer
+  num_vocab: 50688  # gpt2 tokenizer
 
 optimizer:
   weight_decay: 1e-1
@@ -48,4 +48,4 @@ optimizer:
 
 inference:
   tokenizer: GPT2
-  max_tokens_to_generate: 128
+  max_tokens_to_generate: 127

@@ -8,6 +8,7 @@ from jax.experimental.multihost_utils import process_allgather
 
 from bmgpt.config import Config, EvaluationConfig, EvaluatorType
 from bmgpt.data import DataloaderOutputType
+from bmgpt.losses import MetricType, accuracy, softmax_cross_entropy
 from bmgpt.model import CacheParams, Transformer, _transformer, init_kv_cache
 from bmgpt.sample import generate
 from bmgpt.tokenizers import get_tokenizer_factory
@@ -19,30 +20,42 @@ def evaluator_factory(evaluation_config: EvaluationConfig):
     case EvaluatorType.AUTOREGRESSIVE_ROLLOUTS:
       return partial(
         autoregressive_rollouts,
-        global_batch_size=evaluation_config.dataset.global_batch_size,
+        global_batch_size__num_microbatches=(
+          evaluation_config.dataset.global_batch_size,
+          evaluation_config.dataset.num_microbatches,
+        ),
         prompt_size=evaluation_config.dataset.seq_len,
       )
     case EvaluatorType.ACCURACY:
       return partial(
         calculate_metric_on_minibatches,
-        metric=accuracy,
-        global_batch_size=evaluation_config.dataset.global_batch_size,
+        metric_fun=accuracy,
+        global_batch_size__num_microbatches=(
+          evaluation_config.dataset.global_batch_size,
+          evaluation_config.dataset.num_microbatches,
+        ),
         metric_name=evaluation_config.dataset.split.value + "/accuracy",
         num_steps=evaluation_config.dataset.num_steps,
       )
     case EvaluatorType.NLL:
       return partial(
         calculate_metric_on_minibatches,
-        metric=nll,
-        global_batch_size=evaluation_config.dataset.global_batch_size,
+        metric_fun=softmax_cross_entropy,
+        global_batch_size__num_microbatches=(
+          evaluation_config.dataset.global_batch_size,
+          evaluation_config.dataset.num_microbatches,
+        ),
         metric_name=evaluation_config.dataset.split.value + "/nll",
         num_steps=evaluation_config.dataset.num_steps,
       )
     case EvaluatorType.PERPLEXITY:
       return partial(
         calculate_metric_on_minibatches,
-        metric=nll,
-        global_batch_size=evaluation_config.dataset.global_batch_size,
+        metric_fun=softmax_cross_entropy,
+        global_batch_size__num_microbatches=(
+          evaluation_config.dataset.global_batch_size,
+          evaluation_config.dataset.num_microbatches,
+        ),
         metric_name=evaluation_config.dataset.split.value + "/perplexity",
         perplexity_flag=True,
         num_steps=evaluation_config.dataset.num_steps,
@@ -56,18 +69,20 @@ def autoregressive_rollouts(
   mesh,
   params: Transformer,
   batch_iter: DataloaderOutputType,
-  global_batch_size: int,
+  global_batch_size__num_microbatches: tuple[int, int],
   prompt_size: int,
 ):
-  """prompts should have a leading batch axis"""
   prompts, _ = next(batch_iter)
+  params = jax.tree.map(lambda p: p.astype(config.model.compute_dtype.value), params)
 
   @jax.vmap
   def batched_generate(prompt: jax.Array, cache):
     return generate(config, key, kernel, params, prompt, cache, 0)
 
   with jax.set_mesh(mesh):
-    cache = init_kv_cache(config, global_batch_size, config.model.max_seq_len - 1)
+    cache = init_kv_cache(
+      config, *global_batch_size__num_microbatches, config.model.max_seq_len - 1
+    )
     outputs, cache, cache_size = batched_generate(prompts, cache)
 
   prompts, outputs = process_allgather((prompts, outputs), tiled=True)
@@ -88,69 +103,46 @@ def calculate_metric_on_minibatches(
   mesh,
   params: Transformer,
   batch_iter: DataloaderOutputType,
-  global_batch_size: int,
-  metric,
+  global_batch_size__num_microbatches: tuple[int, int],
+  metric_fun: MetricType,
   metric_name: str = "",
   perplexity_flag: bool = False,
   num_steps: int = 0,
 ):
-  num_samples_processed = 0
   with jax.set_mesh(mesh):
-    cache = init_kv_cache(config, global_batch_size, 0)
+    cache = init_kv_cache(config, *global_batch_size__num_microbatches, 0)
+  params = jax.tree.map(lambda p: p.astype(config.model.compute_dtype.value), params)
+
+  # Loss accumulation function (avoid communication until we're done)
+  @jax.jit
+  def forward_and_calc_metric(inputs, targets, params, cache):
+    cache_params = CacheParams(enabled=False, size=0)
+    model = partial(_transformer, config, kernel, params, cache_params=cache_params)
+    outputs, _ = jax.vmap(model)(inputs, cache)
+    return metric_fun(
+      config, params.unemb, outputs, targets, kernel, False
+    )  # don't reduce
 
   # Process first batch (to get on-device buffer shape)
   batch = next(batch_iter)
   with jax.set_mesh(mesh):
-    batch_metric = metric(config, kernel, batch, params, cache)
+    batch_metric = forward_and_calc_metric(*batch, params, cache)
   batch_metric_buffer = batch_metric
-  num_samples_processed += batch[0].size
+  tokens_per_batch = batch_metric_buffer.size
+  num_batches_processed = 1
 
   # Process remaining batches
-  if num_steps != 1:  # if num_steps=1, we want to skip this
+  step = -1
+  if num_steps != 1:  # executed step 1 above
     for step, batch in enumerate(batch_iter):
       with jax.set_mesh(mesh):
-        batch_metric = metric(config, kernel, batch, params, cache)
+        batch_metric = forward_and_calc_metric(*batch, params, cache)
         batch_metric_buffer += batch_metric
-      num_samples_processed += batch[0].size
       if step == num_steps - 1:
         break
-  metric = batch_metric_buffer / num_samples_processed
+  num_batches_processed += step + 1
+  num_tokens_processed = tokens_per_batch * num_batches_processed
+  metric = batch_metric_buffer.sum() / num_tokens_processed
   if perplexity_flag:
-    # there is an online algorithm for perplexity with a product reduction
-    # but it is not numerically stable... easier to just do this hack
     metric = jnp.exp(metric)
   return {metric_name: metric}
-
-
-@partial(jax.jit, static_argnums=(1,))
-def accuracy(config: Config, kernel, batch, params: Transformer, cache):
-  inputs, targets = batch
-  logits, _ = jax.vmap(
-    partial(
-      _transformer,
-      config,
-      kernel,
-      params,
-      cache_params=CacheParams(enabled=False, size=0),
-    )
-  )(inputs, cache)
-  preds = logits.argmax(axis=-1)
-  return (preds == targets).astype(jnp.int32).sum()
-
-
-@partial(jax.jit, static_argnums=(1,))
-def nll(config: Config, kernel, batch, params: Transformer, cache):
-  """Negative log likelihood, calculated in nats."""
-  inputs, targets = batch
-  logits, _ = jax.vmap(
-    partial(
-      _transformer,
-      config,
-      kernel,
-      params,
-      cache_params=CacheParams(enabled=False, size=0),
-    )
-  )(inputs, cache)
-  logits = logits.astype(config.model.compute_dtype.value)
-  logprobs = jax.nn.log_softmax(logits, axis=-1)
-  return -jnp.take_along_axis(logprobs, targets[..., None], axis=-1).sum()
