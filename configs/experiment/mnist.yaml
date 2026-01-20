@@ -4,7 +4,7 @@ defaults:
   - /dataset/mnist@train_dataset
 
 
-val_log_interval: 468 # every epoch
+val_log_interval: 468 # every epoch @ batch 128
 use_fused_xent_loss: False
 
 train_dataset:
