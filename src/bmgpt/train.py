@@ -27,6 +27,7 @@ from bmgpt.model import (
 )
 from bmgpt.optimizers import (
   cosine_with_warmup,
+  get_lr,
   grad_norm_and_clip,
   init_adam_state,
   opt_update_factory,
@@ -131,13 +132,14 @@ def main(config: Config):
     # Update parameters
     grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
     update_tree = jax.tree.map(opt_update, state.params, grad_clipped, state.opt_state)
-    update = jax.tree.map(lambda _, y: y[0], state.params, update_tree)
-    opt_state = jax.tree.map(lambda _, y: y[1], state.params, update_tree)
-    params = jax.tree.map(jnp.add, state.params, update)
+    update, lr, opt_state = [
+      jax.tree.map(lambda _, y: y[i], state.params, update_tree) for i in range(3)
+    ]
+    params = jax.tree.map(lambda p, lr, u: p + lr * u, state.params, lr, update)
     new_state = TrainState(params=params, opt_state=opt_state, kv_cache=state.kv_cache)
 
     metrics = {
-      "lr": cosine_with_warmup(config, state.opt_state.emb.w.step),
+      "lr": jax.tree.leaves(lr)[0],
       "batch_loss": loss,
       "grad_norm": global_grad_norm,
     }

@@ -32,6 +32,13 @@ class OptType(Enum):
   SGD = "sgd"
 
 
+class LRScheduleType(Enum):
+  """Different LR schedulers we can use. optimizers.py"""
+
+  WARMUP_STABLE = "warmup_stable"
+  COSINE_WITH_WARMUP = "cosine_with_warmup"
+
+
 class LoggerType(Enum):
   """Different loggers we can use. loggers.py"""
 
@@ -115,14 +122,17 @@ class EvaluationConfig:
 class OptimizerConfig:
   """Optimizer params. optimizers.py"""
 
-  type: OptType = OptType.ADAMW
+  schedule_type = LRScheduleType.COSINE_WITH_WARMUP
   base_lr: float = 1e-6
   peak_lr: float = 3e-4
   min_lr: float = 3e-6
   num_warmup_steps: int = 200
+
+  type: OptType = OptType.ADAMW
   beta1: float = 0.9
   beta2: float = 0.999
   eps_adam: float = 1e-8
+
   weight_decay: float = 1e-2
   clip_grad: float = 1.0  # global ell^2 norm
 

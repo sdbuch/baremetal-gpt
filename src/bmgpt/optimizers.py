@@ -4,18 +4,15 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
-from bmgpt.config import Config, OptType
+from bmgpt.config import Config, LRScheduleType, OptType
 from bmgpt.model import Transformer
 
 """Optimizer init/updates operate on Arrays, not pytrees (tree.map them)"""
 
 
-def opt_update_factory(opt_type: OptType):
-  match opt_type:
-    case OptType.ADAMW:
-      return adamw_update
-    case OptType.SGD:
-      return sgd_update
+##############################
+#         Utility
+##############################
 
 
 def grad_norm_and_clip(
@@ -40,7 +37,7 @@ def grad_norm_and_clip(
 
 
 ##############################
-#      State Management
+#      Optimizer State
 ##############################
 
 
@@ -71,7 +68,15 @@ def init_sgd_state(config: Config, param: jax.Array) -> OptState:
 ##############################
 
 
-def linear_warmup(config: Config, step: jax.Array):
+def lr_schedule_factory(lr_schedule_type: LRScheduleType):
+  match lr_schedule_type:
+    case LRScheduleType.WARMUP_STABLE:
+      return warmup_stable
+    case LRScheduleType.COSINE_WITH_WARMUP:
+      return cosine_with_warmup
+
+
+def warmup_stable(config: Config, step: jax.Array):
   """Range from base_lr to peak_lr over num_warmup_steps, then cap."""
   base_lr = config.optimizer.base_lr
   peak_lr = config.optimizer.peak_lr
@@ -86,10 +91,10 @@ def cosine_decay(config: Config, step: jax.Array, num_warmup_steps: int = 0):
   """Cosine decay schedule from peak_lr to base_lr over num_steps."""
   peak_lr = config.optimizer.peak_lr
   min_lr = config.optimizer.min_lr
+  # NOTE: doesn't support pure epoch-based currently
   max_step = config.train_dataset.num_steps - num_warmup_steps - 1
-  assert max_step >= 0  # NOTE: doesn't support epoch-based currently
 
-  progress = jnp.array(1.0) if max_step == 0 else jnp.clip(step / max_step, 0, 1)
+  progress = jnp.array(1.0) if max_step <= 0 else jnp.clip(step / max_step, 0, 1)
   cosine_decay = 0.5 * (1 + jnp.cos(jnp.pi * progress))
   return min_lr + (peak_lr - min_lr) * cosine_decay
 
@@ -98,9 +103,17 @@ def cosine_with_warmup(config: Config, step: jax.Array):
   num_warmup_steps = max(config.optimizer.num_warmup_steps, 1)
   return jnp.where(
     step < num_warmup_steps,
-    linear_warmup(config, step),
-    cosine_decay(config, step - num_warmup_steps + 1, num_warmup_steps=num_warmup_steps - 1),
+    warmup_stable(config, step),
+    cosine_decay(
+      config, step - num_warmup_steps + 1, num_warmup_steps=num_warmup_steps - 1
+    ),
   )
+
+
+def get_lr(config: Config, schedule_type: LRScheduleType, state: OptState):
+  lr_schedule_fn = lr_schedule_factory(schedule_type)
+  lr = lr_schedule_fn(config, state.step)
+  return lr
 
 
 ##############################
@@ -109,6 +122,15 @@ def cosine_with_warmup(config: Config, step: jax.Array):
 
 # TODO: Expose configuration options for LR schedulers
 
+
+def opt_update_factory(opt_type: OptType):
+  match opt_type:
+    case OptType.ADAMW:
+      return adamw_update
+    case OptType.SGD:
+      return sgd_update
+
+
 def adamw_update(
   config: Config, wd_mask: bool, param: jax.Array, grad: jax.Array, state: OptState
 ):
@@ -116,7 +138,7 @@ def adamw_update(
   beta2 = config.optimizer.beta2
   eps = config.optimizer.eps_adam
   weight_decay = config.optimizer.weight_decay
-  lr = cosine_with_warmup(config, state.step)
+  lr = get_lr(config, config.optimizer.schedule_type, state)
 
   mu = beta1 * state.mu + (1 - beta1) * grad
   nu = beta2 * state.nu + (1 - beta2) * grad**2
@@ -125,10 +147,10 @@ def adamw_update(
   # simulate initializing the buffers with initial gradients via pre-incrementing step
   mu_debias = mu / (1 - beta1**new_state.step)
   nu_debias = nu / (1 - beta2**new_state.step)
-  update = -lr * mu_debias / (eps + jnp.sqrt(nu_debias))
+  update = -mu_debias / (eps + jnp.sqrt(nu_debias))
   if wd_mask:
-    update = update - lr * weight_decay * param
-  return update.astype(config.model.param_dtype.value), new_state
+    update = update - weight_decay * param
+  return update.astype(config.model.param_dtype.value), lr, new_state
 
 
 def sgd_update(
@@ -136,14 +158,14 @@ def sgd_update(
 ):
   beta1 = config.optimizer.beta1
   weight_decay = config.optimizer.weight_decay
-  lr = cosine_with_warmup(config, state.step)
+  lr = get_lr(config, config.optimizer.schedule_type, state)
 
   mu = beta1 * state.mu + (1 - beta1) * grad
   new_state = OptState(mu=mu, nu=state.nu, step=state.step + 1)
 
   # simulate initializing the buffers with initial gradients via pre-incrementing step
   mu_debias = mu / (1 - beta1**new_state.step)
-  update = -lr * mu_debias
+  update = -mu_debias
   if wd_mask:
-    update = update - lr * weight_decay * param
-  return update.astype(config.model.param_dtype.value), state
+    update = update - weight_decay * param
+  return update.astype(config.model.param_dtype.value), lr, state
