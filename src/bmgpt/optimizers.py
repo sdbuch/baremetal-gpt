@@ -120,8 +120,6 @@ def get_lr(config: Config, schedule_type: LRScheduleType, state: OptState):
 #          Updates
 ##############################
 
-# TODO: Expose configuration options for LR schedulers
-
 
 def opt_update_factory(opt_type: OptType):
   match opt_type:

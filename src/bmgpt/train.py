@@ -26,8 +26,6 @@ from bmgpt.model import (
   model_spec,
 )
 from bmgpt.optimizers import (
-  cosine_with_warmup,
-  get_lr,
   grad_norm_and_clip,
   init_adam_state,
   opt_update_factory,
