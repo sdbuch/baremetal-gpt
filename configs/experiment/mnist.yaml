@@ -13,7 +13,7 @@ train_dataset:
   seq_len: 16  # 7x7 patches
   global_batch_size: 128
   epochs_to_loop: 15
-  num_steps: 898560  # hardcoded: 15 epochs, 128 batch, 60k train set size
+  num_steps: 7020  # hardcoded: 15 epochs, 128 batch, 60k train set size (drop last)
   use_splash: False
 
 val_list:
