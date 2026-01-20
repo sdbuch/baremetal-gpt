@@ -8,7 +8,7 @@ from datasets import load_dataset
 # Configure your HF_HOME and HF_TOKEN as necessary externally
 
 
-def main(patch_size: int = 4):
+def main(patch_size: int = 7):
   # Load and array-ify data
   dataset = load_dataset("ylecun/mnist")
   train = dataset["train"]
