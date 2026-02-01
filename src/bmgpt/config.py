@@ -157,7 +157,14 @@ class OptimizerConfig:
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class HooksConfig:
-  emb: dict[str, list[StatType]]
+  transformer: dict[str, list[StatType]] = field(default_factory=dict)
+  emb: dict[str, list[StatType]] = field(default_factory=dict)
+  blocks: dict[str, list[StatType]] = field(default_factory=dict)
+  norm_attn: dict[str, list[StatType]] = field(default_factory=dict)
+  attn: dict[str, list[StatType]] = field(default_factory=dict)
+  norm_mlp: dict[str, list[StatType]] = field(default_factory=dict)
+  mlp: dict[str, list[StatType]] = field(default_factory=dict)
+  unemb: dict[str, list[StatType]] = field(default_factory=dict)
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -197,6 +204,7 @@ class ModelConfig:
   use_rope: bool = True  # RoPE or not
 
   # Hooks (activation logging)
+  hooks: HooksConfig = field(default_factory=HooksConfig)
 
 
 @dataclass(kw_only=True, unsafe_hash=True)

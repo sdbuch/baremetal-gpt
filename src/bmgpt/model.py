@@ -65,7 +65,7 @@ class Mlp(ParamNodeWithMetadata):
   bias_down: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key):
+  def init(cls, config: Config, key, hooks):
     k_up, k_down = jax.random.split(key, 2)
     d_hidden = int(config.model.mlp_factor * config.model.d_model)
     shape_w_up = (d_hidden, config.model.d_model)
@@ -90,6 +90,7 @@ class Mlp(ParamNodeWithMetadata):
       bias_up=ArrayWithMetadata(bias_up, ((), ())),
       w_down=ArrayWithMetadata(w_down, ((-1,), (-2,))),
       bias_down=ArrayWithMetadata(bias_down, ((), ())),
+      hooks=hooks,
     )
 
 
@@ -127,7 +128,7 @@ class Attn(ParamNodeWithMetadata):
   w_o: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key):
+  def init(cls, config: Config, key, hooks):
     k_qkv, k_o = jax.random.split(key, 2)
     shape_qkv = (3, config.model.num_heads, config.model.d_head, config.model.d_model)
     shape_wout = (config.model.d_model, config.model.num_heads, config.model.d_head)
@@ -136,6 +137,7 @@ class Attn(ParamNodeWithMetadata):
     return cls(
       w_qkv=ArrayWithMetadata(w_qkv, ((-1,), (-2, -3))),
       w_o=ArrayWithMetadata(w_out, ((-1, -2), (-3,))),
+      hooks=hooks,
     )
 
 
@@ -277,7 +279,7 @@ def attn(
 @dataclass
 class Embedding(ParamNodeWithMetadata):
   @classmethod
-  def init(cls, config: Config, key) -> "Embedding":
+  def init(cls, config: Config, key, hooks) -> "Embedding":
     raise NotImplementedError
 
 
@@ -297,13 +299,15 @@ class EmbeddingDiscrete(Embedding):
   bias: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key) -> "EmbeddingDiscrete":
+  def init(cls, config: Config, key, hooks) -> "EmbeddingDiscrete":
     shape_emb = (config.model.num_vocab, config.model.d_model)
     shape_bias = (config.model.d_model,)
     emb = init_array_normal(config, shape_emb, config.sharding.wemb, key)
     bias = init_array_zeros(config, shape_bias, config.sharding.res_stream)
     return cls(
-      w=ArrayWithMetadata(emb, ((), ())), bias=ArrayWithMetadata(bias, ((), ()))
+      w=ArrayWithMetadata(emb, ((), ())),
+      bias=ArrayWithMetadata(bias, ((), ())),
+      hooks=hooks,
     )
 
 
@@ -327,7 +331,7 @@ class EmbeddingContinuous(Embedding):
   registers: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key) -> "EmbeddingContinuous":
+  def init(cls, config: Config, key, hooks) -> "EmbeddingContinuous":
     key_emb, key_pos, key_reg = jax.random.split(key, 3)
     shape_emb = (config.model.num_vocab, config.model.d_model)
     shape_reg = (config.model.num_registers, config.model.d_model)
@@ -349,6 +353,7 @@ class EmbeddingContinuous(Embedding):
       bias=ArrayWithMetadata(bias, ((), ())),
       w_pos=ArrayWithMetadata(w_pos, ((-2,), (-1,))),
       registers=ArrayWithMetadata(w_reg, ((-2,), (-1,))),
+      hooks=hooks,
     )
 
 
@@ -372,7 +377,7 @@ class Unembedding(ParamNodeWithMetadata):
   bias: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key) -> "Unembedding":
+  def init(cls, config: Config, key, hooks) -> "Unembedding":
     raise NotImplementedError
 
 
@@ -392,13 +397,15 @@ class LMHead(Unembedding):
   bias: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key) -> "LMHead":
+  def init(cls, config: Config, key, hooks) -> "LMHead":
     shape_emb = (config.model.num_vocab, config.model.d_model)
     shape_bias = (config.model.num_vocab,)
     unemb = init_array_normal(config, shape_emb, config.sharding.wunemb, key)
     bias = init_array_zeros(config, shape_bias, [])
     return cls(
-      w=ArrayWithMetadata(unemb, ((-1,), (-2,))), bias=ArrayWithMetadata(bias, ((), ()))
+      w=ArrayWithMetadata(unemb, ((-1,), (-2,))),
+      bias=ArrayWithMetadata(bias, ((), ())),
+      hooks=hooks,
     )
 
 
@@ -418,13 +425,15 @@ class ClassificationHead(Unembedding):
   bias: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key) -> "ClassificationHead":
+  def init(cls, config: Config, key, hooks) -> "ClassificationHead":
     shape_emb = (config.model.num_classes, config.model.d_model)
     shape_bias = (config.model.num_classes,)
     unemb = init_array_normal(config, shape_emb, config.sharding.wunemb, key)
     bias = init_array_zeros(config, shape_bias, [])
     return cls(
-      w=ArrayWithMetadata(unemb, ((-1,), (-2,))), bias=ArrayWithMetadata(bias, ((), ()))
+      w=ArrayWithMetadata(unemb, ((-1,), (-2,))),
+      bias=ArrayWithMetadata(bias, ((), ())),
+      hooks=hooks,
     )
 
 
@@ -445,12 +454,14 @@ class LayerNorm(ParamNodeWithMetadata):
   beta: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config) -> "LayerNorm":
+  def init(cls, config: Config, hooks) -> "LayerNorm":
     shape = (config.model.d_model,)
     gamma = init_array_ones(config, shape, config.sharding.res_stream)
     beta = init_array_zeros(config, shape, config.sharding.res_stream)
     return cls(
-      gamma=ArrayWithMetadata(gamma, ((), ())), beta=ArrayWithMetadata(beta, ((), ()))
+      gamma=ArrayWithMetadata(gamma, ((), ())),
+      beta=ArrayWithMetadata(beta, ((), ())),
+      hooks=hooks,
     )
 
 
@@ -485,10 +496,10 @@ class Block(ParamNodeWithMetadata):
   def init(cls, config: Config, key) -> "Block":
     key_attn, key_mlp = jax.random.split(key)
     return cls(
-      norm_attn=LayerNorm.init(config),
-      attn=Attn.init(config, key_attn),
-      norm_mlp=LayerNorm.init(config),
-      mlp=Mlp.init(config, key_mlp),
+      norm_attn=LayerNorm.init(config, config.model.hooks.norm_attn),
+      attn=Attn.init(config, key_attn, config.model.hooks.attn),
+      norm_mlp=LayerNorm.init(config, config.model.hooks.norm_mlp),
+      mlp=Mlp.init(config, key_mlp, config.model.hooks.mlp),
     )
 
 
@@ -539,9 +550,9 @@ class Transformer(ParamNodeWithMetadata):
     keys_blocks = jax.random.split(key_blocks, config.model.num_layers)
     init_block = lambda k: Block.init(config, k)
     model = cls(
-      emb=embedding_cls.init(config, key_emb),
+      emb=embedding_cls.init(config, key_emb, config.model.hooks.emb),
       blocks=jax.vmap(init_block)(keys_blocks),
-      unemb=unembedding_cls.init(config, key_unemb),
+      unemb=unembedding_cls.init(config, key_unemb, config.model.hooks.unemb),
     )
     return model
 
