@@ -22,7 +22,7 @@ from bmgpt.model import (
   ArrayWithMetadata,
   CacheParams,
   Transformer,
-  _transformer,
+  transformer,
   init_kv_cache,
 )
 from bmgpt.optimizers import (
@@ -104,7 +104,7 @@ def main(config: Config):
       to_compute_dtype = lambda p: p.astype(config.model.compute_dtype.value)
       params = jax.tree.map(to_compute_dtype, params)
       model = partial(
-        _transformer, config, train_attn_kernel, params, cache_params=cache_params
+        transformer, config, train_attn_kernel, params, cache_params=cache_params
       )
       outputs, _ = jax.vmap(model)(inputs, state.kv_cache)
       if config.use_fused_xent_loss:

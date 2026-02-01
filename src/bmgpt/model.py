@@ -93,7 +93,7 @@ class Mlp(ParamNodeWithMetadata):
     )
 
 
-def _mlp(config: Config, params: Mlp, x: Array):
+def mlp(config: Config, params: Mlp, x: Array):
   mlp_out_spec = jax.P(*config.sharding.res_stream)
   if config.model.use_gating_mlp:
     mlp_hidden_spec = jax.P(*([None] + config.sharding.mlp_hidden))
@@ -176,7 +176,7 @@ def _make_cache_mask(seq_len_q: int, seq_len_k: int, cache_size: int) -> Array:
   return k_positions[None, :] < cache_size
 
 
-def _attn(
+def attn(
   config: Config,
   shard_mapped__kernel,
   params: Attn,
@@ -286,7 +286,7 @@ def _embedding_interface(params, seq: Array, config: Config) -> Array:
   raise NotImplementedError(f"No embedding impl for {type(params)}")
 
 
-def _embedding(config: Config, params: Embedding, seq: jax.Array):
+def embedding(config: Config, params: Embedding, seq: jax.Array):
   return _embedding_interface(params, seq, config)
 
 
@@ -381,7 +381,7 @@ def _unembedding_interface(params, seq: Array, config: Config) -> Array:
   raise NotImplementedError(f"No unembedding impl for {type(params)}")
 
 
-def _unembedding(config: Config, params: Unembedding, seq: jax.Array):
+def unembedding(config: Config, params: Unembedding, seq: jax.Array):
   return _unembedding_interface(params, seq, config)
 
 
@@ -454,7 +454,7 @@ class LayerNorm(ParamNodeWithMetadata):
     )
 
 
-def _layernorm(config: Config, params: LayerNorm, x: Array):
+def layernorm(config: Config, params: LayerNorm, x: Array):
   """Naive three-pass layernorm algorithm. (layer/RMS norm, with/without bias)"""
   out = x.astype(jnp.float32)
   if config.model.use_centering_ln:
@@ -492,7 +492,7 @@ class Block(ParamNodeWithMetadata):
     )
 
 
-def _block(
+def block(
   config: Config,
   shard_mapped__kernel,
   params: Block,
@@ -501,8 +501,8 @@ def _block(
   cache_params: CacheParams,
 ):
   att_skip = x_seq
-  out = jax.vmap(partial(_layernorm, config, params.norm_attn))(x_seq)
-  out, cache_out = _attn(
+  out = jax.vmap(partial(layernorm, config, params.norm_attn))(x_seq)
+  out, cache_out = attn(
     config,
     shard_mapped__kernel,
     params.attn,
@@ -513,8 +513,8 @@ def _block(
   out += att_skip
 
   mlp_skip = out
-  out = jax.vmap(partial(_layernorm, config, params.norm_mlp))(out)
-  out = jax.vmap(partial(_mlp, config, params.mlp))(out)
+  out = jax.vmap(partial(layernorm, config, params.norm_mlp))(out)
+  out = jax.vmap(partial(mlp, config, params.mlp))(out)
   out += mlp_skip
 
   return out, cache_out
@@ -546,7 +546,7 @@ class Transformer(ParamNodeWithMetadata):
     return model
 
 
-def _transformer(
+def transformer(
   config: Config,
   shard_mapped__kernel,
   params: Transformer,
@@ -554,12 +554,12 @@ def _transformer(
   cache: jax.Array,
   cache_params: CacheParams,
 ):
-  x_seq = _embedding(config, params.emb, tokens)
+  x_seq = embedding(config, params.emb, tokens)
 
   @partial(jax.remat, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)
   def _block_fun(x_seq: Array, params__cache_in: tuple[Block, jax.Array]):
     params, cache_in = params__cache_in
-    return _block(config, shard_mapped__kernel, params, x_seq, cache_in, cache_params)
+    return block(config, shard_mapped__kernel, params, x_seq, cache_in, cache_params)
 
   out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache))
 

@@ -11,8 +11,8 @@ from bmgpt.model import (
   ClassificationHead,
   LMHead,
   Unembedding,
-  _embedding,
-  _unembedding,
+  embedding,
+  unembedding,
 )
 
 """Loss functions for training and evaluation."""
@@ -34,12 +34,6 @@ MetricType = Callable[
 ]
 
 
-def calculate_logits(config: Config, unembedding: Unembedding, outputs: Array):
-  """Helper to wrap _unembedding factory (expects (S, D) shape input)"""
-  logits = _unembedding(config, unembedding, outputs)  # type: ignore
-  return logits
-
-
 def get_output_dim_size(config: Config):
   match config.model.transformer_type:
     case TransformerType.DISCRETE:
@@ -50,14 +44,14 @@ def get_output_dim_size(config: Config):
 
 def softmax_cross_entropy(
   config: Config,
-  unembedding: Unembedding,
+  params: Unembedding,
   outputs: Array,
   targets: Array,
   shard_mapped__kernel=None,
   reduce=True,
 ):
   """Optax-style cross entropy loss."""
-  logits = jax.vmap(partial(calculate_logits, config, unembedding))(outputs)
+  logits = jax.vmap(partial(unembedding, config, params))(outputs)
   label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1).squeeze(-1)
   valid_ids_mask = (
     jnp.arange(get_output_dim_size(config)) <= config.train_dataset.max_valid_token_id
@@ -73,7 +67,7 @@ def softmax_cross_entropy(
 
 def fused_softmax_cross_entropy(
   config: Config,
-  unembedding: Unembedding,
+  params: Unembedding,
   outputs: Array,
   targets: Array,
   shard_mapped__kernel,
@@ -84,7 +78,7 @@ def fused_softmax_cross_entropy(
   b, s = outputs.shape[:2]
   outputs = outputs.reshape(b * s, -1, out_sharding=jax.P(*config.sharding.data))
   targets = targets.ravel(out_sharding=jax.P(*config.sharding.data))
-  w_unemb = jax.sharding.reshard(unembedding.w, out_shardings=jax.P())
+  w_unemb = jax.sharding.reshard(params.w, out_shardings=jax.P())
 
   q, k = outputs, w_unemb
 
@@ -108,14 +102,14 @@ def fused_softmax_cross_entropy(
 
 def accuracy(
   config: Config,
-  unembedding: LMHead | ClassificationHead,
+  params: Unembedding,
   outputs: Array,
   targets: Array,
   shard_mapped__kernel=None,
   reduce=True,
 ):
   """Classification accuracy."""
-  logits = jax.vmap(partial(calculate_logits, config, unembedding))(outputs)
+  logits = jax.vmap(partial(unembedding, config, params))(outputs)
   preds = logits.argmax(axis=-1)
   loss = (preds == targets).astype(jnp.int32)
   if reduce:
