@@ -430,7 +430,7 @@ def init_block(config: Config, key) -> Block:
     norm_attn=init_layernorm(config),
     attn=init_attn(config, key_attn),
     norm_mlp=init_layernorm(config),
-    mlp=init_mlp(config, key_mlp),
+    mlp=Mlp.init(config, key_mlp),
   )
 
 
