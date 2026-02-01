@@ -23,7 +23,6 @@ from bmgpt.model import (
   Transformer,
   _transformer,
   init_kv_cache,
-  init_transformer,
   model_spec,
 )
 from bmgpt.optimizers import (

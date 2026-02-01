@@ -365,6 +365,9 @@ def _(params: EmbeddingContinuous, seq: Array, config: Config) -> Array:
 @jax.tree_util.register_dataclass
 @dataclass
 class Unembedding(ParamNodeWithMetadata):
+  w: ArrayWithMetadata
+  bias: ArrayWithMetadata
+
   @classmethod
   def init(cls, config: Config, key) -> "Unembedding":
     raise NotImplementedError

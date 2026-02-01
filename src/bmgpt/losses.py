@@ -7,7 +7,13 @@ from jax import Array
 
 from bmgpt.config import Config, TransformerType
 from bmgpt.data import DataloaderOutputType
-from bmgpt.model import ClassificationHead, LMHead, _embedding, _unembedding
+from bmgpt.model import (
+  ClassificationHead,
+  LMHead,
+  Unembedding,
+  _embedding,
+  _unembedding,
+)
 
 """Loss functions for training and evaluation."""
 
@@ -28,9 +34,7 @@ MetricType = Callable[
 ]
 
 
-def calculate_logits(
-  config: Config, unembedding: LMHead | ClassificationHead, outputs: Array
-):
+def calculate_logits(config: Config, unembedding: Unembedding, outputs: Array):
   """Helper to wrap _unembedding factory (expects (S, D) shape input)"""
   logits = _unembedding(config, unembedding, outputs)  # type: ignore
   return logits
@@ -46,7 +50,7 @@ def get_output_dim_size(config: Config):
 
 def softmax_cross_entropy(
   config: Config,
-  unembedding: LMHead | ClassificationHead,
+  unembedding: Unembedding,
   outputs: Array,
   targets: Array,
   shard_mapped__kernel=None,
@@ -69,7 +73,7 @@ def softmax_cross_entropy(
 
 def fused_softmax_cross_entropy(
   config: Config,
-  unembedding: LMHead | ClassificationHead,
+  unembedding: Unembedding,
   outputs: Array,
   targets: Array,
   shard_mapped__kernel,
