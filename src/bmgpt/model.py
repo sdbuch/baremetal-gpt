@@ -431,7 +431,7 @@ class ClassificationHead(Unembedding):
 @_unembedding_interface.register(ClassificationHead)
 def _(params: ClassificationHead, x: Array, config: Config):
   """Input x has shape (S, D)"""
-  logits = jnp.matmul(x[:1], params.w.p, preferred_element_type=jnp.float32)
+  logits = jnp.matmul(x[:1], params.w.p.mT, preferred_element_type=jnp.float32)
   if config.model.use_bias_embeddings:
     logits += params.bias.p
   assert logits.dtype == jnp.float32
