@@ -11,6 +11,21 @@ from jax.experimental.pallas.ops.tpu.splash_attention import (
 from bmgpt.config import Config, TransformerType
 
 ################################
+#     Initialization helpers
+################################
+
+
+def init_array_normal(config: Config, shape, sharding, key):
+  return config.model.param_std * jax.random.normal(
+    key, shape, config.model.param_dtype.value, out_sharding=jax.P(*sharding)
+  )
+
+
+def init_array_zeros(config: Config, shape, sharding):
+  return jnp.zeros(shape, config.model.param_dtype.value, out_sharding=jax.P(*sharding))
+
+
+################################
 # Architecture: building blocks
 ################################
 
@@ -18,73 +33,48 @@ from bmgpt.config import Config, TransformerType
 class Mlp(NamedTuple):
   w_up: Array
   bias_up: Array
-  w_gate: Array
-  bias_gate: Array
   w_down: Array
   bias_down: Array
 
+  @classmethod
+  def init(cls, config: Config, key):
+    k_up, k_down = jax.random.split(key, 2)
+    d_hidden = int(config.model.mlp_factor * config.model.d_model)
+    shape_w_up = (d_hidden, config.model.d_model)
+    shape_bias_up = (d_hidden,)
+    sharding_w_up = config.sharding.wup
+    sharding_bias_up = config.sharding.mlp_hidden
+    if config.model.use_gating_mlp:
+      shape_w_up = (2,) + shape_w_up
+      shape_bias_up = (2,) + shape_bias_up
+      sharding_w_up = [None] + sharding_w_up
+      sharding_bias_up = [None] + sharding_bias_up
+    shape_w_down = (config.model.d_model, d_hidden)
+    shape_bias_down = (config.model.d_model,)
 
-def init_mlp(config: Config, key) -> Mlp:
-  k_w_up, k_w_down = jax.random.split(key, 2)
-  d_hidden = int(config.model.mlp_factor * config.model.d_model)
-  w_up = config.model.param_std * jax.random.normal(
-    k_w_up,
-    (d_hidden, config.model.d_model),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.wup),
-  )
-  w_gate = config.model.param_std * jax.random.normal(
-    k_w_up,
-    (d_hidden, config.model.d_model),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.wup),
-  )
-  w_down = config.model.param_std * (
-    jax.random.normal(
-      k_w_down,
-      (config.model.d_model, d_hidden),
-      config.model.param_dtype.value,
-      out_sharding=jax.P(*config.sharding.wdown),
-    )
-  )
-  bias_up = jnp.zeros(
-    (d_hidden,),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.mlp_hidden),
-  )
-  bias_gate = jnp.zeros(
-    (d_hidden,),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.mlp_hidden),
-  )
-  bias_down = jnp.zeros(
-    (config.model.d_model,),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.res_stream),
-  )
-  return Mlp(
-    w_up=w_up,
-    bias_up=bias_up,
-    w_gate=w_gate,
-    bias_gate=bias_gate,
-    w_down=w_down,
-    bias_down=bias_down,
-  )
+    w_up = init_array_normal(config, shape_w_up, sharding_w_up, k_up)
+    bias_up = init_array_zeros(config, shape_bias_up, sharding_bias_up)
+    w_down = init_array_normal(config, shape_w_down, config.sharding.wdown, k_down)
+    bias_down = init_array_zeros(config, shape_bias_down, config.sharding.res_stream)
+
+    return cls(w_up=w_up, bias_up=bias_up, w_down=w_down, bias_down=bias_down)
 
 
 def _mlp(config: Config, params: Mlp, x: Array):
-  mlp_hidden_spec = jax.P(*config.sharding.mlp_hidden)
   mlp_out_spec = jax.P(*config.sharding.res_stream)
-  preact = jnp.matmul(x, params.w_up.mT, out_sharding=mlp_hidden_spec)
-  if config.model.use_bias_mlp:
-    # PERF: check that compiler fuses these
-    preact += params.bias_up
-  act = jax.nn.swish(preact)
   if config.model.use_gating_mlp:
-    gate = jnp.matmul(x, params.w_gate.mT, out_sharding=mlp_hidden_spec)
+    mlp_hidden_spec = jax.P(*([None] + config.sharding.mlp_hidden))
+    preact__gate = jnp.matmul(x, params.w_up.mT, out_sharding=mlp_hidden_spec)
     if config.model.use_bias_mlp:
-      gate += params.bias_gate
-    act *= gate
+      preact__gate += params.bias_up
+    preact, gate = preact__gate
+    act = jax.nn.swish(preact) * gate
+  else:
+    mlp_hidden_spec = jax.P(*config.sharding.mlp_hidden)
+    preact = jnp.matmul(x, params.w_up.mT, out_sharding=mlp_hidden_spec)
+    if config.model.use_bias_mlp:
+      preact += params.bias_up
+    act = jax.nn.swish(preact)
   out = jnp.matmul(act, params.w_down.mT, out_sharding=mlp_out_spec)
   if config.model.use_bias_mlp:
     out += params.bias_down
