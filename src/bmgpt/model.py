@@ -190,7 +190,7 @@ def _attn(
   q, k, v = jnp.einsum(
     "sd,3nhd->3nsh",
     x_seq,
-    params.w_qkv,
+    params.w_qkv.p,
     out_sharding=jax.P(*config.sharding.att_qkv),
   )
   s = q.shape[1]
@@ -261,7 +261,7 @@ def _attn(
   out = jnp.einsum(
     "nsh,dnh->sd",
     attn_out,
-    params.w_o,
+    params.w_o.p,
     out_sharding=jax.P(*config.sharding.res_stream),
   )
 
