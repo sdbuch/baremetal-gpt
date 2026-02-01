@@ -18,6 +18,7 @@ from bmgpt.evaluators import evaluator_factory
 from bmgpt.loggers import Logger, logger_factory
 from bmgpt.losses import fused_softmax_cross_entropy, softmax_cross_entropy
 from bmgpt.model import (
+  ArrayWithMetadata,
   CacheParams,
   Transformer,
   _transformer,
@@ -42,17 +43,21 @@ class TrainState(NamedTuple):
   kv_cache: jax.Array
 
 
+def is_ann(x):
+  return isinstance(x, ArrayWithMetadata)
+
+
 @jax.jit
 def init_train_state(key, config: Config) -> TrainState:
-  model_params = init_transformer(key, config)
-  adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
+  params = Transformer.init(config, key)
+  adam_state = jax.tree.map(partial(init_adam_state, config), params, is_leaf=is_ann)
   cache = init_kv_cache(
     config,
     config.train_dataset.global_batch_size,
     config.train_dataset.num_microbatches,
     0,
   )
-  return TrainState(params=model_params, opt_state=adam_state, kv_cache=cache)
+  return TrainState(params=params, opt_state=adam_state, kv_cache=cache)
 
 
 @hydra.main(
@@ -129,11 +134,13 @@ def main(config: Config):
 
     # Update parameters
     grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
-    update_tree = jax.tree.map(opt_update, state.params, grad_clipped, state.opt_state)
+    update_tree = jax.tree.map(
+      opt_update, state.params, grad_clipped, state.opt_state, is_leaf=is_ann
+    )
     update, opt_state, lr = [
       jax.tree.map(lambda _, y: y[i], state.params, update_tree) for i in range(3)
     ]
-    params = jax.tree.map(jnp.add, state.params, update)
+    params = jax.tree.map(jnp.add, state.params, update, is_leaf=is_ann)
     new_state = TrainState(params=params, opt_state=opt_state, kv_cache=state.kv_cache)
 
     metrics = {

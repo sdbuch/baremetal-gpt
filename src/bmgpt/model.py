@@ -1,4 +1,5 @@
-from functools import partial
+from dataclasses import dataclass, field
+from functools import partial, singledispatch
 from typing import Any, NamedTuple
 
 import jax
@@ -11,7 +12,7 @@ from jax.experimental.pallas.ops.tpu.splash_attention import (
 from bmgpt.config import Config, TransformerType
 
 ################################
-#     Initialization helpers
+#         Helpers
 ################################
 
 
@@ -25,16 +26,40 @@ def init_array_zeros(config: Config, shape, sharding):
   return jnp.zeros(shape, config.model.param_dtype.value, out_sharding=jax.P(*sharding))
 
 
+def init_array_ones(config: Config, shape, sharding):
+  return jnp.ones(shape, config.model.param_dtype.value, out_sharding=jax.P(*sharding))
+
+
 ################################
 # Architecture: building blocks
 ################################
 
 
-class Mlp(NamedTuple):
-  w_up: Array
-  bias_up: Array
-  w_down: Array
-  bias_down: Array
+@jax.tree_util.register_dataclass
+@dataclass
+class ArrayWithMetadata:
+  p: Array
+  matmul_dims: tuple[tuple, tuple] = field(metadata=dict(static=True))
+
+  # Common arithmetic ops (useful for optimizer updates)
+  def __add__(self, other):
+    other_p = other.p if isinstance(other, ArrayWithMetadata) else other
+    return ArrayWithMetadata(self.p + other_p, self.matmul_dims)
+
+
+@jax.tree_util.register_dataclass
+@dataclass
+class ParamNodeWithMetadata:
+  hooks: dict = field(default_factory=dict, metadata=dict(static=True), kw_only=True)
+
+
+@jax.tree_util.register_dataclass
+@dataclass
+class Mlp(ParamNodeWithMetadata):
+  w_up: ArrayWithMetadata
+  bias_up: ArrayWithMetadata
+  w_down: ArrayWithMetadata
+  bias_down: ArrayWithMetadata
 
   @classmethod
   def init(cls, config: Config, key):
@@ -57,34 +82,34 @@ class Mlp(NamedTuple):
     w_down = init_array_normal(config, shape_w_down, config.sharding.wdown, k_down)
     bias_down = init_array_zeros(config, shape_bias_down, config.sharding.res_stream)
 
-    return cls(w_up=w_up, bias_up=bias_up, w_down=w_down, bias_down=bias_down)
+    return cls(
+      w_up=ArrayWithMetadata(w_up, ((-1,), (-2,))),
+      bias_up=ArrayWithMetadata(bias_up, ((), ())),
+      w_down=ArrayWithMetadata(w_down, ((-1,), (-2,))),
+      bias_down=ArrayWithMetadata(bias_down, ((), ())),
+    )
 
 
 def _mlp(config: Config, params: Mlp, x: Array):
   mlp_out_spec = jax.P(*config.sharding.res_stream)
   if config.model.use_gating_mlp:
     mlp_hidden_spec = jax.P(*([None] + config.sharding.mlp_hidden))
-    preact__gate = jnp.matmul(x, params.w_up.mT, out_sharding=mlp_hidden_spec)
+    preact__gate = jnp.matmul(x, params.w_up.p.mT, out_sharding=mlp_hidden_spec)
     if config.model.use_bias_mlp:
-      preact__gate += params.bias_up
+      preact__gate += params.bias_up.p
     preact, gate = preact__gate
     act = jax.nn.swish(preact) * gate
   else:
     mlp_hidden_spec = jax.P(*config.sharding.mlp_hidden)
-    preact = jnp.matmul(x, params.w_up.mT, out_sharding=mlp_hidden_spec)
+    preact = jnp.matmul(x, params.w_up.p.mT, out_sharding=mlp_hidden_spec)
     if config.model.use_bias_mlp:
-      preact += params.bias_up
+      preact += params.bias_up.p
     act = jax.nn.swish(preact)
-  out = jnp.matmul(act, params.w_down.mT, out_sharding=mlp_out_spec)
+  out = jnp.matmul(act, params.w_down.p.mT, out_sharding=mlp_out_spec)
   if config.model.use_bias_mlp:
-    out += params.bias_down
+    out += params.bias_down.p
   assert out.dtype == config.model.compute_dtype.value
   return out
-
-
-class Attn(NamedTuple):
-  w_qkv: Array
-  w_o: Array
 
 
 class CacheParams(NamedTuple):
@@ -92,23 +117,23 @@ class CacheParams(NamedTuple):
   size: int
 
 
-def init_attn(config: Config, key) -> Attn:
-  k_qkv, k_o = jax.random.split(key, 2)
-  w_qkv = config.model.param_std * jax.random.normal(
-    k_qkv,
-    (3, config.model.num_heads, config.model.d_head, config.model.d_model),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.wqkv),
-  )
-  w_out = config.model.param_std * (
-    jax.random.normal(
-      k_o,
-      (config.model.d_model, config.model.num_heads, config.model.d_head),
-      config.model.param_dtype.value,
-      out_sharding=jax.P(*config.sharding.wo),
+@jax.tree_util.register_dataclass
+@dataclass
+class Attn(ParamNodeWithMetadata):
+  w_qkv: ArrayWithMetadata
+  w_o: ArrayWithMetadata
+
+  @classmethod
+  def init(cls, config: Config, key):
+    k_qkv, k_o = jax.random.split(key, 2)
+    shape_qkv = (3, config.model.num_heads, config.model.d_head, config.model.d_model)
+    shape_wout = (config.model.d_model, config.model.num_heads, config.model.d_head)
+    w_qkv = init_array_normal(config, shape_qkv, config.sharding.wqkv, k_qkv)
+    w_out = init_array_normal(config, shape_wout, config.sharding.wo, k_o)
+    return cls(
+      w_qkv=ArrayWithMetadata(w_qkv, ((-1,), (-2, -3))),
+      w_o=ArrayWithMetadata(w_out, ((-1, -2), (-3,))),
     )
-  )
-  return Attn(w_qkv=w_qkv, w_o=w_out)
 
 
 def _precompute_rope_cossin(config: Config):
@@ -245,157 +270,182 @@ def _attn(
   return out, kv_cache_out
 
 
-class EmbeddingDiscrete(NamedTuple):
-  w: Array
-  bias: Array
+@jax.tree_util.register_dataclass
+@dataclass
+class Embedding(ParamNodeWithMetadata):
+  @classmethod
+  def init(cls, config: Config, key) -> "Embedding":
+    raise NotImplementedError
 
 
-def init_embedding_discrete(config: Config, key) -> EmbeddingDiscrete:
-  emb = config.model.param_std * jax.random.normal(
-    key,
-    (config.model.num_vocab, config.model.d_model),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*([None] + config.sharding.res_stream)),
-  )
-  bias = jnp.zeros(
-    (config.model.d_model,),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.res_stream),
-  )
-  return EmbeddingDiscrete(w=emb, bias=bias)
+@singledispatch
+def _embedding_interface(params, seq: Array, config: Config) -> Array:
+  raise NotImplementedError(f"No embedding impl for {type(params)}")
 
 
-def _embedding_discrete(config: Config, params: EmbeddingDiscrete, tokens: jax.Array):
-  w_f32 = params.w.astype(jnp.float32)  # upcast to perform the bwd scatter-add in fp32
-  emb = w_f32.at[tokens].get(out_sharding=jax.P(*config.sharding.res_stream))
-  emb = emb.astype(params.w.dtype)
+def _embedding(config: Config, params: Embedding, seq: jax.Array):
+  return _embedding_interface(params, seq, config)
+
+
+@jax.tree_util.register_dataclass
+@dataclass
+class EmbeddingDiscrete(Embedding):
+  w: ArrayWithMetadata
+  bias: ArrayWithMetadata
+
+  @classmethod
+  def init(cls, config: Config, key) -> "EmbeddingDiscrete":
+    shape_emb = (config.model.num_vocab, config.model.d_model)
+    shape_bias = (config.model.d_model,)
+    emb = init_array_normal(config, shape_emb, config.sharding.wemb, key)
+    bias = init_array_zeros(config, shape_bias, config.sharding.res_stream)
+    return cls(
+      w=ArrayWithMetadata(emb, ((), ())), bias=ArrayWithMetadata(bias, ((), ()))
+    )
+
+
+@_embedding_interface.register(EmbeddingDiscrete)
+def _(params: EmbeddingDiscrete, seq: Array, config: Config) -> Array:
+  w_f32 = params.w.p.astype(jnp.float32)  # perform the bwd scatter-add in fp32
+  emb = w_f32.at[seq].get(out_sharding=jax.P(*config.sharding.res_stream))
+  emb = emb.astype(params.w.p.dtype)
   if config.model.use_bias_embeddings:
-    emb += params.bias
+    emb += params.bias.p
   assert emb.dtype == config.model.compute_dtype.value
   return emb
 
 
-class EmbeddingContinuous(NamedTuple):
-  w_emb: Array
-  bias: Array
-  w_pos: Array
-  registers: Array
+@jax.tree_util.register_dataclass
+@dataclass
+class EmbeddingContinuous(Embedding):
+  w_emb: ArrayWithMetadata
+  bias: ArrayWithMetadata
+  w_pos: ArrayWithMetadata
+  registers: ArrayWithMetadata
+
+  @classmethod
+  def init(cls, config: Config, key) -> "EmbeddingContinuous":
+    key_emb, key_pos, key_reg = jax.random.split(key, 3)
+    shape_emb = (config.model.num_vocab, config.model.d_model)
+    shape_reg = (config.model.num_registers, config.model.d_model)
+    shape_pos = (
+      config.model.num_registers + config.model.max_seq_len,
+      config.model.d_model,
+    )
+    shape_bias = (config.model.d_model,)
+    w_emb = init_array_normal(config, shape_emb, config.sharding.wemb, key_emb)
+    w_reg = init_array_normal(
+      config, shape_reg, [None] + config.sharding.res_stream, key_reg
+    )
+    w_pos = init_array_normal(
+      config, shape_pos, [None] + config.sharding.res_stream, key_pos
+    )
+    bias = init_array_zeros(config, shape_bias, config.sharding.res_stream)
+    return cls(
+      w_emb=ArrayWithMetadata(w_emb, ((-2,), (-1,))),
+      bias=ArrayWithMetadata(bias, ((), ())),
+      w_pos=ArrayWithMetadata(w_pos, ((), ())),
+      registers=ArrayWithMetadata(w_reg, ((), ())),
+    )
 
 
-def init_embedding_continuous(config: Config, key) -> EmbeddingContinuous:
-  key_emb, key_pos, key_reg = jax.random.split(key, 3)
-  w_emb = config.model.param_std * jax.random.normal(
-    key_emb,
-    (config.model.num_vocab, config.model.d_model),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.wemb),
-  )
-  w_reg = config.model.param_std * jax.random.normal(
-    key_reg,
-    (config.model.num_registers, config.model.d_model),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*([None] + config.sharding.res_stream)),
-  )
-  w_pos = config.model.param_std * jax.random.normal(
-    key_pos,
-    (config.model.num_registers + config.model.max_seq_len, config.model.d_model),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*([None] + config.sharding.res_stream)),
-  )
-  bias = jnp.zeros(
-    (config.model.d_model,),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.res_stream),
-  )
-  return EmbeddingContinuous(w_emb=w_emb, w_pos=w_pos, registers=w_reg, bias=bias)
-
-
-def _embedding_continuous(config: Config, params: EmbeddingContinuous, seq: jax.Array):
+@_embedding_interface.register(EmbeddingContinuous)
+def _(params: EmbeddingContinuous, seq: Array, config: Config) -> Array:
   # seq is s x d_in
-  emb_tokens = seq @ params.w_emb
+  emb_tokens = seq @ params.w_emb.p
   if config.model.use_bias_embeddings:
-    emb_tokens += params.bias
-  emb_with_regs = jnp.concatenate((params.registers, emb_tokens), axis=0)
+    emb_tokens += params.bias.p
+  emb_with_regs = jnp.concatenate((params.registers.p, emb_tokens), axis=0)
   effective_seq_len = emb_with_regs.shape[0]
-  emb = emb_with_regs + params.w_pos[:effective_seq_len]
+  emb = emb_with_regs + params.w_pos.p[:effective_seq_len]
   assert emb.dtype == config.model.compute_dtype.value
   return emb
 
 
-class LMHead(NamedTuple):
-  w: Array
-  bias: Array
+@jax.tree_util.register_dataclass
+@dataclass
+class Unembedding(ParamNodeWithMetadata):
+  @classmethod
+  def init(cls, config: Config, key) -> "Unembedding":
+    raise NotImplementedError
 
 
-def init_lm_head(config: Config, key) -> LMHead:
-  unemb = config.model.param_std * jax.random.normal(
-    key,
-    (config.model.num_vocab, config.model.d_model),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.wunemb),
-  )
-  bias = jnp.zeros(
-    (config.model.num_vocab,),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(),
-  )
-  return LMHead(w=unemb, bias=bias)
+@singledispatch
+def _unembedding_interface(params, seq: Array, config: Config) -> Array:
+  raise NotImplementedError(f"No unembedding impl for {type(params)}")
 
 
-def _lm_head(config: Config, params: LMHead, x: Array):
-  logits = jnp.matmul(x, params.w.mT, preferred_element_type=jnp.float32)
+def _unembedding(config: Config, params: Unembedding, seq: jax.Array):
+  return _unembedding_interface(params, seq, config)
+
+
+@jax.tree_util.register_dataclass
+@dataclass
+class LMHead(Unembedding):
+  w: ArrayWithMetadata
+  bias: ArrayWithMetadata
+
+  @classmethod
+  def init(cls, config: Config, key) -> "LMHead":
+    shape_emb = (config.model.num_vocab, config.model.d_model)
+    shape_bias = (config.model.num_vocab,)
+    unemb = init_array_normal(config, shape_emb, config.sharding.wunemb, key)
+    bias = init_array_zeros(config, shape_bias, [])
+    return cls(
+      w=ArrayWithMetadata(unemb, ((-1,), (-2,))), bias=ArrayWithMetadata(bias, ((), ()))
+    )
+
+
+@_unembedding_interface.register(LMHead)
+def _(params: LMHead, x: Array, config: Config) -> Array:
+  logits = jnp.matmul(x, params.w.p.mT, preferred_element_type=jnp.float32)
   if config.model.use_bias_embeddings:
-    logits += params.bias
+    logits += params.bias.p
   assert logits.dtype == jnp.float32
   return logits
 
 
-class ClassificationHead(NamedTuple):
-  w: Array
-  bias: Array
+@jax.tree_util.register_dataclass
+@dataclass
+class ClassificationHead(Unembedding):
+  w: ArrayWithMetadata
+  bias: ArrayWithMetadata
+
+  @classmethod
+  def init(cls, config: Config, key) -> "ClassificationHead":
+    shape_emb = (config.model.num_classes, config.model.d_model)
+    shape_bias = (config.model.num_classes,)
+    unemb = init_array_normal(config, shape_emb, config.sharding.wunemb, key)
+    bias = init_array_zeros(config, shape_bias, [])
+    return cls(
+      w=ArrayWithMetadata(unemb, ((-1,), (-2,))), bias=ArrayWithMetadata(bias, ((), ()))
+    )
 
 
-def init_classification_head(config: Config, key) -> ClassificationHead:
-  unemb = config.model.param_std * jax.random.normal(
-    key,
-    (config.model.d_model, config.model.num_classes),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.res_stream),
-  )
-  bias = jnp.zeros(
-    (config.model.num_classes,),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.res_stream),
-  )
-  return ClassificationHead(w=unemb, bias=bias)
-
-
-def _classification_head(config: Config, params: ClassificationHead, x: Array):
+@_unembedding_interface.register(ClassificationHead)
+def _(params: ClassificationHead, x: Array, config: Config):
   """Input x has shape (S, D)"""
-  logits = jnp.matmul(x[:1], params.w, preferred_element_type=jnp.float32)
+  logits = jnp.matmul(x[:1], params.w.p, preferred_element_type=jnp.float32)
   if config.model.use_bias_embeddings:
-    logits += params.bias
+    logits += params.bias.p
   assert logits.dtype == jnp.float32
   return logits
 
 
-class LayerNorm(NamedTuple):
-  gamma: Array
-  beta: Array
+@jax.tree_util.register_dataclass
+@dataclass
+class LayerNorm(ParamNodeWithMetadata):
+  gamma: ArrayWithMetadata
+  beta: ArrayWithMetadata
 
-
-def init_layernorm(config: Config) -> LayerNorm:
-  gamma = jnp.ones(
-    (config.model.d_model,),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.res_stream),
-  )
-  beta = jnp.zeros(
-    (config.model.d_model,),
-    config.model.param_dtype.value,
-    out_sharding=jax.P(*config.sharding.res_stream),
-  )
-  return LayerNorm(gamma=gamma, beta=beta)
+  @classmethod
+  def init(cls, config: Config) -> "LayerNorm":
+    shape = (config.model.d_model,)
+    gamma = init_array_ones(config, shape, config.sharding.res_stream)
+    beta = init_array_zeros(config, shape, config.sharding.res_stream)
+    return cls(
+      gamma=ArrayWithMetadata(gamma, ((), ())), beta=ArrayWithMetadata(beta, ((), ()))
+    )
 
 
 def _layernorm(config: Config, params: LayerNorm, x: Array):
@@ -404,9 +454,9 @@ def _layernorm(config: Config, params: LayerNorm, x: Array):
   if config.model.use_centering_ln:
     out = out - out.mean()
   out = out * jax.lax.rsqrt(config.model.eps_ln + (out**2).mean())
-  out = params.gamma * out
+  out = params.gamma.p * out
   if config.model.use_bias_ln:
-    out += params.beta
+    out += params.beta.p
   out = out.astype(x.dtype)
   assert out.dtype == config.model.compute_dtype.value
   return out
@@ -417,21 +467,23 @@ def _layernorm(config: Config, params: LayerNorm, x: Array):
 ##################################
 
 
-class Block(NamedTuple):
+@jax.tree_util.register_dataclass
+@dataclass
+class Block(ParamNodeWithMetadata):
   norm_attn: LayerNorm
   attn: Attn
   norm_mlp: LayerNorm
   mlp: Mlp
 
-
-def init_block(config: Config, key) -> Block:
-  key_attn, key_mlp = jax.random.split(key)
-  return Block(
-    norm_attn=init_layernorm(config),
-    attn=init_attn(config, key_attn),
-    norm_mlp=init_layernorm(config),
-    mlp=Mlp.init(config, key_mlp),
-  )
+  @classmethod
+  def init(cls, config: Config, key) -> "Block":
+    key_attn, key_mlp = jax.random.split(key)
+    return cls(
+      norm_attn=LayerNorm.init(config),
+      attn=Attn.init(config, key_attn),
+      norm_mlp=LayerNorm.init(config),
+      mlp=Mlp.init(config, key_mlp),
+    )
 
 
 def _block(
@@ -462,24 +514,30 @@ def _block(
   return out, cache_out
 
 
-class Transformer(NamedTuple):
-  emb: EmbeddingDiscrete | EmbeddingContinuous
+@jax.tree_util.register_dataclass
+@dataclass
+class Transformer(ParamNodeWithMetadata):
+  emb: Embedding
   blocks: Block  # vmapped at init
-  unemb: LMHead | ClassificationHead
+  unemb: Unembedding
 
-
-def init_transformer(key, config: Config) -> Transformer:
-  # Make the full network
-  key_emb, key_blocks, key_unemb = jax.random.split(key, 3)
-  keys_blocks = jax.random.split(key_blocks, config.model.num_layers)
-  init_embedding, init_unembedding, _, __ = transformer_variant_factory(config)
-  model = Transformer(
-    emb=init_embedding(config, key_emb),
-    blocks=jax.vmap(partial(init_block, config))(keys_blocks),
-    unemb=init_unembedding(config, key_unemb),
-  )
-
-  return model
+  @classmethod
+  def init(cls, config: Config, key) -> "Transformer":
+    if config.model.transformer_type == TransformerType.DISCRETE:
+      embedding_cls = EmbeddingDiscrete
+      unembedding_cls = LMHead
+    else:
+      embedding_cls = EmbeddingContinuous
+      unembedding_cls = ClassificationHead
+    key_emb, key_blocks, key_unemb = jax.random.split(key, 3)
+    keys_blocks = jax.random.split(key_blocks, config.model.num_layers)
+    init_block = lambda k: Block.init(config, k)
+    model = cls(
+      emb=embedding_cls.init(config, key_emb),
+      blocks=jax.vmap(init_block)(keys_blocks),
+      unemb=unembedding_cls.init(config, key_unemb),
+    )
+    return model
 
 
 def _transformer(
@@ -490,7 +548,6 @@ def _transformer(
   cache: jax.Array,
   cache_params: CacheParams,
 ):
-  _, _, _embedding, _unembedding = transformer_variant_factory(config)
   x_seq = _embedding(config, params.emb, tokens)
 
   @partial(jax.remat, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)
@@ -558,18 +615,3 @@ def model_spec(model: Transformer) -> Any:
 
   spec = jax.tree.map_with_path(lambda p, _: _make_spec_from_str(p), model)
   return spec
-
-
-def transformer_variant_factory(config: Config):
-  if config.model.transformer_type == TransformerType.DISCRETE:
-    init_embedding = init_embedding_discrete
-    fn_embedding = _embedding_discrete
-    init_unembedding = init_lm_head
-    fn_unembedding = _lm_head
-  else:
-    init_embedding = init_embedding_continuous
-    fn_embedding = _embedding_continuous
-    init_unembedding = init_classification_head
-    fn_unembedding = _classification_head
-
-  return (init_embedding, init_unembedding, fn_embedding, fn_unembedding)

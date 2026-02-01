@@ -7,7 +7,7 @@ from jax import Array
 
 from bmgpt.config import Config, TransformerType
 from bmgpt.data import DataloaderOutputType
-from bmgpt.model import ClassificationHead, LMHead, transformer_variant_factory
+from bmgpt.model import ClassificationHead, LMHead, _embedding, _unembedding
 
 """Loss functions for training and evaluation."""
 
@@ -32,7 +32,6 @@ def calculate_logits(
   config: Config, unembedding: LMHead | ClassificationHead, outputs: Array
 ):
   """Helper to wrap _unembedding factory (expects (S, D) shape input)"""
-  _, _, _, _unembedding = transformer_variant_factory(config)
   logits = _unembedding(config, unembedding, outputs)  # type: ignore
   return logits
 

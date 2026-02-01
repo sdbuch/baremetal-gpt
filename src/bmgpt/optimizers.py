@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 
 from bmgpt.config import Config, LRScheduleType, OptType
-from bmgpt.model import Transformer
+from bmgpt.model import ArrayWithMetadata, Transformer
 
 """Optimizer init/updates operate on Arrays, not pytrees (tree.map them)"""
 
@@ -130,7 +130,11 @@ def opt_update_factory(opt_type: OptType):
 
 
 def adamw_update(
-  config: Config, wd_mask: bool, param: jax.Array, grad: jax.Array, state: OptState
+  config: Config,
+  wd_mask: bool,
+  param: ArrayWithMetadata,
+  grad: ArrayWithMetadata,
+  state: OptState,
 ):
   beta1 = config.optimizer.beta1
   beta2 = config.optimizer.beta2
@@ -138,8 +142,8 @@ def adamw_update(
   weight_decay = config.optimizer.weight_decay
   lr = get_lr(config, config.optimizer.schedule_type, state)
 
-  mu = beta1 * state.mu + (1 - beta1) * grad
-  nu = beta2 * state.nu + (1 - beta2) * grad**2
+  mu = beta1 * state.mu + (1 - beta1) * grad.p
+  nu = beta2 * state.nu + (1 - beta2) * grad.p**2
   new_state = OptState(mu=mu, nu=nu, step=state.step + 1)
 
   # simulate initializing the buffers with initial gradients via pre-incrementing step
@@ -147,23 +151,27 @@ def adamw_update(
   nu_debias = nu / (1 - beta2**new_state.step)
   update = -mu_debias / (eps + jnp.sqrt(nu_debias))
   if wd_mask:
-    update = update - weight_decay * param.astype(config.model.opt_dtype.value)
+    update = update - weight_decay * param.p.astype(config.model.opt_dtype.value)
   return (lr * update).astype(config.model.param_dtype.value), new_state, lr
 
 
 def sgd_update(
-  config: Config, wd_mask: bool, param: jax.Array, grad: jax.Array, state: OptState
+  config: Config,
+  wd_mask: bool,
+  param: ArrayWithMetadata,
+  grad: ArrayWithMetadata,
+  state: OptState,
 ):
   beta1 = config.optimizer.beta1
   weight_decay = config.optimizer.weight_decay
   lr = get_lr(config, config.optimizer.schedule_type, state)
 
-  mu = beta1 * state.mu + (1 - beta1) * grad
+  mu = beta1 * state.mu + (1 - beta1) * grad.p
   new_state = OptState(mu=mu, nu=state.nu, step=state.step + 1)
 
   # simulate initializing the buffers with initial gradients via pre-incrementing step
   mu_debias = mu / (1 - beta1**new_state.step)
   update = -mu_debias
   if wd_mask:
-    update = update - weight_decay * param.astype(config.model.opt_dtype.value)
+    update = update - weight_decay * param.p.astype(config.model.opt_dtype.value)
   return (lr * update).astype(config.model.param_dtype.value), new_state, lr
