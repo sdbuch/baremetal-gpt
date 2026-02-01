@@ -24,7 +24,6 @@ from bmgpt.model import (
   Transformer,
   _transformer,
   init_kv_cache,
-  model_spec,
 )
 from bmgpt.optimizers import (
   grad_norm_and_clip,
@@ -95,10 +94,8 @@ def main(config: Config):
   )
 
   # Configure optimization
-  spec = model_spec(train_state.params)
-  weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
   opt_update = opt_update_factory(config.optimizer.type)
-  opt_update = partial(opt_update, config, weight_decay_mask)
+  opt_update = partial(opt_update, config)
 
   @partial(jax.jit, donate_argnums=2)
   def train_step(config: Config, batch, state: TrainState):

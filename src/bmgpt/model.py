@@ -39,12 +39,12 @@ def init_array_ones(config: Config, shape, sharding):
 @dataclass
 class ArrayWithMetadata:
   p: Array
-  matmul_dims: tuple[tuple, tuple] = field(metadata=dict(static=True))
+  matmul_axes: tuple[tuple, tuple] = field(metadata=dict(static=True))
 
   # Common arithmetic ops (useful for optimizer updates)
   def __add__(self, other):
     other_p = other.p if isinstance(other, ArrayWithMetadata) else other
-    return ArrayWithMetadata(self.p + other_p, self.matmul_dims)
+    return ArrayWithMetadata(self.p + other_p, self.matmul_axes)
 
   def __radd__(self, other):
     return self.__add__(other)
@@ -593,31 +593,3 @@ def init_kv_cache(
     dtype=config.model.compute_dtype.value,
     out_sharding=sharding,
   )
-
-
-#####################################
-# Auxiliary
-#####################################
-
-
-def model_spec(model: Transformer) -> Any:
-  # Make the spec (we need some way to pass metadata around)
-  # HACK: not great... disadvantage of bare metal without custom pytree
-  # TODO: Check and update these later... reasonable to do (in, out)?
-  def _make_spec_from_str(path: str) -> tuple[int, int] | None:
-    param_str = path[-1].__str__()
-    matrix_axes_dict = {
-      ".w_qkv": (-1, -2),
-      ".w_o": (-1, -3),
-      ".w_up": (-1, -2),
-      ".w_gate": (-1, -2),
-      ".w_down": (-1, -2),
-      ".w": (-2, -1),
-      ".w_emb": (-2, -1),
-      ".w_pos": (-2, -1),
-      ".w_reg": (-2, -1),  # TODO: weight decay registers?
-    }
-    return matrix_axes_dict.get(param_str, None)
-
-  spec = jax.tree.map_with_path(lambda p, _: _make_spec_from_str(p), model)
-  return spec

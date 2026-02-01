@@ -36,6 +36,11 @@ def grad_norm_and_clip(
   )
 
 
+def compute_wd_mask(matmul_axes: tuple[tuple, tuple]) -> bool:
+  num_in_axes, num_out_axes = [len(axes) for axes in matmul_axes]
+  return num_in_axes > 0 and num_out_axes > 0
+
+
 ##############################
 #      Optimizer State
 ##############################
@@ -131,7 +136,6 @@ def opt_update_factory(opt_type: OptType):
 
 def adamw_update(
   config: Config,
-  wd_mask: bool,
   param: ArrayWithMetadata,
   grad: ArrayWithMetadata,
   state: OptState,
@@ -141,6 +145,7 @@ def adamw_update(
   eps = config.optimizer.eps_adam
   weight_decay = config.optimizer.weight_decay
   lr = get_lr(config, config.optimizer.schedule_type, state)
+  wd_mask = compute_wd_mask(param.matmul_axes)
 
   mu = beta1 * state.mu + (1 - beta1) * grad.p
   nu = beta2 * state.nu + (1 - beta2) * grad.p**2
@@ -157,7 +162,6 @@ def adamw_update(
 
 def sgd_update(
   config: Config,
-  wd_mask: bool,
   param: ArrayWithMetadata,
   grad: ArrayWithMetadata,
   state: OptState,
@@ -165,6 +169,7 @@ def sgd_update(
   beta1 = config.optimizer.beta1
   weight_decay = config.optimizer.weight_decay
   lr = get_lr(config, config.optimizer.schedule_type, state)
+  wd_mask = compute_wd_mask(param.matmul_axes)
 
   mu = beta1 * state.mu + (1 - beta1) * grad.p
   new_state = OptState(mu=mu, nu=state.nu, step=state.step + 1)
