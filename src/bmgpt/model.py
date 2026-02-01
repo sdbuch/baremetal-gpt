@@ -46,6 +46,9 @@ class ArrayWithMetadata:
     other_p = other.p if isinstance(other, ArrayWithMetadata) else other
     return ArrayWithMetadata(self.p + other_p, self.matmul_dims)
 
+  def __radd__(self, other):
+    return self.__add__(other)
+
 
 @jax.tree_util.register_dataclass
 @dataclass
