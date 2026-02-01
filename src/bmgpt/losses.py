@@ -78,7 +78,7 @@ def fused_softmax_cross_entropy(
   b, s = outputs.shape[:2]
   outputs = outputs.reshape(b * s, -1, out_sharding=jax.P(*config.sharding.data))
   targets = targets.ravel(out_sharding=jax.P(*config.sharding.data))
-  w_unemb = jax.sharding.reshard(params.w, out_shardings=jax.P())
+  w_unemb = jax.sharding.reshard(params.w.p, out_shardings=jax.P())
 
   q, k = outputs, w_unemb
 
