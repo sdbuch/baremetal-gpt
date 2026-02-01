@@ -1,3 +1,4 @@
+import operator
 from functools import partial
 from pathlib import Path
 from typing import Any, Iterable, NamedTuple
@@ -140,7 +141,7 @@ def main(config: Config):
       jax.tree.map(lambda _, y: y[i], state.params, update_tree, is_leaf=is_ann)
       for i in range(3)
     ]
-    params = jax.tree.map(jnp.add, state.params, update, is_leaf=is_ann)
+    params = jax.tree.map(operator.add, state.params, update, is_leaf=is_ann)
     new_state = TrainState(params=params, opt_state=opt_state, kv_cache=state.kv_cache)
 
     metrics = {
