@@ -347,8 +347,8 @@ class EmbeddingContinuous(Embedding):
     return cls(
       w_emb=ArrayWithMetadata(w_emb, ((-2,), (-1,))),
       bias=ArrayWithMetadata(bias, ((), ())),
-      w_pos=ArrayWithMetadata(w_pos, ((), ())),
-      registers=ArrayWithMetadata(w_reg, ((), ())),
+      w_pos=ArrayWithMetadata(w_pos, ((-2,), (-1,))),
+      registers=ArrayWithMetadata(w_reg, ((-2,), (-1,))),
     )
 
 
