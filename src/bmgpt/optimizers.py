@@ -47,17 +47,17 @@ class OptState(NamedTuple):
   step: jax.Array  # step number
 
 
-def init_adam_state(config: Config, param: jax.Array) -> OptState:
+def init_adam_state(config: Config, param: ArrayWithMetadata) -> OptState:
   return OptState(
-    mu=jnp.zeros_like(param, dtype=config.model.opt_dtype.value),
-    nu=jnp.zeros_like(param, dtype=config.model.opt_dtype.value),
+    mu=jnp.zeros_like(param.p, dtype=config.model.opt_dtype.value),
+    nu=jnp.zeros_like(param.p, dtype=config.model.opt_dtype.value),
     step=jnp.array(0, dtype=jnp.int32),
   )
 
 
-def init_sgd_state(config: Config, param: jax.Array) -> OptState:
+def init_sgd_state(config: Config, param: ArrayWithMetadata) -> OptState:
   return OptState(
-    mu=jnp.zeros_like(param, dtype=config.model.opt_dtype.value),
+    mu=jnp.zeros_like(param.p, dtype=config.model.opt_dtype.value),
     nu=jnp.array(()),
     step=jnp.array(0, dtype=jnp.int32),
   )
