@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from bmgpt.config import Config, TransformerType
+from bmgpt.config import Config
 from bmgpt.data import DataloaderOutputType
 from bmgpt.model import (
   ClassificationHead,
@@ -34,14 +34,6 @@ MetricType = Callable[
 ]
 
 
-def get_output_dim_size(config: Config):
-  match config.model.transformer_type:
-    case TransformerType.DISCRETE:
-      return config.model.num_vocab
-    case TransformerType.CONTINUOUS:
-      return config.model.num_classes
-
-
 def softmax_cross_entropy(
   config: Config,
   params: Unembedding,
@@ -54,7 +46,7 @@ def softmax_cross_entropy(
   logits = jax.vmap(partial(unembedding, config, params))(outputs)
   label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1).squeeze(-1)
   valid_ids_mask = (
-    jnp.arange(get_output_dim_size(config)) <= config.train_dataset.max_valid_token_id
+    jnp.arange(logits.shape[-1]) <= config.train_dataset.max_valid_token_id
   )
   logits = jnp.where(valid_ids_mask, logits, -jnp.inf)
   lse = jax.nn.logsumexp(logits, axis=-1)

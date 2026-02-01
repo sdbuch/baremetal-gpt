@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import Enum, StrEnum
 
 import jax
 import jax.numpy as jnp
@@ -77,6 +77,24 @@ class TokenizerType(Enum):
   LLAMA3 = 2
 
 
+class StatType(StrEnum):
+  RMS = "rms"
+  MEAN = "mean"
+  MAX = "max"
+  STD = "std"
+
+  def reduce(self, x):
+    match self:
+      case StatType.RMS:
+        return jnp.sqrt(jnp.mean(x**2))
+      case StatType.MEAN:
+        return jnp.mean(x)
+      case StatType.MAX:
+        return jnp.max(jnp.abs(x))
+      case StatType.STD:
+        return jnp.std(x)
+
+
 @dataclass(kw_only=True, unsafe_hash=True)
 class DatasetConfig:
   """Params for a single dataset. data.py"""
@@ -138,6 +156,11 @@ class OptimizerConfig:
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
+class HooksConfig:
+  emb: dict[str, list[StatType]]
+
+
+@dataclass(kw_only=True, unsafe_hash=True)
 class ModelConfig:
   """Model architecture params. model.py"""
 
@@ -173,8 +196,7 @@ class ModelConfig:
   use_bias_mlp: bool = False  # bias in MLPs
   use_rope: bool = True  # RoPE or not
 
-  # Discrete-specific model parameters
-  # Continuous-specific model parameters
+  # Hooks (activation logging)
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
