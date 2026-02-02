@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 
 from bmgpt.config import Config, LRScheduleType, OptType
-from bmgpt.model import Transformer
+from bmgpt.model import ArrayWithMetadata, Transformer
 
 """Optimizer init/updates operate on Arrays, not pytrees (tree.map them)"""
 
@@ -36,6 +36,11 @@ def grad_norm_and_clip(
   )
 
 
+def compute_wd_mask(matmul_axes: tuple[tuple, tuple]) -> bool:
+  num_in_axes, num_out_axes = [len(axes) for axes in matmul_axes]
+  return num_in_axes > 0 and num_out_axes > 0
+
+
 ##############################
 #      Optimizer State
 ##############################
@@ -47,17 +52,17 @@ class OptState(NamedTuple):
   step: jax.Array  # step number
 
 
-def init_adam_state(config: Config, param: jax.Array) -> OptState:
+def init_adam_state(config: Config, param: ArrayWithMetadata) -> OptState:
   return OptState(
-    mu=jnp.zeros_like(param, dtype=config.model.opt_dtype.value),
-    nu=jnp.zeros_like(param, dtype=config.model.opt_dtype.value),
+    mu=jnp.zeros_like(param.p, dtype=config.model.opt_dtype.value),
+    nu=jnp.zeros_like(param.p, dtype=config.model.opt_dtype.value),
     step=jnp.array(0, dtype=jnp.int32),
   )
 
 
-def init_sgd_state(config: Config, param: jax.Array) -> OptState:
+def init_sgd_state(config: Config, param: ArrayWithMetadata) -> OptState:
   return OptState(
-    mu=jnp.zeros_like(param, dtype=config.model.opt_dtype.value),
+    mu=jnp.zeros_like(param.p, dtype=config.model.opt_dtype.value),
     nu=jnp.array(()),
     step=jnp.array(0, dtype=jnp.int32),
   )
@@ -130,16 +135,20 @@ def opt_update_factory(opt_type: OptType):
 
 
 def adamw_update(
-  config: Config, wd_mask: bool, param: jax.Array, grad: jax.Array, state: OptState
+  config: Config,
+  param: ArrayWithMetadata,
+  grad: ArrayWithMetadata,
+  state: OptState,
 ):
   beta1 = config.optimizer.beta1
   beta2 = config.optimizer.beta2
   eps = config.optimizer.eps_adam
   weight_decay = config.optimizer.weight_decay
   lr = get_lr(config, config.optimizer.schedule_type, state)
+  wd_mask = compute_wd_mask(param.matmul_axes)
 
-  mu = beta1 * state.mu + (1 - beta1) * grad
-  nu = beta2 * state.nu + (1 - beta2) * grad**2
+  mu = beta1 * state.mu + (1 - beta1) * grad.p
+  nu = beta2 * state.nu + (1 - beta2) * grad.p**2
   new_state = OptState(mu=mu, nu=nu, step=state.step + 1)
 
   # simulate initializing the buffers with initial gradients via pre-incrementing step
@@ -147,23 +156,27 @@ def adamw_update(
   nu_debias = nu / (1 - beta2**new_state.step)
   update = -mu_debias / (eps + jnp.sqrt(nu_debias))
   if wd_mask:
-    update = update - weight_decay * param.astype(config.model.opt_dtype.value)
+    update = update - weight_decay * param.p.astype(config.model.opt_dtype.value)
   return (lr * update).astype(config.model.param_dtype.value), new_state, lr
 
 
 def sgd_update(
-  config: Config, wd_mask: bool, param: jax.Array, grad: jax.Array, state: OptState
+  config: Config,
+  param: ArrayWithMetadata,
+  grad: ArrayWithMetadata,
+  state: OptState,
 ):
   beta1 = config.optimizer.beta1
   weight_decay = config.optimizer.weight_decay
   lr = get_lr(config, config.optimizer.schedule_type, state)
+  wd_mask = compute_wd_mask(param.matmul_axes)
 
-  mu = beta1 * state.mu + (1 - beta1) * grad
+  mu = beta1 * state.mu + (1 - beta1) * grad.p
   new_state = OptState(mu=mu, nu=state.nu, step=state.step + 1)
 
   # simulate initializing the buffers with initial gradients via pre-incrementing step
   mu_debias = mu / (1 - beta1**new_state.step)
   update = -mu_debias
   if wd_mask:
-    update = update - weight_decay * param.astype(config.model.opt_dtype.value)
+    update = update - weight_decay * param.p.astype(config.model.opt_dtype.value)
   return (lr * update).astype(config.model.param_dtype.value), new_state, lr

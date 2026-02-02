@@ -5,9 +5,15 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from bmgpt.config import Config, TransformerType
+from bmgpt.config import Config
 from bmgpt.data import DataloaderOutputType
-from bmgpt.model import ClassificationHead, LMHead, transformer_variant_factory
+from bmgpt.model import (
+  ClassificationHead,
+  LMHead,
+  Unembedding,
+  embedding,
+  unembedding,
+)
 
 """Loss functions for training and evaluation."""
 
@@ -24,53 +30,35 @@ from bmgpt.model import ClassificationHead, LMHead, transformer_variant_factory
 
 
 MetricType = Callable[
-  [Config, LMHead | ClassificationHead, Array, Array, Any, bool], Array
+  [Config, LMHead | ClassificationHead, Array, Array, Any, bool], tuple[Array, dict]
 ]
-
-
-def calculate_logits(
-  config: Config, unembedding: LMHead | ClassificationHead, outputs: Array
-):
-  """Helper to wrap _unembedding factory (expects (S, D) shape input)"""
-  _, _, _, _unembedding = transformer_variant_factory(config)
-  logits = _unembedding(config, unembedding, outputs)  # type: ignore
-  return logits
-
-
-def get_output_dim_size(config: Config):
-  match config.model.transformer_type:
-    case TransformerType.DISCRETE:
-      return config.model.num_vocab
-    case TransformerType.CONTINUOUS:
-      return config.model.num_classes
 
 
 def softmax_cross_entropy(
   config: Config,
-  unembedding: LMHead | ClassificationHead,
+  params: Unembedding,
   outputs: Array,
   targets: Array,
   shard_mapped__kernel=None,
   reduce=True,
 ):
   """Optax-style cross entropy loss."""
-  logits = jax.vmap(partial(calculate_logits, config, unembedding))(outputs)
+  logits, aux = jax.vmap(partial(unembedding, config, params))(outputs)
   label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1).squeeze(-1)
   valid_ids_mask = (
-    jnp.arange(get_output_dim_size(config)) <= config.train_dataset.max_valid_token_id
+    jnp.arange(logits.shape[-1]) <= config.train_dataset.max_valid_token_id
   )
   logits = jnp.where(valid_ids_mask, logits, -jnp.inf)
   lse = jax.nn.logsumexp(logits, axis=-1)
   loss = lse - label_logits
   if reduce:
-    return loss.mean()
-  else:
-    return loss
+    loss = loss.mean()
+  return loss, jax.tree.map(jnp.mean, aux)
 
 
 def fused_softmax_cross_entropy(
   config: Config,
-  unembedding: LMHead | ClassificationHead,
+  params: Unembedding,
   outputs: Array,
   targets: Array,
   shard_mapped__kernel,
@@ -81,7 +69,7 @@ def fused_softmax_cross_entropy(
   b, s = outputs.shape[:2]
   outputs = outputs.reshape(b * s, -1, out_sharding=jax.P(*config.sharding.data))
   targets = targets.ravel(out_sharding=jax.P(*config.sharding.data))
-  w_unemb = jax.sharding.reshard(unembedding.w, out_shardings=jax.P())
+  w_unemb = jax.sharding.reshard(params.w.p, out_shardings=jax.P())
 
   q, k = outputs, w_unemb
 
@@ -98,24 +86,22 @@ def fused_softmax_cross_entropy(
   )
   loss = lse - label_logits
   if reduce:
-    return loss.mean()
-  else:
-    return loss
+    loss = loss.mean()
+  return loss, {}
 
 
 def accuracy(
   config: Config,
-  unembedding: LMHead | ClassificationHead,
+  params: Unembedding,
   outputs: Array,
   targets: Array,
   shard_mapped__kernel=None,
   reduce=True,
 ):
   """Classification accuracy."""
-  logits = jax.vmap(partial(calculate_logits, config, unembedding))(outputs)
+  logits, aux = jax.vmap(partial(unembedding, config, params))(outputs)
   preds = logits.argmax(axis=-1)
   loss = (preds == targets).astype(jnp.int32)
   if reduce:
-    return loss.mean()
-  else:
-    return loss
+    loss = loss.mean()
+  return loss, jax.tree.map(jnp.mean, aux)

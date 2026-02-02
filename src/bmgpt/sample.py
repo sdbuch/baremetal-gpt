@@ -5,8 +5,7 @@ import jax.numpy as jnp
 from jax import Array
 
 from bmgpt.config import Config
-from bmgpt.losses import calculate_logits
-from bmgpt.model import CacheParams, Transformer, _transformer
+from bmgpt.model import CacheParams, Transformer, transformer, unembedding
 
 
 def sample_one_prompt(
@@ -21,10 +20,10 @@ def sample_one_prompt(
 ) -> tuple[Array, Array, int]:
   """Expects seq and cache_in to have no batch axis."""
   cache_params = CacheParams(enabled=True, size=cache_size)
-  out, cache_out = _transformer(config, kernel, params, seq, cache_in, cache_params)
+  out, cache_out, _ = transformer(config, kernel, params, seq, cache_in, cache_params)
   cache_size = cache_size + seq.shape[-1]
-  logits = calculate_logits(config, params.unemb, out).astype(jnp.float32)
-  logits = logits[-1]
+  logits, _ = unembedding(config, params.unemb, out)
+  logits = logits[-1].astype(jnp.float32)
   valid_ids_mask = (
     jnp.arange(config.model.num_vocab) <= config.train_dataset.max_valid_token_id
   )

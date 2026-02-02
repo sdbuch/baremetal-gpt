@@ -1,3 +1,4 @@
+import operator
 from functools import partial
 from pathlib import Path
 from typing import Any, Iterable, NamedTuple
@@ -18,12 +19,11 @@ from bmgpt.evaluators import evaluator_factory
 from bmgpt.loggers import Logger, logger_factory
 from bmgpt.losses import fused_softmax_cross_entropy, softmax_cross_entropy
 from bmgpt.model import (
+  ArrayWithMetadata,
   CacheParams,
   Transformer,
-  _transformer,
   init_kv_cache,
-  init_transformer,
-  model_spec,
+  transformer,
 )
 from bmgpt.optimizers import (
   grad_norm_and_clip,
@@ -42,17 +42,24 @@ class TrainState(NamedTuple):
   kv_cache: jax.Array
 
 
+def is_ann(x):
+  return isinstance(x, ArrayWithMetadata)
+
+
 @jax.jit
 def init_train_state(key, config: Config) -> TrainState:
-  model_params = init_transformer(key, config)
-  adam_state = jax.tree.map(partial(init_adam_state, config), model_params)
+  i2l = config.model.intermediates_to_log
+  params = Transformer.init(
+    config, key, name="model", intermediates_to_log=i2l.transformer
+  )
+  adam_state = jax.tree.map(partial(init_adam_state, config), params, is_leaf=is_ann)
   cache = init_kv_cache(
     config,
     config.train_dataset.global_batch_size,
     config.train_dataset.num_microbatches,
     0,
   )
-  return TrainState(params=model_params, opt_state=adam_state, kv_cache=cache)
+  return TrainState(params=params, opt_state=adam_state, kv_cache=cache)
 
 
 @hydra.main(
@@ -90,10 +97,8 @@ def main(config: Config):
   )
 
   # Configure optimization
-  spec = model_spec(train_state.params)
-  weight_decay_mask = jax.tree.map(lambda _, s: bool(s), train_state.params, spec)
   opt_update = opt_update_factory(config.optimizer.type)
-  opt_update = partial(opt_update, config, weight_decay_mask)
+  opt_update = partial(opt_update, config)
 
   @partial(jax.jit, donate_argnums=2)
   def train_step(config: Config, batch, state: TrainState):
@@ -102,44 +107,48 @@ def main(config: Config):
       to_compute_dtype = lambda p: p.astype(config.model.compute_dtype.value)
       params = jax.tree.map(to_compute_dtype, params)
       model = partial(
-        _transformer, config, train_attn_kernel, params, cache_params=cache_params
+        transformer, config, train_attn_kernel, params, cache_params=cache_params
       )
-      outputs, _ = jax.vmap(model)(inputs, state.kv_cache)
+      outputs, _, aux = jax.vmap(model)(inputs, state.kv_cache)
       if config.use_fused_xent_loss:
-        loss = fused_softmax_cross_entropy(
+        loss, aux_loss = fused_softmax_cross_entropy(
           config, params.unemb, outputs, targets, train_lse_kernel
         )
       else:
-        loss = softmax_cross_entropy(config, params.unemb, outputs, targets)
-      return loss
+        loss, aux_loss = softmax_cross_entropy(config, params.unemb, outputs, targets)
+      return loss, jax.tree.map(jnp.mean, aux) | aux_loss
 
     # Calculate gradients: use a scan for gradient accumulation
     def gradient_accum(loss__grad, microbatch):
       loss_accum, grad_accum = loss__grad
-      loss, grad = jax.value_and_grad(loss_fn)(state.params, microbatch)
-      return (loss_accum + loss, jax.tree.map(jnp.add, grad_accum, grad)), loss
+      grad_fn = partial(jax.value_and_grad, has_aux=True)
+      (loss, aux), grad = grad_fn(loss_fn)(state.params, microbatch)
+      return (loss_accum + loss, jax.tree.map(jnp.add, grad_accum, grad)), aux
 
     zeros_like_f32 = partial(jnp.zeros_like, dtype=jnp.float32)
     carry = (jnp.zeros(()), jax.tree.map(zeros_like_f32, state.params))
-    (loss, grad), raw_losses = jax.lax.scan(gradient_accum, carry, batch)
-    assert raw_losses.dtype == jnp.float32
+    (loss, grad), aux = jax.lax.scan(gradient_accum, carry, batch)
     # NOTE: breaks if per-token loss masking introduced (see unsloth blog)
     loss = loss / config.train_dataset.num_microbatches
     grad = jax.tree.map(lambda x: x / config.train_dataset.num_microbatches, grad)
 
     # Update parameters
     grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
-    update_tree = jax.tree.map(opt_update, state.params, grad_clipped, state.opt_state)
+    update_tree = jax.tree.map(
+      opt_update, state.params, grad_clipped, state.opt_state, is_leaf=is_ann
+    )
     update, opt_state, lr = [
-      jax.tree.map(lambda _, y: y[i], state.params, update_tree) for i in range(3)
+      jax.tree.map(lambda _, y: y[i], state.params, update_tree, is_leaf=is_ann)
+      for i in range(3)
     ]
-    params = jax.tree.map(jnp.add, state.params, update)
+    params = jax.tree.map(operator.add, state.params, update, is_leaf=is_ann)
     new_state = TrainState(params=params, opt_state=opt_state, kv_cache=state.kv_cache)
 
     metrics = {
       "lr": jax.tree.leaves(lr)[0],
       "batch_loss": loss,
       "grad_norm": global_grad_norm,
+      **jax.tree.map(jnp.mean, aux),
     }
     return metrics, new_state
 

@@ -1,5 +1,5 @@
-from dataclasses import dataclass, field
-from enum import Enum
+from dataclasses import dataclass, field, fields
+from enum import Enum, StrEnum
 
 import jax
 import jax.numpy as jnp
@@ -77,6 +77,24 @@ class TokenizerType(Enum):
   LLAMA3 = 2
 
 
+class StatType(StrEnum):
+  RMS = "rms"
+  MEAN = "mean"
+  MAX = "max"
+  STD = "std"
+
+  def reduce(self, x):
+    match self:
+      case StatType.RMS:
+        return jnp.sqrt(jnp.mean(x**2))
+      case StatType.MEAN:
+        return jnp.mean(x)
+      case StatType.MAX:
+        return jnp.max(jnp.abs(x))
+      case StatType.STD:
+        return jnp.std(x)
+
+
 @dataclass(kw_only=True, unsafe_hash=True)
 class DatasetConfig:
   """Params for a single dataset. data.py"""
@@ -138,6 +156,18 @@ class OptimizerConfig:
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
+class IntermediatesToLogConfig:
+  transformer: list[str] = field(default_factory=list)
+  emb: list[str] = field(default_factory=list)
+  blocks: list[str] = field(default_factory=list)
+  norm_attn: list[str] = field(default_factory=list)
+  attn: list[str] = field(default_factory=list)
+  norm_mlp: list[str] = field(default_factory=list)
+  mlp: list[str] = field(default_factory=list)
+  unemb: list[str] = field(default_factory=list)
+
+
+@dataclass(kw_only=True, unsafe_hash=True)
 class ModelConfig:
   """Model architecture params. model.py"""
 
@@ -173,8 +203,10 @@ class ModelConfig:
   use_bias_mlp: bool = False  # bias in MLPs
   use_rope: bool = True  # RoPE or not
 
-  # Discrete-specific model parameters
-  # Continuous-specific model parameters
+  # Hooks (currently just activation logging)
+  intermediates_to_log: IntermediatesToLogConfig = field(
+    default_factory=IntermediatesToLogConfig
+  )
 
 
 @dataclass(kw_only=True, unsafe_hash=True)

@@ -1,0 +1,9 @@
+# @package _global_
+
+model:
+  intermediates_to_log:
+    mlp: [act, out]
+    attn: [q, out]
+    emb: [emb]
+    unemb: [logits]
+    blocks: [out_attn_block, out_mlp_block]
