@@ -613,6 +613,9 @@ def transformer(
   out, (cache_out, blocks_aux) = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache))
 
   # aux_out = params.collect_stats(locals())
+  blocks_aux = {
+    f"{k}/layer_{i}": v[i] for k, v in blocks_aux.items() for i in range(v.shape[0])
+  }
   aux_out = jax.tree.map(jnp.mean, aux_emb) | blocks_aux
 
   return out, cache_out, aux_out
