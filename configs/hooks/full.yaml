@@ -1,5 +1,5 @@
 # @package _global_
 
 model:
-  hooks:
+  intermediates_to_log:
     mlp: [preact]
