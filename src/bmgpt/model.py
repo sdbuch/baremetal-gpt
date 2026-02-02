@@ -587,7 +587,6 @@ class Transformer(ParamNodeWithMetadata):
       unemb=unembedding_cls.init(
         config, key_unemb, name="unemb", intermediates_to_log=i2l.unemb
       ),
-      intermediates_to_log=config.model.intermediates_to_log.transformer,
       **kwargs,
     )
     return model
