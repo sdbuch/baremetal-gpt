@@ -53,7 +53,9 @@ class ArrayWithMetadata:
 @jax.tree_util.register_dataclass
 @dataclass
 class ParamNodeWithMetadata:
-  hooks: dict = field(default_factory=dict, metadata=dict(static=True), kw_only=True)
+  intermediates_to_log: list[str] = field(
+    default_factory=list, metadata=dict(static=True), kw_only=True
+  )
 
 
 @jax.tree_util.register_dataclass
@@ -65,7 +67,7 @@ class Mlp(ParamNodeWithMetadata):
   bias_down: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key, hooks):
+  def init(cls, config: Config, key, intermediates_to_log):
     k_up, k_down = jax.random.split(key, 2)
     d_hidden = int(config.model.mlp_factor * config.model.d_model)
     shape_w_up = (d_hidden, config.model.d_model)
@@ -90,7 +92,7 @@ class Mlp(ParamNodeWithMetadata):
       bias_up=ArrayWithMetadata(bias_up, ((), ())),
       w_down=ArrayWithMetadata(w_down, ((-1,), (-2,))),
       bias_down=ArrayWithMetadata(bias_down, ((), ())),
-      hooks=hooks,
+      intermediates_to_log=intermediates_to_log,
     )
 
 
@@ -128,7 +130,7 @@ class Attn(ParamNodeWithMetadata):
   w_o: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key, hooks):
+  def init(cls, config: Config, key, intermediates_to_log):
     k_qkv, k_o = jax.random.split(key, 2)
     shape_qkv = (3, config.model.num_heads, config.model.d_head, config.model.d_model)
     shape_wout = (config.model.d_model, config.model.num_heads, config.model.d_head)
@@ -137,7 +139,7 @@ class Attn(ParamNodeWithMetadata):
     return cls(
       w_qkv=ArrayWithMetadata(w_qkv, ((-1,), (-2, -3))),
       w_o=ArrayWithMetadata(w_out, ((-1, -2), (-3,))),
-      hooks=hooks,
+      intermediates_to_log=intermediates_to_log,
     )
 
 
@@ -279,7 +281,7 @@ def attn(
 @dataclass
 class Embedding(ParamNodeWithMetadata):
   @classmethod
-  def init(cls, config: Config, key, hooks) -> "Embedding":
+  def init(cls, config: Config, key, intermediates_to_log) -> "Embedding":
     raise NotImplementedError
 
 
@@ -299,7 +301,7 @@ class EmbeddingDiscrete(Embedding):
   bias: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key, hooks) -> "EmbeddingDiscrete":
+  def init(cls, config: Config, key, intermediates_to_log) -> "EmbeddingDiscrete":
     shape_emb = (config.model.num_vocab, config.model.d_model)
     shape_bias = (config.model.d_model,)
     emb = init_array_normal(config, shape_emb, config.sharding.wemb, key)
@@ -307,7 +309,7 @@ class EmbeddingDiscrete(Embedding):
     return cls(
       w=ArrayWithMetadata(emb, ((), ())),
       bias=ArrayWithMetadata(bias, ((), ())),
-      hooks=hooks,
+      intermediates_to_log=intermediates_to_log,
     )
 
 
@@ -331,7 +333,7 @@ class EmbeddingContinuous(Embedding):
   registers: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key, hooks) -> "EmbeddingContinuous":
+  def init(cls, config: Config, key, intermediates_to_log) -> "EmbeddingContinuous":
     key_emb, key_pos, key_reg = jax.random.split(key, 3)
     shape_emb = (config.model.num_vocab, config.model.d_model)
     shape_reg = (config.model.num_registers, config.model.d_model)
@@ -353,7 +355,7 @@ class EmbeddingContinuous(Embedding):
       bias=ArrayWithMetadata(bias, ((), ())),
       w_pos=ArrayWithMetadata(w_pos, ((-2,), (-1,))),
       registers=ArrayWithMetadata(w_reg, ((-2,), (-1,))),
-      hooks=hooks,
+      intermediates_to_log=intermediates_to_log,
     )
 
 
@@ -377,7 +379,7 @@ class Unembedding(ParamNodeWithMetadata):
   bias: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key, hooks) -> "Unembedding":
+  def init(cls, config: Config, key, intermediates_to_log) -> "Unembedding":
     raise NotImplementedError
 
 
@@ -397,7 +399,7 @@ class LMHead(Unembedding):
   bias: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key, hooks) -> "LMHead":
+  def init(cls, config: Config, key, intermediates_to_log) -> "LMHead":
     shape_emb = (config.model.num_vocab, config.model.d_model)
     shape_bias = (config.model.num_vocab,)
     unemb = init_array_normal(config, shape_emb, config.sharding.wunemb, key)
@@ -405,7 +407,7 @@ class LMHead(Unembedding):
     return cls(
       w=ArrayWithMetadata(unemb, ((-1,), (-2,))),
       bias=ArrayWithMetadata(bias, ((), ())),
-      hooks=hooks,
+      intermediates_to_log=intermediates_to_log,
     )
 
 
@@ -425,7 +427,7 @@ class ClassificationHead(Unembedding):
   bias: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key, hooks) -> "ClassificationHead":
+  def init(cls, config: Config, key, intermediates_to_log) -> "ClassificationHead":
     shape_emb = (config.model.num_classes, config.model.d_model)
     shape_bias = (config.model.num_classes,)
     unemb = init_array_normal(config, shape_emb, config.sharding.wunemb, key)
@@ -433,7 +435,7 @@ class ClassificationHead(Unembedding):
     return cls(
       w=ArrayWithMetadata(unemb, ((-1,), (-2,))),
       bias=ArrayWithMetadata(bias, ((), ())),
-      hooks=hooks,
+      intermediates_to_log=intermediates_to_log,
     )
 
 
@@ -454,14 +456,14 @@ class LayerNorm(ParamNodeWithMetadata):
   beta: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, hooks) -> "LayerNorm":
+  def init(cls, config: Config, intermediates_to_log) -> "LayerNorm":
     shape = (config.model.d_model,)
     gamma = init_array_ones(config, shape, config.sharding.res_stream)
     beta = init_array_zeros(config, shape, config.sharding.res_stream)
     return cls(
       gamma=ArrayWithMetadata(gamma, ((), ())),
       beta=ArrayWithMetadata(beta, ((), ())),
-      hooks=hooks,
+      intermediates_to_log=intermediates_to_log,
     )
 
 
@@ -496,10 +498,10 @@ class Block(ParamNodeWithMetadata):
   def init(cls, config: Config, key) -> "Block":
     key_attn, key_mlp = jax.random.split(key)
     return cls(
-      norm_attn=LayerNorm.init(config, config.model.hooks.norm_attn),
-      attn=Attn.init(config, key_attn, config.model.hooks.attn),
-      norm_mlp=LayerNorm.init(config, config.model.hooks.norm_mlp),
-      mlp=Mlp.init(config, key_mlp, config.model.hooks.mlp),
+      norm_attn=LayerNorm.init(config, config.model.intermediates_to_log.norm_attn),
+      attn=Attn.init(config, key_attn, config.model.intermediates_to_log.attn),
+      norm_mlp=LayerNorm.init(config, config.model.intermediates_to_log.norm_mlp),
+      mlp=Mlp.init(config, key_mlp, config.model.intermediates_to_log.mlp),
     )
 
 
@@ -550,9 +552,12 @@ class Transformer(ParamNodeWithMetadata):
     keys_blocks = jax.random.split(key_blocks, config.model.num_layers)
     init_block = lambda k: Block.init(config, k)
     model = cls(
-      emb=embedding_cls.init(config, key_emb, config.model.hooks.emb),
+      emb=embedding_cls.init(config, key_emb, config.model.intermediates_to_log.emb),
       blocks=jax.vmap(init_block)(keys_blocks),
-      unemb=unembedding_cls.init(config, key_unemb, config.model.hooks.unemb),
+      unemb=unembedding_cls.init(
+        config, key_unemb, config.model.intermediates_to_log.unemb
+      ),
+      intermediates_to_log=config.model.intermediates_to_log.transformer,
     )
     return model
 

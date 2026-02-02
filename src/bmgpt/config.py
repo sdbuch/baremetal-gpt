@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from enum import Enum, StrEnum
 
 import jax
@@ -156,15 +156,15 @@ class OptimizerConfig:
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
-class HooksConfig:
-  transformer: dict[str, list[StatType]] = field(default_factory=dict)
-  emb: dict[str, list[StatType]] = field(default_factory=dict)
-  blocks: dict[str, list[StatType]] = field(default_factory=dict)
-  norm_attn: dict[str, list[StatType]] = field(default_factory=dict)
-  attn: dict[str, list[StatType]] = field(default_factory=dict)
-  norm_mlp: dict[str, list[StatType]] = field(default_factory=dict)
-  mlp: dict[str, list[StatType]] = field(default_factory=dict)
-  unemb: dict[str, list[StatType]] = field(default_factory=dict)
+class IntermediatesToLogConfig:
+  transformer: list[str] = field(default_factory=list)
+  emb: list[str] = field(default_factory=list)
+  blocks: list[str] = field(default_factory=list)
+  norm_attn: list[str] = field(default_factory=list)
+  attn: list[str] = field(default_factory=list)
+  norm_mlp: list[str] = field(default_factory=list)
+  mlp: list[str] = field(default_factory=list)
+  unemb: list[str] = field(default_factory=list)
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -203,8 +203,10 @@ class ModelConfig:
   use_bias_mlp: bool = False  # bias in MLPs
   use_rope: bool = True  # RoPE or not
 
-  # Hooks (activation logging)
-  hooks: HooksConfig = field(default_factory=HooksConfig)
+  # Hooks (currently just activation logging)
+  intermediates_to_log: IntermediatesToLogConfig = field(
+    default_factory=IntermediatesToLogConfig
+  )
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
