@@ -77,7 +77,7 @@ class TokenizerType(Enum):
   LLAMA3 = 2
 
 
-class StatType(StrEnum):
+class StatType(Enum):
   RMS = "rms"
   MEAN = "mean"
   MAX = "max"
