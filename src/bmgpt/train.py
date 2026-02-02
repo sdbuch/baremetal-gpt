@@ -116,12 +116,13 @@ def main(config: Config):
         )
       else:
         loss, aux_loss = softmax_cross_entropy(config, params.unemb, outputs, targets)
-      return loss, aux | aux_loss
+      return loss, jax.tree.map(lambda x: jnp.mean(x, axis=0), aux) | aux_loss
 
     # Calculate gradients: use a scan for gradient accumulation
     def gradient_accum(loss__grad, microbatch):
       loss_accum, grad_accum = loss__grad
-      (loss, aux), grad = jax.value_and_grad(loss_fn)(state.params, microbatch)
+      grad_fn = partial(jax.value_and_grad, has_aux=True)
+      (loss, aux), grad = grad_fn(loss_fn)(state.params, microbatch)
       return (loss_accum + loss, jax.tree.map(jnp.add, grad_accum, grad)), aux
 
     zeros_like_f32 = partial(jnp.zeros_like, dtype=jnp.float32)
@@ -147,7 +148,7 @@ def main(config: Config):
       "lr": jax.tree.leaves(lr)[0],
       "batch_loss": loss,
       "grad_norm": global_grad_norm,
-      **jax.tree.map(lambda x: x.mean(), aux),
+      **jax.tree.map(lambda x: jnp.mean(x, axis=0), aux),
     }
     return metrics, new_state
 

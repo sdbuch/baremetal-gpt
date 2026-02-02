@@ -557,7 +557,7 @@ def block(
 
   aux_out = params.collect_stats(locals())
   aux_out = aux_out | aux_ln_attn | aux_attn | aux_ln_mlp | aux_mlp
-  return out_mlp_block, cache_out, aux_out
+  return out_mlp_block, cache_out, jax.tree.map(jnp.mean, aux_out)
 
 
 @jax.tree_util.register_dataclass
@@ -612,8 +612,8 @@ def transformer(
 
   out, (cache_out, blocks_aux) = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache))
 
-  aux_out = params.collect_stats(locals())
-  aux_out = aux_out | aux_emb | blocks_aux
+  # aux_out = params.collect_stats(locals())
+  aux_out = jax.tree.map(jnp.mean, aux_emb) | blocks_aux
 
   return out, cache_out, aux_out
 

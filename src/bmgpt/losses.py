@@ -53,7 +53,7 @@ def softmax_cross_entropy(
   loss = lse - label_logits
   if reduce:
     loss = loss.mean()
-  return loss, aux
+  return loss, jax.tree.map(jnp.mean, aux)
 
 
 def fused_softmax_cross_entropy(
@@ -104,4 +104,4 @@ def accuracy(
   loss = (preds == targets).astype(jnp.int32)
   if reduce:
     loss = loss.mean()
-  return loss, aux
+  return loss, jax.tree.map(jnp.mean, aux)
