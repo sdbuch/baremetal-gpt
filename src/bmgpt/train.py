@@ -46,7 +46,7 @@ def is_ann(x):
   return isinstance(x, ArrayWithMetadata)
 
 
-@jax.jit
+# @jax.jit
 def init_train_state(key, config: Config) -> TrainState:
   i2l = config.model.intermediates_to_log
   params = Transformer.init(

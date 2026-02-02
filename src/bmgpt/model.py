@@ -107,6 +107,8 @@ class Mlp(ParamNodeWithMetadata):
     w_down = init_array_normal(config, shape_w_down, config.sharding.wdown, k_down)
     bias_down = init_array_zeros(config, shape_bias_down, config.sharding.res_stream)
 
+    print(f"Mlp.init got intermediates_to_log={kwargs.get('intermediates_to_log', 'MISSING')}")
+
     return cls(
       w_up=ArrayWithMetadata(w_up, ((-1,), (-2,))),
       bias_up=ArrayWithMetadata(bias_up, ((), ())),
