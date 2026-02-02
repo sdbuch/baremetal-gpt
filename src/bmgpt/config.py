@@ -77,24 +77,6 @@ class TokenizerType(Enum):
   LLAMA3 = 2
 
 
-class StatType(StrEnum):
-  RMS = "rms"
-  MEAN = "mean"
-  MAX = "max"
-  STD = "std"
-
-  def reduce(self, x):
-    match self:
-      case StatType.RMS:
-        return jnp.sqrt(jnp.mean(x**2))
-      case StatType.MEAN:
-        return jnp.mean(x)
-      case StatType.MAX:
-        return jnp.max(jnp.abs(x))
-      case StatType.STD:
-        return jnp.std(x)
-
-
 @dataclass(kw_only=True, unsafe_hash=True)
 class DatasetConfig:
   """Params for a single dataset. data.py"""
