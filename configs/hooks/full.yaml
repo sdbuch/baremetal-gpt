@@ -2,4 +2,5 @@
 
 model:
   hooks:
-    mlp: {'preact': [RMS]}
+    mlp:
+      preact: [RMS]
