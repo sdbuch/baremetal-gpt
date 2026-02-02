@@ -30,6 +30,14 @@ def init_array_ones(config: Config, shape, sharding):
   return jnp.ones(shape, config.model.param_dtype.value, out_sharding=jax.P(*sharding))
 
 
+REDUCTIONS = {
+  "rms": lambda x: jnp.sqrt(jnp.mean(x**2, axis=-1)),
+  "mean": lambda x: jnp.mean(x, axis=-1),
+  "max": lambda x: jnp.max(jnp.abs(x), axis=-1),
+  "std": lambda x: jnp.std(x, axis=-1),
+}
+
+
 ################################
 # Architecture: building blocks
 ################################
@@ -56,6 +64,18 @@ class ParamNodeWithMetadata:
   intermediates_to_log: list[str] = field(
     default_factory=list, metadata=dict(static=True), kw_only=True
   )
+  name: str = field(default_factory=str, metadata=dict(static=True), kw_only=True)
+
+  def collect_stats(self, local_vars):
+    # TODO: Possibly cases where the reduction axis should be set (eg sequence axis)
+    aux = {}
+    for name in self.intermediates_to_log:
+      assert name in local_vars, (
+        f"Log intermediate {name} not found in caller {self.name}"
+      )
+      for stat_name, fn in REDUCTIONS.items():
+        aux[f"{self.name}.{name}/{stat_name}"] = fn(local_vars[name])
+    return aux
 
 
 @jax.tree_util.register_dataclass
@@ -67,7 +87,7 @@ class Mlp(ParamNodeWithMetadata):
   bias_down: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key, intermediates_to_log):
+  def init(cls, config: Config, key, **kwargs):
     k_up, k_down = jax.random.split(key, 2)
     d_hidden = int(config.model.mlp_factor * config.model.d_model)
     shape_w_up = (d_hidden, config.model.d_model)
@@ -92,7 +112,7 @@ class Mlp(ParamNodeWithMetadata):
       bias_up=ArrayWithMetadata(bias_up, ((), ())),
       w_down=ArrayWithMetadata(w_down, ((-1,), (-2,))),
       bias_down=ArrayWithMetadata(bias_down, ((), ())),
-      intermediates_to_log=intermediates_to_log,
+      **kwargs,
     )
 
 
@@ -115,7 +135,7 @@ def mlp(config: Config, params: Mlp, x: Array):
   if config.model.use_bias_mlp:
     out += params.bias_down.p
   assert out.dtype == config.model.compute_dtype.value
-  return out
+  return out, params.collect_stats(locals())
 
 
 class CacheParams(NamedTuple):
@@ -130,7 +150,7 @@ class Attn(ParamNodeWithMetadata):
   w_o: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key, intermediates_to_log):
+  def init(cls, config: Config, key, **kwargs):
     k_qkv, k_o = jax.random.split(key, 2)
     shape_qkv = (3, config.model.num_heads, config.model.d_head, config.model.d_model)
     shape_wout = (config.model.d_model, config.model.num_heads, config.model.d_head)
@@ -139,7 +159,7 @@ class Attn(ParamNodeWithMetadata):
     return cls(
       w_qkv=ArrayWithMetadata(w_qkv, ((-1,), (-2, -3))),
       w_o=ArrayWithMetadata(w_out, ((-1, -2), (-3,))),
-      intermediates_to_log=intermediates_to_log,
+      **kwargs,
     )
 
 
@@ -274,19 +294,19 @@ def attn(
 
   assert out.dtype == config.model.compute_dtype.value
   assert kv_cache_out.dtype == config.model.compute_dtype.value
-  return out, kv_cache_out
+  return (out, kv_cache_out, params.collect_stats(locals()))
 
 
 @jax.tree_util.register_dataclass
 @dataclass
 class Embedding(ParamNodeWithMetadata):
   @classmethod
-  def init(cls, config: Config, key, intermediates_to_log) -> "Embedding":
+  def init(cls, config: Config, key, **kwargs) -> "Embedding":
     raise NotImplementedError
 
 
 @singledispatch
-def _embedding_interface(params, seq: Array, config: Config) -> Array:
+def _embedding_interface(params, seq: Array, config: Config) -> tuple[Array, dict]:
   raise NotImplementedError(f"No embedding impl for {type(params)}")
 
 
@@ -301,7 +321,7 @@ class EmbeddingDiscrete(Embedding):
   bias: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key, intermediates_to_log) -> "EmbeddingDiscrete":
+  def init(cls, config: Config, key, **kwargs) -> "EmbeddingDiscrete":
     shape_emb = (config.model.num_vocab, config.model.d_model)
     shape_bias = (config.model.d_model,)
     emb = init_array_normal(config, shape_emb, config.sharding.wemb, key)
@@ -309,19 +329,19 @@ class EmbeddingDiscrete(Embedding):
     return cls(
       w=ArrayWithMetadata(emb, ((), ())),
       bias=ArrayWithMetadata(bias, ((), ())),
-      intermediates_to_log=intermediates_to_log,
+      **kwargs,
     )
 
 
 @_embedding_interface.register(EmbeddingDiscrete)
-def _(params: EmbeddingDiscrete, seq: Array, config: Config) -> Array:
+def _(params: EmbeddingDiscrete, seq: Array, config: Config) -> tuple[Array, dict]:
   w_f32 = params.w.p.astype(jnp.float32)  # perform the bwd scatter-add in fp32
   emb = w_f32.at[seq].get(out_sharding=jax.P(*config.sharding.res_stream))
   emb = emb.astype(params.w.p.dtype)
   if config.model.use_bias_embeddings:
     emb += params.bias.p
   assert emb.dtype == config.model.compute_dtype.value
-  return emb
+  return emb, params.collect_stats(locals())
 
 
 @jax.tree_util.register_dataclass
@@ -333,7 +353,7 @@ class EmbeddingContinuous(Embedding):
   registers: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key, intermediates_to_log) -> "EmbeddingContinuous":
+  def init(cls, config: Config, key, **kwargs) -> "EmbeddingContinuous":
     key_emb, key_pos, key_reg = jax.random.split(key, 3)
     shape_emb = (config.model.num_vocab, config.model.d_model)
     shape_reg = (config.model.num_registers, config.model.d_model)
@@ -355,12 +375,12 @@ class EmbeddingContinuous(Embedding):
       bias=ArrayWithMetadata(bias, ((), ())),
       w_pos=ArrayWithMetadata(w_pos, ((-2,), (-1,))),
       registers=ArrayWithMetadata(w_reg, ((-2,), (-1,))),
-      intermediates_to_log=intermediates_to_log,
+      **kwargs,
     )
 
 
 @_embedding_interface.register(EmbeddingContinuous)
-def _(params: EmbeddingContinuous, seq: Array, config: Config) -> Array:
+def _(params: EmbeddingContinuous, seq: Array, config: Config) -> tuple[Array, dict]:
   # seq is s x d_in
   emb_tokens = seq @ params.w_emb.p
   if config.model.use_bias_embeddings:
@@ -369,7 +389,7 @@ def _(params: EmbeddingContinuous, seq: Array, config: Config) -> Array:
   effective_seq_len = emb_with_regs.shape[0]
   emb = emb_with_regs + params.w_pos.p[:effective_seq_len]
   assert emb.dtype == config.model.compute_dtype.value
-  return emb
+  return emb, params.collect_stats(locals())
 
 
 @jax.tree_util.register_dataclass
@@ -379,12 +399,12 @@ class Unembedding(ParamNodeWithMetadata):
   bias: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key, intermediates_to_log) -> "Unembedding":
+  def init(cls, config: Config, key, **kwargs) -> "Unembedding":
     raise NotImplementedError
 
 
 @singledispatch
-def _unembedding_interface(params, seq: Array, config: Config) -> Array:
+def _unembedding_interface(params, seq: Array, config: Config) -> tuple[Array, dict]:
   raise NotImplementedError(f"No unembedding impl for {type(params)}")
 
 
@@ -399,7 +419,7 @@ class LMHead(Unembedding):
   bias: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key, intermediates_to_log) -> "LMHead":
+  def init(cls, config: Config, key, **kwargs) -> "LMHead":
     shape_emb = (config.model.num_vocab, config.model.d_model)
     shape_bias = (config.model.num_vocab,)
     unemb = init_array_normal(config, shape_emb, config.sharding.wunemb, key)
@@ -407,17 +427,17 @@ class LMHead(Unembedding):
     return cls(
       w=ArrayWithMetadata(unemb, ((-1,), (-2,))),
       bias=ArrayWithMetadata(bias, ((), ())),
-      intermediates_to_log=intermediates_to_log,
+      **kwargs,
     )
 
 
 @_unembedding_interface.register(LMHead)
-def _(params: LMHead, x: Array, config: Config) -> Array:
+def _(params: LMHead, x: Array, config: Config) -> tuple[Array, dict]:
   logits = jnp.matmul(x, params.w.p.mT, preferred_element_type=jnp.float32)
   if config.model.use_bias_embeddings:
     logits += params.bias.p
   assert logits.dtype == jnp.float32
-  return logits
+  return logits, params.collect_stats(locals())
 
 
 @jax.tree_util.register_dataclass
@@ -427,7 +447,7 @@ class ClassificationHead(Unembedding):
   bias: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, key, intermediates_to_log) -> "ClassificationHead":
+  def init(cls, config: Config, key, **kwargs) -> "ClassificationHead":
     shape_emb = (config.model.num_classes, config.model.d_model)
     shape_bias = (config.model.num_classes,)
     unemb = init_array_normal(config, shape_emb, config.sharding.wunemb, key)
@@ -435,18 +455,18 @@ class ClassificationHead(Unembedding):
     return cls(
       w=ArrayWithMetadata(unemb, ((-1,), (-2,))),
       bias=ArrayWithMetadata(bias, ((), ())),
-      intermediates_to_log=intermediates_to_log,
+      **kwargs,
     )
 
 
 @_unembedding_interface.register(ClassificationHead)
-def _(params: ClassificationHead, x: Array, config: Config):
+def _(params: ClassificationHead, x: Array, config: Config) -> tuple[Array, dict]:
   """Input x has shape (S, D)"""
   logits = jnp.matmul(x[:1], params.w.p.mT, preferred_element_type=jnp.float32)
   if config.model.use_bias_embeddings:
     logits += params.bias.p
   assert logits.dtype == jnp.float32
-  return logits
+  return logits, params.collect_stats(locals())
 
 
 @jax.tree_util.register_dataclass
@@ -456,14 +476,14 @@ class LayerNorm(ParamNodeWithMetadata):
   beta: ArrayWithMetadata
 
   @classmethod
-  def init(cls, config: Config, intermediates_to_log) -> "LayerNorm":
+  def init(cls, config: Config, **kwargs) -> "LayerNorm":
     shape = (config.model.d_model,)
     gamma = init_array_ones(config, shape, config.sharding.res_stream)
     beta = init_array_zeros(config, shape, config.sharding.res_stream)
     return cls(
       gamma=ArrayWithMetadata(gamma, ((), ())),
       beta=ArrayWithMetadata(beta, ((), ())),
-      intermediates_to_log=intermediates_to_log,
+      **kwargs,
     )
 
 
@@ -478,7 +498,7 @@ def layernorm(config: Config, params: LayerNorm, x: Array):
     out += params.beta.p
   out = out.astype(x.dtype)
   assert out.dtype == config.model.compute_dtype.value
-  return out
+  return out, params.collect_stats(locals())
 
 
 ##################################
@@ -495,13 +515,19 @@ class Block(ParamNodeWithMetadata):
   mlp: Mlp
 
   @classmethod
-  def init(cls, config: Config, key) -> "Block":
+  def init(cls, config: Config, key, **kwargs) -> "Block":
     key_attn, key_mlp = jax.random.split(key)
+    i2l = config.model.intermediates_to_log
     return cls(
-      norm_attn=LayerNorm.init(config, config.model.intermediates_to_log.norm_attn),
-      attn=Attn.init(config, key_attn, config.model.intermediates_to_log.attn),
-      norm_mlp=LayerNorm.init(config, config.model.intermediates_to_log.norm_mlp),
-      mlp=Mlp.init(config, key_mlp, config.model.intermediates_to_log.mlp),
+      norm_attn=LayerNorm.init(
+        config, name="norm_attn", intermediates_to_log=i2l.norm_attn
+      ),
+      attn=Attn.init(config, key_attn, name="attn", intermediates_to_log=i2l.attn),
+      norm_mlp=LayerNorm.init(
+        config, name="norm_mlp", intermediates_to_log=i2l.norm_mlp
+      ),
+      mlp=Mlp.init(config, key_mlp, name="mlp", intermediates_to_log=i2l.mlp),
+      **kwargs,
     )
 
 
@@ -513,24 +539,25 @@ def block(
   cache: jax.Array,
   cache_params: CacheParams,
 ):
-  att_skip = x_seq
-  out = jax.vmap(partial(layernorm, config, params.norm_attn))(x_seq)
-  out, cache_out = attn(
+  norm = partial(layernorm, config)
+  out_ln_attn, aux_ln_attn = jax.vmap(partial(norm, params.norm_attn))(x_seq)
+  out_attn, cache_out, aux_attn = attn(
     config,
     shard_mapped__kernel,
     params.attn,
-    out,
+    out_ln_attn,
     kv_cache=cache,
     cache_params=cache_params,
   )
-  out += att_skip
+  out_attn_block = x_seq + out_attn
 
-  mlp_skip = out
-  out = jax.vmap(partial(layernorm, config, params.norm_mlp))(out)
-  out = jax.vmap(partial(mlp, config, params.mlp))(out)
-  out += mlp_skip
+  out_ln_mlp, aux_ln_mlp = jax.vmap(partial(norm, params.norm_mlp))(out_attn_block)
+  out_mlp, aux_mlp = jax.vmap(partial(mlp, config, params.mlp))(out_ln_mlp)
+  out_mlp_block = out_attn_block + out_mlp
 
-  return out, cache_out
+  aux_out = params.collect_stats(locals())
+  aux_out = aux_out | aux_ln_attn | aux_attn | aux_ln_mlp | aux_mlp
+  return out_mlp_block, cache_out, aux_out
 
 
 @jax.tree_util.register_dataclass
@@ -541,7 +568,7 @@ class Transformer(ParamNodeWithMetadata):
   unemb: Unembedding
 
   @classmethod
-  def init(cls, config: Config, key) -> "Transformer":
+  def init(cls, config: Config, key, **kwargs) -> "Transformer":
     if config.model.transformer_type == TransformerType.DISCRETE:
       embedding_cls = EmbeddingDiscrete
       unembedding_cls = LMHead
@@ -549,15 +576,19 @@ class Transformer(ParamNodeWithMetadata):
       embedding_cls = EmbeddingContinuous
       unembedding_cls = ClassificationHead
     key_emb, key_blocks, key_unemb = jax.random.split(key, 3)
+    i2l = config.model.intermediates_to_log
     keys_blocks = jax.random.split(key_blocks, config.model.num_layers)
-    init_block = lambda k: Block.init(config, k)
+    init_block = lambda k: Block.init(
+      config, k, name="block", intermediates_to_log=i2l.blocks
+    )
     model = cls(
-      emb=embedding_cls.init(config, key_emb, config.model.intermediates_to_log.emb),
+      emb=embedding_cls.init(config, key_emb, name="emb", intermediates_to_log=i2l.emb),
       blocks=jax.vmap(init_block)(keys_blocks),
       unemb=unembedding_cls.init(
-        config, key_unemb, config.model.intermediates_to_log.unemb
+        config, key_unemb, name="unemb", intermediates_to_log=i2l.unemb
       ),
       intermediates_to_log=config.model.intermediates_to_log.transformer,
+      **kwargs,
     )
     return model
 
@@ -570,16 +601,22 @@ def transformer(
   cache: jax.Array,
   cache_params: CacheParams,
 ):
-  x_seq = embedding(config, params.emb, tokens)
+  x_seq, aux_emb = embedding(config, params.emb, tokens)
 
   @partial(jax.remat, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)
   def _block_fun(x_seq: Array, params__cache_in: tuple[Block, jax.Array]):
     params, cache_in = params__cache_in
-    return block(config, shard_mapped__kernel, params, x_seq, cache_in, cache_params)
+    out, cache_out, aux = block(
+      config, shard_mapped__kernel, params, x_seq, cache_in, cache_params
+    )
+    return out, (cache_out, aux)
 
-  out, cache_out = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache))
+  out, (cache_out, blocks_aux) = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache))
 
-  return out, cache_out
+  aux_out = params.collect_stats(locals())
+  aux_out = aux_out | aux_emb | blocks_aux
+
+  return out, cache_out, aux_out
 
 
 #####################################

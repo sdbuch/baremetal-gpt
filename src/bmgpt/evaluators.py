@@ -9,7 +9,7 @@ from jax.experimental.multihost_utils import process_allgather
 from bmgpt.config import Config, EvaluationConfig, EvaluatorType
 from bmgpt.data import DataloaderOutputType
 from bmgpt.losses import MetricType, accuracy, softmax_cross_entropy
-from bmgpt.model import CacheParams, Transformer, transformer, init_kv_cache
+from bmgpt.model import CacheParams, Transformer, init_kv_cache, transformer
 from bmgpt.sample import generate
 from bmgpt.tokenizers import get_tokenizer_factory
 
@@ -118,10 +118,9 @@ def calculate_metric_on_minibatches(
   def forward_and_calc_metric(inputs, targets, params, cache):
     cache_params = CacheParams(enabled=False, size=0)
     model = partial(transformer, config, kernel, params, cache_params=cache_params)
-    outputs, _ = jax.vmap(model)(inputs, cache)
-    return metric_fun(
-      config, params.unemb, outputs, targets, kernel, False
-    )  # don't reduce
+    outputs, _, _ = jax.vmap(model)(inputs, cache)
+    metric_val, _ = metric_fun(config, params.unemb, outputs, targets, kernel, False)
+    return metric_val  # don't reduce
 
   # Process first batch (to get on-device buffer shape)
   batch = next(batch_iter)

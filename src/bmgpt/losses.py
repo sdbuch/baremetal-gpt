@@ -30,7 +30,7 @@ from bmgpt.model import (
 
 
 MetricType = Callable[
-  [Config, LMHead | ClassificationHead, Array, Array, Any, bool], Array
+  [Config, LMHead | ClassificationHead, Array, Array, Any, bool], tuple[Array, dict]
 ]
 
 
@@ -43,7 +43,7 @@ def softmax_cross_entropy(
   reduce=True,
 ):
   """Optax-style cross entropy loss."""
-  logits = jax.vmap(partial(unembedding, config, params))(outputs)
+  logits, aux = jax.vmap(partial(unembedding, config, params))(outputs)
   label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1).squeeze(-1)
   valid_ids_mask = (
     jnp.arange(logits.shape[-1]) <= config.train_dataset.max_valid_token_id
@@ -52,9 +52,8 @@ def softmax_cross_entropy(
   lse = jax.nn.logsumexp(logits, axis=-1)
   loss = lse - label_logits
   if reduce:
-    return loss.mean()
-  else:
-    return loss
+    loss = loss.mean()
+  return loss, aux
 
 
 def fused_softmax_cross_entropy(
@@ -87,9 +86,8 @@ def fused_softmax_cross_entropy(
   )
   loss = lse - label_logits
   if reduce:
-    return loss.mean()
-  else:
-    return loss
+    loss = loss.mean()
+  return loss, {}
 
 
 def accuracy(
@@ -101,10 +99,9 @@ def accuracy(
   reduce=True,
 ):
   """Classification accuracy."""
-  logits = jax.vmap(partial(unembedding, config, params))(outputs)
+  logits, aux = jax.vmap(partial(unembedding, config, params))(outputs)
   preds = logits.argmax(axis=-1)
   loss = (preds == targets).astype(jnp.int32)
   if reduce:
-    return loss.mean()
-  else:
-    return loss
+    loss = loss.mean()
+  return loss, aux

@@ -22,8 +22,8 @@ from bmgpt.model import (
   ArrayWithMetadata,
   CacheParams,
   Transformer,
-  transformer,
   init_kv_cache,
+  transformer,
 )
 from bmgpt.optimizers import (
   grad_norm_and_clip,
@@ -48,7 +48,10 @@ def is_ann(x):
 
 @jax.jit
 def init_train_state(key, config: Config) -> TrainState:
-  params = Transformer.init(config, key)
+  i2l = config.model.intermediates_to_log
+  params = Transformer.init(
+    config, key, name="model", intermediates_to_log=i2l.transformer
+  )
   adam_state = jax.tree.map(partial(init_adam_state, config), params, is_leaf=is_ann)
   cache = init_kv_cache(
     config,
@@ -106,25 +109,24 @@ def main(config: Config):
       model = partial(
         transformer, config, train_attn_kernel, params, cache_params=cache_params
       )
-      outputs, _ = jax.vmap(model)(inputs, state.kv_cache)
+      outputs, _, aux = jax.vmap(model)(inputs, state.kv_cache)
       if config.use_fused_xent_loss:
-        loss = fused_softmax_cross_entropy(
+        loss, aux_loss = fused_softmax_cross_entropy(
           config, params.unemb, outputs, targets, train_lse_kernel
         )
       else:
-        loss = softmax_cross_entropy(config, params.unemb, outputs, targets)
-      return loss
+        loss, aux_loss = softmax_cross_entropy(config, params.unemb, outputs, targets)
+      return loss, aux | aux_loss
 
     # Calculate gradients: use a scan for gradient accumulation
     def gradient_accum(loss__grad, microbatch):
       loss_accum, grad_accum = loss__grad
-      loss, grad = jax.value_and_grad(loss_fn)(state.params, microbatch)
-      return (loss_accum + loss, jax.tree.map(jnp.add, grad_accum, grad)), loss
+      (loss, aux), grad = jax.value_and_grad(loss_fn)(state.params, microbatch)
+      return (loss_accum + loss, jax.tree.map(jnp.add, grad_accum, grad)), aux
 
     zeros_like_f32 = partial(jnp.zeros_like, dtype=jnp.float32)
     carry = (jnp.zeros(()), jax.tree.map(zeros_like_f32, state.params))
-    (loss, grad), raw_losses = jax.lax.scan(gradient_accum, carry, batch)
-    assert raw_losses.dtype == jnp.float32
+    (loss, grad), aux = jax.lax.scan(gradient_accum, carry, batch)
     # NOTE: breaks if per-token loss masking introduced (see unsloth blog)
     loss = loss / config.train_dataset.num_microbatches
     grad = jax.tree.map(lambda x: x / config.train_dataset.num_microbatches, grad)
@@ -145,6 +147,7 @@ def main(config: Config):
       "lr": jax.tree.leaves(lr)[0],
       "batch_loss": loss,
       "grad_norm": global_grad_norm,
+      **jax.tree.map(lambda x: x.mean(), aux),
     }
     return metrics, new_state
 
