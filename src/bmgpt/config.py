@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
-from enum import Enum, StrEnum, Dict, List
+from enum import Enum, StrEnum
+from typing import Dict, List
 
 import jax
 import jax.numpy as jnp
