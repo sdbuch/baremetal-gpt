@@ -614,7 +614,7 @@ def transformer(
 
   # aux_out = params.collect_stats(locals())
   blocks_aux = {
-    f"{k}/layer_{i}": v[i] for k, v in blocks_aux.items() for i in range(v.shape[0])
+    f"layer_{i}/{k}": v[i] for k, v in blocks_aux.items() for i in range(v.shape[0])
   }
   aux_out = jax.tree.map(jnp.mean, aux_emb) | blocks_aux
 
