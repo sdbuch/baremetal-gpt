@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from enum import Enum, StrEnum
+from enum import Enum, StrEnum, Dict, List
 
 import jax
 import jax.numpy as jnp
@@ -157,14 +157,14 @@ class OptimizerConfig:
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class HooksConfig:
-  transformer: dict[str, list[StatType]] = field(default_factory=dict)
-  emb: dict[str, list[StatType]] = field(default_factory=dict)
-  blocks: dict[str, list[StatType]] = field(default_factory=dict)
-  norm_attn: dict[str, list[StatType]] = field(default_factory=dict)
-  attn: dict[str, list[StatType]] = field(default_factory=dict)
-  norm_mlp: dict[str, list[StatType]] = field(default_factory=dict)
-  mlp: dict[str, list[StatType]] = field(default_factory=dict)
-  unemb: dict[str, list[StatType]] = field(default_factory=dict)
+  transformer: Dict[str, List[StatType]] = field(default_factory=dict)
+  emb: Dict[str, List[StatType]] = field(default_factory=dict)
+  blocks: Dict[str, List[StatType]] = field(default_factory=dict)
+  norm_attn: Dict[str, List[StatType]] = field(default_factory=dict)
+  attn: Dict[str, List[StatType]] = field(default_factory=dict)
+  norm_mlp: Dict[str, List[StatType]] = field(default_factory=dict)
+  mlp: Dict[str, List[StatType]] = field(default_factory=dict)
+  unemb: Dict[str, List[StatType]] = field(default_factory=dict)
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
