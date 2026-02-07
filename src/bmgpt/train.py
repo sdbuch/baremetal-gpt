@@ -35,7 +35,6 @@ from bmgpt.splash_helpers import forward_kernels_from_config
 register_configs()
 
 
-# Setup for training loop
 class TrainState(NamedTuple):
   params: Transformer
   opt_state: Any
@@ -69,7 +68,6 @@ def init_train_state(key, config: Config) -> TrainState:
 )
 def main(config: Config):
   try:
-    # Launch distributed and register configs
     jax.distributed.initialize()
     jax.tree_util.register_static(type(config))
   except RuntimeError:
@@ -79,24 +77,15 @@ def main(config: Config):
   mesh = mesh_from_config(config)
   Logger = logger_factory(config.logger_type)
 
-  # Randomness
   key = jax.random.key(config.seed)
   key_model, key_train, key_val, key_eval = jax.random.split(key, 4)
-
-  # Data
   batch_iter = get_distributed_batch_iter(config, config.train_dataset, key_train, mesh)
-
-  # Initialize state
   with jax.set_mesh(mesh):
     train_state = init_train_state(key_model, config)
   cache_params = CacheParams(enabled=False, size=0)
-
-  # Configure forward pass (attention kernels)
   train_attn_kernel, train_lse_kernel, val_kernels, eval_kernels = (
     forward_kernels_from_config(config, mesh)
   )
-
-  # Configure optimization
   opt_update = opt_update_factory(config.optimizer.type)
   opt_update = partial(opt_update, config)
 
@@ -118,7 +107,6 @@ def main(config: Config):
         loss, aux_loss = softmax_cross_entropy(config, params.unemb, outputs, targets)
       return loss, jax.tree.map(jnp.mean, aux) | aux_loss
 
-    # Calculate gradients: use a scan for gradient accumulation
     def gradient_accum(loss__grad, microbatch):
       loss_accum, grad_accum = loss__grad
       grad_fn = partial(jax.value_and_grad, has_aux=True)
@@ -132,7 +120,6 @@ def main(config: Config):
     loss = loss / config.train_dataset.num_microbatches
     grad = jax.tree.map(lambda x: x / config.train_dataset.num_microbatches, grad)
 
-    # Update parameters
     grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
     update_tree = jax.tree.map(
       opt_update, state.params, grad_clipped, state.opt_state, is_leaf=is_ann
@@ -152,22 +139,19 @@ def main(config: Config):
     }
     return metrics, new_state
 
-  # Training loop
   with Logger(config) as logger:
     do_evals = partial(eval_loop, config, mesh=mesh, logger=logger)
-    for step, batch in enumerate(batch_iter):
+    step = 0
+    for step, batch in enumerate(batch_iter, start=1):
       with jax.set_mesh(mesh):
         metrics, train_state = train_step(config, batch, train_state)
       logger.log(metrics | {"step": step})
-      if (step + 1) % config.val_log_interval == 0:
-        # Calculate val metrics
+      if step % config.val_log_interval == 0:
         key_val = do_evals(
           key_val, zip(config.val_list, val_kernels), train_state.params, step
         )
-      if step == config.train_dataset.num_steps - 1:
+      if step == config.train_dataset.num_steps:
         break
-
-    # Run evals (testing)
     key_eval = do_evals(
       key_eval, zip(config.eval_list, eval_kernels), train_state.params, step
     )
