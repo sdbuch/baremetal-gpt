@@ -78,6 +78,9 @@ class ParamNodeWithMetadata:
       val = getattr(self, f.name)
       if isinstance(val, ArrayWithMetadata):
         aux[f"{self.name}.{f.name}{suffix}"] = fn(val.p)
+      elif isinstance(val, Array):
+        # optimizer updates return pytrees with no ArrayWithMetadata leaves
+        aux[f"{self.name}.{f.name}{suffix}"] = fn(val)
       elif isinstance(val, ParamNodeWithMetadata):
         aux |= val.reduce(fn, name)
     return aux
