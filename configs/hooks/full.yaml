@@ -1,11 +1,13 @@
 # @package _global_
 
 log_aux_metrics: True
+use_fused_xent_loss: False
+use_splash: False
 
 model:
   intermediates_to_log:
-    mlp: [act, out]
-    attn: [q, out]
+    mlp: [act, preact, out]
+    attn: [logits, out]
     emb: [emb]
     unemb: [logits]
     blocks: [out_attn_block, out_mlp_block]

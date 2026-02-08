@@ -294,8 +294,8 @@ def attn(
     # Scale and causal mask
     logits = jnp.einsum("nsh,nth->nst", q, k, preferred_element_type=jnp.float32)
     logits *= 1.0 / config.model.d_head**0.5
-    logits = jnp.where(mask, logits, -jnp.inf)
-    probs = jax.nn.softmax(logits, axis=2)  # type: ignore[reportArgumentType]
+    logits_masked = jnp.where(mask, logits, -jnp.inf)
+    probs = jax.nn.softmax(logits_masked, axis=2)  # type: ignore[reportArgumentType]
     probs = probs.astype(q.dtype)
     attn_out = jnp.einsum("nst,nth->nsh", probs, v)
   out = jnp.einsum(
