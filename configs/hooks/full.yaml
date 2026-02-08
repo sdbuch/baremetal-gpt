@@ -2,7 +2,8 @@
 
 log_aux_metrics: True
 use_fused_xent_loss: False
-use_splash: False
+train_dataset:
+  use_splash: False
 
 model:
   intermediates_to_log:
