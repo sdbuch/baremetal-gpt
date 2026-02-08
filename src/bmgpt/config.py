@@ -234,6 +234,8 @@ class Config:
   project_name: str = "bmgpt-debug"
   run_name: str = ""
   val_log_interval: int = 1000  # log validation metrics every <this many> batches
+  log_aux_metrics: bool = False  # gradient/param/update rms norms, intermediate logging
+
   use_fused_xent_loss: bool = True  # requires vocab size divisible by 128
   fused_xent_block_size_T: int = 512  # block size along batch axis
   fused_xent_block_size_V: int = 512  # block size along vocab axis

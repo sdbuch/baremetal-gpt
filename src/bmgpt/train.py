@@ -131,16 +131,16 @@ def main(config: Config):
     params = jax.tree.map(operator.add, state.params, update, is_leaf=is_ann)
     new_state = TrainState(params=params, opt_state=opt_state, kv_cache=state.kv_cache)
 
-    rms = lambda x: jnp.sqrt(jnp.mean(x.astype(jnp.float32) ** 2))
-    add_key_prefix = lambda d, prefix: {f"{prefix}/{k}": v for k, v in d.items()}
+    if config.log_aux_metrics:
+      aux = jax.tree.map(jnp.mean, aux)
+      aux = compute_aux_metrics(aux, weight=state.params, grad=grad, update=update)
+    else:
+      aux = {}
     metrics = {
       "train/lr": jax.tree.leaves(lr)[0],
       "train/batch_loss": loss,
       "train/grad_norm": global_grad_norm,
-      **add_key_prefix(jax.tree.map(jnp.mean, aux), "fwd"),
-      **add_key_prefix(state.params.reduce(rms, "rms"), "weight"),
-      **add_key_prefix(grad.reduce(rms, "rms"), "grad"),
-      **add_key_prefix(update.reduce(rms, "rms"), "update"),
+      **aux,
     }
     return metrics, new_state
 
@@ -186,6 +186,16 @@ def eval_loop(
     logger.log(metrics | {"step": step})
   logger.flush_buffer()
   return key
+
+
+def compute_aux_metrics(aux: dict, **kwargs):
+  add_key_prefix = lambda d, prefix: {f"{prefix}/{k}": v for k, v in d.items()}
+  rms = lambda x: jnp.sqrt(jnp.mean(x.astype(jnp.float32) ** 2))
+  reduce_fn = lambda x: x.reduce(rms, "rms")
+  aux_out = add_key_prefix(aux, "fwd")
+  for k, v in kwargs.items():
+    aux_out |= add_key_prefix(reduce_fn(v), k)
+  return aux_out
 
 
 if __name__ == "__main__":

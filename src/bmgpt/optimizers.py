@@ -3,7 +3,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
-from jax._src.util import Array
+from jax import Array
 
 from bmgpt.config import Config, LRScheduleType, OptType
 from bmgpt.model import ArrayWithMetadata, Transformer

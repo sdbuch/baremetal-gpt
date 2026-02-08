@@ -79,7 +79,7 @@ class ParamNodeWithMetadata:
       if isinstance(val, ArrayWithMetadata):
         aux[f"{self.name}.{f.name}{suffix}"] = fn(val.p)
       elif isinstance(val, ParamNodeWithMetadata):
-        aux |= val.reduce(fn)
+        aux |= val.reduce(fn, name)
     return aux
 
 
