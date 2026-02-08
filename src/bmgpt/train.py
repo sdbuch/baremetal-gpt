@@ -120,9 +120,9 @@ def main(config: Config):
     loss = loss / config.train_dataset.num_microbatches
     grad = jax.tree.map(lambda x: x / config.train_dataset.num_microbatches, grad)
 
-    grad_clipped, _, global_grad_norm = grad_norm_and_clip(config, grad)
+    grad_clip, global_grad_norm = grad_norm_and_clip(config, grad)
     update_tree = jax.tree.map(
-      opt_update, state.params, grad_clipped, state.opt_state, is_leaf=is_ann
+      opt_update, state.params, grad_clip, state.opt_state, is_leaf=is_ann
     )
     update, opt_state, lr = [
       jax.tree.map(lambda _, y: y[i], state.params, update_tree, is_leaf=is_ann)
@@ -131,11 +131,16 @@ def main(config: Config):
     params = jax.tree.map(operator.add, state.params, update, is_leaf=is_ann)
     new_state = TrainState(params=params, opt_state=opt_state, kv_cache=state.kv_cache)
 
+    rms = lambda x: jnp.sqrt(jnp.mean(x.astype(jnp.float32) ** 2))
+    add_key_prefix = lambda d, prefix: {f"{prefix}/{k}": v for k, v in d.items()}
     metrics = {
-      "lr": jax.tree.leaves(lr)[0],
-      "batch_loss": loss,
-      "grad_norm": global_grad_norm,
-      **jax.tree.map(jnp.mean, aux),
+      "train/lr": jax.tree.leaves(lr)[0],
+      "train/batch_loss": loss,
+      "train/grad_norm": global_grad_norm,
+      **add_key_prefix(jax.tree.map(jnp.mean, aux), "fwd"),
+      **add_key_prefix(state.params.reduce(rms, "rms"), "weight"),
+      **add_key_prefix(grad.reduce(rms, "rms"), "grad"),
+      **add_key_prefix(update.reduce(rms, "rms"), "update"),
     }
     return metrics, new_state
 

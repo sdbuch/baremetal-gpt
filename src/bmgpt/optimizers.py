@@ -3,6 +3,7 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+from jax._src.util import Array
 
 from bmgpt.config import Config, LRScheduleType, OptType
 from bmgpt.model import ArrayWithMetadata, Transformer
@@ -15,25 +16,19 @@ from bmgpt.model import ArrayWithMetadata, Transformer
 ##############################
 
 
-def grad_norm_and_clip(
-  config: Config, model: Transformer
-) -> tuple[Transformer, Transformer, float]:
+def grad_norm_and_clip(config: Config, grad: Transformer) -> tuple[Transformer, float]:
   # Gradient norms in fp32
   norm_sq = lambda x: jnp.einsum(
     "...,...->", x, x, preferred_element_type=jnp.float32, out_sharding=jax.P()
   )
-  grad_norms_squared = jax.tree.map(norm_sq, model)
-  global_grad_norm = jax.tree.reduce(operator.add, grad_norms_squared) ** 0.5
+  per_param_norm_sq = grad.reduce(norm_sq)
+  global_norm = jax.tree.reduce(operator.add, per_param_norm_sq) ** 0.5
   truncated_norm = jax.lax.select(
-    global_grad_norm >= config.optimizer.clip_grad,
-    global_grad_norm,
-    jnp.ones_like(global_grad_norm),
+    global_norm >= config.optimizer.clip_grad,
+    global_norm,
+    jnp.ones_like(global_norm),
   ).astype(config.model.param_dtype.value)
-  return (
-    jax.tree.map(lambda grad: grad / truncated_norm, model),
-    grad_norms_squared,
-    global_grad_norm,
-  )
+  return (jax.tree.map(lambda g: g / truncated_norm, grad), global_norm)
 
 
 def compute_wd_mask(matmul_axes: tuple[tuple, tuple]) -> bool:

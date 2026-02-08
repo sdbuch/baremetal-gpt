@@ -1,6 +1,6 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from functools import partial, singledispatch
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -11,8 +11,16 @@ from jax.experimental.pallas.ops.tpu.splash_attention import (
 
 from bmgpt.config import Config, TransformerType
 
+REDUCTIONS = {
+  "rms": lambda x: jnp.sqrt(jnp.mean(x**2, axis=-1)),
+  "max": lambda x: jnp.max(jnp.abs(x), axis=-1),
+  "mean": lambda x: jnp.mean(x, axis=-1),
+  "std": lambda x: jnp.std(x, axis=-1),
+}
+
+
 ################################
-#         Helpers
+#    Helpers / Base Classes
 ################################
 
 
@@ -28,19 +36,6 @@ def init_array_zeros(config: Config, shape, sharding):
 
 def init_array_ones(config: Config, shape, sharding):
   return jnp.ones(shape, config.model.param_dtype.value, out_sharding=jax.P(*sharding))
-
-
-REDUCTIONS = {
-  "rms": lambda x: jnp.sqrt(jnp.mean(x**2, axis=-1)),
-  "mean": lambda x: jnp.mean(x, axis=-1),
-  "max": lambda x: jnp.max(jnp.abs(x), axis=-1),
-  "std": lambda x: jnp.std(x, axis=-1),
-}
-
-
-################################
-# Architecture: building blocks
-################################
 
 
 @jax.tree_util.register_dataclass
@@ -67,7 +62,6 @@ class ParamNodeWithMetadata:
   name: str = field(default_factory=str, metadata=dict(static=True), kw_only=True)
 
   def collect_stats(self, local_vars):
-    # TODO: Possibly cases where the reduction axis should be set (eg sequence axis)
     aux = {}
     for name in self.intermediates_to_log:
       assert name in local_vars, (
@@ -76,6 +70,22 @@ class ParamNodeWithMetadata:
       for stat_name, fn in REDUCTIONS.items():
         aux[f"{self.name}.{name}/{stat_name}"] = fn(local_vars[name])
     return aux
+
+  def reduce(self, fn: Callable[[Array], Array], name: str = "") -> dict[str, Array]:
+    suffix = f"/{name}" if name else ""
+    aux = {}
+    for f in fields(self):
+      val = getattr(self, f.name)
+      if isinstance(val, ArrayWithMetadata):
+        aux[f"{self.name}.{f.name}{suffix}"] = fn(val.p)
+      elif isinstance(val, ParamNodeWithMetadata):
+        aux |= val.reduce(fn)
+    return aux
+
+
+################################
+# Architecture: building blocks
+################################
 
 
 @jax.tree_util.register_dataclass
@@ -591,6 +601,17 @@ class Transformer(ParamNodeWithMetadata):
     )
     return model
 
+  def reduce(self, fn: Callable[[Array], Array], name: str = "") -> dict[str, Array]:
+    aux = {}
+    aux |= self.emb.reduce(fn, name)
+    aux |= Transformer.flatten_vmapped_aux_dict(self.blocks.reduce(jax.vmap(fn), name))
+    aux |= self.unemb.reduce(fn, name)
+    return aux
+
+  @staticmethod
+  def flatten_vmapped_aux_dict(aux: dict):
+    return {f"layer_{i}.{k}": v[i] for k, v in aux.items() for i in range(v.shape[0])}
+
 
 def transformer(
   config: Config,
@@ -613,9 +634,7 @@ def transformer(
   out, (cache_out, blocks_aux) = jax.lax.scan(_block_fun, x_seq, (params.blocks, cache))
 
   # aux_out = params.collect_stats(locals())
-  blocks_aux = {
-    f"layer_{i}/{k}": v[i] for k, v in blocks_aux.items() for i in range(v.shape[0])
-  }
+  blocks_aux = Transformer.flatten_vmapped_aux_dict(blocks_aux)
   aux_out = jax.tree.map(jnp.mean, aux_emb) | blocks_aux
 
   return out, cache_out, aux_out
