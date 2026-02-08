@@ -186,6 +186,7 @@ dev = [
     { name = "ruff" },
     { name = "ty" },
     { name = "tyro" },
+    { name = "wandb-workspaces" },
     { name = "xprof" },
 ]
 
@@ -214,6 +215,7 @@ dev = [
     { name = "ruff", specifier = ">=0.14.10" },
     { name = "ty", specifier = ">=0.0.8" },
     { name = "tyro", specifier = ">=1.0.3" },
+    { name = "wandb-workspaces", specifier = ">=0.3.4" },
     { name = "xprof", specifier = ">=2.21.3" },
 ]
 
@@ -2240,6 +2242,19 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c0/6d/e78093d49d68afb26f5261a70fc7877c34c114af5c2ee0ab3b1af85f5e76/wandb-0.23.1-py3-none-win32.whl", hash = "sha256:fb5cf0f85692f758a5c36ab65fea96a1284126de64e836610f92ddbb26df5ded", size = 22150756, upload-time = "2025-12-03T02:25:02.734Z" },
     { url = "https://files.pythonhosted.org/packages/05/27/4f13454b44c9eceaac3d6e4e4efa2230b6712d613ff9bf7df010eef4fd18/wandb-0.23.1-py3-none-win_amd64.whl", hash = "sha256:21c8c56e436eb707b7d54f705652e030d48e5cfcba24cf953823eb652e30e714", size = 22150760, upload-time = "2025-12-03T02:25:05.106Z" },
     { url = "https://files.pythonhosted.org/packages/30/20/6c091d451e2a07689bfbfaeb7592d488011420e721de170884fedd68c644/wandb-0.23.1-py3-none-win_arm64.whl", hash = "sha256:8aee7f3bb573f2c0acf860f497ca9c684f9b35f2ca51011ba65af3d4592b77c1", size = 20137463, upload-time = "2025-12-03T02:25:08.317Z" },
+]
+
+[[package]]
+name = "wandb-workspaces"
+version = "0.3.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "wandb" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/44/c5/277bd507cd4447633cf2d8f082f4c0c13bbfa335d97f4f8c2c6ee71a39e6/wandb_workspaces-0.3.4.tar.gz", hash = "sha256:e02377a8ad3d821d860bf6cfa2ee9795d66abd49bc0d95d3211142c27f5d9043", size = 201006, upload-time = "2026-01-22T23:36:12.497Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/88/87/3a425e69867c471a3e6118b5b63094d1f8b423424676f09c018741297976/wandb_workspaces-0.3.4-py3-none-any.whl", hash = "sha256:30fc468152b7c721f8d96b9572cb7808a1979a7e343704a462224bd6936fe26e", size = 96265, upload-time = "2026-01-22T23:36:11.304Z" },
 ]
 
 [[package]]

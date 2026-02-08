@@ -93,5 +93,6 @@ dev = [
     "ruff>=0.14.10",
     "ty>=0.0.8",
     "tyro>=1.0.3",
+    "wandb-workspaces>=0.3.4",
     "xprof>=2.21.3",
 ]
