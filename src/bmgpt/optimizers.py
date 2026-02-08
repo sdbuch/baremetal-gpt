@@ -31,9 +31,19 @@ def grad_norm_and_clip(config: Config, grad: Transformer) -> tuple[Transformer, 
   return (jax.tree.map(lambda g: g / truncated_norm, grad), global_norm)
 
 
-def compute_wd_mask(matmul_axes: tuple[tuple, tuple]) -> bool:
+def compute_wd_mask(param: ArrayWithMetadata | Array) -> bool:
+  if isinstance(param, Array):
+    return True
+  matmul_axes = param.matmul_axes
   num_in_axes, num_out_axes = [len(axes) for axes in matmul_axes]
   return num_in_axes > 0 and num_out_axes > 0
+
+
+def param_to_array(param: ArrayWithMetadata | Array) -> Array:
+  if isinstance(param, ArrayWithMetadata):
+    return param.p
+  else:
+    return param
 
 
 ##############################
@@ -49,15 +59,15 @@ class OptState(NamedTuple):
 
 def init_adam_state(config: Config, param: ArrayWithMetadata) -> OptState:
   return OptState(
-    mu=jnp.zeros_like(param.p, dtype=config.model.opt_dtype.value),
-    nu=jnp.zeros_like(param.p, dtype=config.model.opt_dtype.value),
+    mu=jnp.zeros_like(param_to_array(param), dtype=config.model.opt_dtype.value),
+    nu=jnp.zeros_like(param_to_array(param), dtype=config.model.opt_dtype.value),
     step=jnp.array(0, dtype=jnp.int32),
   )
 
 
 def init_sgd_state(config: Config, param: ArrayWithMetadata) -> OptState:
   return OptState(
-    mu=jnp.zeros_like(param.p, dtype=config.model.opt_dtype.value),
+    mu=jnp.zeros_like(param_to_array(param), dtype=config.model.opt_dtype.value),
     nu=jnp.array(()),
     step=jnp.array(0, dtype=jnp.int32),
   )
@@ -131,8 +141,8 @@ def opt_update_factory(opt_type: OptType):
 
 def adamw_update(
   config: Config,
-  param: ArrayWithMetadata,
-  grad: ArrayWithMetadata,
+  param: ArrayWithMetadata | Array,
+  grad: ArrayWithMetadata | Array,
   state: OptState,
 ):
   beta1 = config.optimizer.beta1
@@ -140,10 +150,11 @@ def adamw_update(
   eps = config.optimizer.eps_adam
   weight_decay = config.optimizer.weight_decay
   lr = get_lr(config, config.optimizer.schedule_type, state)
-  wd_mask = compute_wd_mask(param.matmul_axes)
+  wd_mask = compute_wd_mask(param)
+  param, grad = param_to_array(param), param_to_array(grad)
 
-  mu = beta1 * state.mu + (1 - beta1) * grad.p
-  nu = beta2 * state.nu + (1 - beta2) * grad.p**2
+  mu = beta1 * state.mu + (1 - beta1) * grad
+  nu = beta2 * state.nu + (1 - beta2) * grad**2
   new_state = OptState(mu=mu, nu=nu, step=state.step + 1)
 
   # simulate initializing the buffers with initial gradients via pre-incrementing step
@@ -151,27 +162,28 @@ def adamw_update(
   nu_debias = nu / (1 - beta2**new_state.step)
   update = -mu_debias / (eps + jnp.sqrt(nu_debias))
   if wd_mask:
-    update = update - weight_decay * param.p.astype(config.model.opt_dtype.value)
+    update = update - weight_decay * param.astype(config.model.opt_dtype.value)
   return (lr * update).astype(config.model.param_dtype.value), new_state, lr
 
 
 def sgd_update(
   config: Config,
-  param: ArrayWithMetadata,
-  grad: ArrayWithMetadata,
+  param: ArrayWithMetadata | Array,
+  grad: ArrayWithMetadata | Array,
   state: OptState,
 ):
   beta1 = config.optimizer.beta1
   weight_decay = config.optimizer.weight_decay
   lr = get_lr(config, config.optimizer.schedule_type, state)
-  wd_mask = compute_wd_mask(param.matmul_axes)
+  wd_mask = compute_wd_mask(param)
+  param, grad = param_to_array(param), param_to_array(grad)
 
-  mu = beta1 * state.mu + (1 - beta1) * grad.p
+  mu = beta1 * state.mu + (1 - beta1) * grad
   new_state = OptState(mu=mu, nu=state.nu, step=state.step + 1)
 
   # simulate initializing the buffers with initial gradients via pre-incrementing step
   mu_debias = mu / (1 - beta1**new_state.step)
   update = -mu_debias
   if wd_mask:
-    update = update - weight_decay * param.p.astype(config.model.opt_dtype.value)
+    update = update - weight_decay * param.astype(config.model.opt_dtype.value)
   return (lr * update).astype(config.model.param_dtype.value), new_state, lr
