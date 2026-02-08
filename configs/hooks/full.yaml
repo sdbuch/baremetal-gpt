@@ -7,7 +7,7 @@ train_dataset:
 model:
   intermediates_to_log:
     mlp: [act, preact, out]
-    attn: [logits, out]
+    attn: [logits, attn_out, out]
     emb: [emb]
     unemb: [logits]
     blocks: [out_attn_block, out_mlp_block]
