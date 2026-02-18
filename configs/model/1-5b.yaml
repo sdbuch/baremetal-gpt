@@ -1,0 +1,11 @@
+# @package _global_
+
+# about 1.5B params with DCLM tokenizer embeddings (& biases)
+model:
+  d_model: 2048
+  num_heads: 14
+  d_head: 128
+  num_layers: 24
+  mlp_factor: 3
+
+  use_gating_mlp: True
