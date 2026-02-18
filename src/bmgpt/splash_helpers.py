@@ -15,7 +15,11 @@ from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_mask impo
 )
 
 from bmgpt.config import Config, DatasetConfig
-from bmgpt.kernels.lse_kernel import BlockSizes, make_lse_kernel
+from bmgpt.kernels.lse_kernel import (
+  BlockSizes,
+  make_lse_fused_kernel,
+  make_lse_kernel,
+)
 
 
 class FullMask(_ComputableMask):
@@ -145,6 +149,63 @@ def make_lse_kernel_sharded(
   kernel_spec = kernel.manual_sharding_spec(kernel_sharding)
 
   # shard_mapped kernel
+  @partial(
+    jax.shard_map,
+    mesh=mesh,
+    in_specs=(kernel_spec, q_spec, k_spec),
+    out_specs=lse_spec,
+    check_vma=False,
+  )
+  def sharded_kernel(kernel, q, k):
+    return kernel(q, k)
+
+  return (sharded_kernel, kernel)
+
+
+def make_lse_fused_kernel_sharded(
+  q_seq_len: int,
+  k_seq_len: int,
+  mesh,
+  data_sharding: list[str | None] = [None],
+  q_seq_shards: int = 1,
+  head_shards: int = 1,
+  block_size_mem_q: int = 128,
+  block_size_mem_kv: int = 128,
+  block_size_compute_kv: int = 128,
+  max_valid_id: int | None = None,
+):
+  """Fused LSE kernel using splash forward for both LSE and dQ."""
+  s = q_seq_len
+  t = k_seq_len
+
+  if not max_valid_id:
+    raise ValueError("max_valid_id needs to be set and >0 for fused LSE kernel")
+  mask = MultiHeadMask([VocabMask((s, t), max_valid_id=max_valid_id)])
+
+  splash_block_sizes = BlockSizesSplash(
+    block_q=block_size_mem_q,
+    block_kv=block_size_mem_kv,
+    block_kv_compute=block_size_compute_kv,
+  )
+  dk_block_sizes = BlockSizes(
+    block_q=block_size_mem_q,
+    block_kv=block_size_mem_kv,
+    block_kv_compute=block_size_compute_kv,
+  )
+  kernel = make_lse_fused_kernel(
+    mask,
+    splash_block_sizes=splash_block_sizes,
+    dk_block_sizes=dk_block_sizes,
+    q_seq_shards=q_seq_shards,
+    head_shards=head_shards,
+  )
+
+  q_spec = jax.P(None, *data_sharding)
+  k_spec = jax.P(None, None)
+  lse_spec = q_spec
+  kernel_sharding = jax.sharding.NamedSharding(mesh, q_spec)
+  kernel_spec = kernel.manual_sharding_spec(kernel_sharding)
+
   @partial(
     jax.shard_map,
     mesh=mesh,

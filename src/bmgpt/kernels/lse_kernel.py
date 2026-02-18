@@ -37,6 +37,12 @@ from jax.experimental.pallas.ops.tpu.splash_attention import (
 from jax.experimental.pallas.ops.tpu.splash_attention import (
   splash_attention_mask_info as mask_info_lib,
 )
+from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_kernel import (
+  BlockSizes as SplashBlockSizes,
+)
+from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_kernel import (
+  _splash_attention_forward,
+)
 
 partial = functools.partial
 DEFAULT_MASK_VALUE = -0.7 * float(np.finfo(np.dtype("float32")).max)
@@ -1808,6 +1814,347 @@ def make_lse_kernel(
     dq_mask_info,
     dk_mask_info,
     block_sizes=block_sizes,
+    is_mqa=is_mqa,
+    mask_value=mask_value,
+    attn_logits_soft_cap=attn_logits_soft_cap,
+    mask_function=mask_function,
+    interpret=interpret,
+  )
+
+
+# =============================================================================
+# Fused LSE Kernel (Splash-Forward-Based Cross-Entropy)
+# =============================================================================
+
+LSEFusedResidualsType = tuple[
+  jax.Array,  # q
+  jax.Array,  # k
+  jax.Array,  # attn_out
+  jax.Array,  # logsumexp
+  SegmentIds | None,  # segment_ids
+  jax.Array | None,  # sinks
+  mask_info_lib.MaskInfo,  # dk_mask_info
+]
+
+
+@partial(
+  jax.custom_vjp,
+  nondiff_argnames=(
+    "mask_value",
+    "is_mqa",
+    "splash_block_sizes",
+    "dk_block_sizes",
+    "mask_function",
+    "attn_logits_soft_cap",
+    "interpret",
+  ),
+)
+def _lse_fused_custom(
+  fwd_mask_info: mask_info_lib.MaskInfo,
+  dk_mask_info: mask_info_lib.MaskInfo,
+  q: jax.Array,
+  k: jax.Array,
+  segment_ids: SegmentIds | None,
+  sinks: jax.Array | None,
+  mask_value: float,
+  is_mqa: bool,
+  splash_block_sizes: SplashBlockSizes,
+  dk_block_sizes: BlockSizes,
+  mask_function: MaskFunctionType | None,
+  attn_logits_soft_cap: float | None = None,
+  interpret: bool = False,
+) -> jax.Array:
+  del dk_mask_info, dk_block_sizes
+
+  _, (logsumexp,) = _splash_attention_forward(
+    fwd_mask_info,
+    q,
+    k,
+    k,  # V=K
+    segment_ids,
+    sinks,
+    mask_value=mask_value,
+    is_mqa=is_mqa,
+    block_sizes=splash_block_sizes,
+    residual_checkpoint_name=None,
+    save_residuals=True,
+    mask_function=mask_function,
+    attn_logits_soft_cap=attn_logits_soft_cap,
+    interpret=interpret,
+  )
+  return logsumexp
+
+
+def _lse_fused_fwd(
+  fwd_mask_info: mask_info_lib.MaskInfo,
+  dk_mask_info: mask_info_lib.MaskInfo,
+  q: jax.Array,
+  k: jax.Array,
+  segment_ids: SegmentIds | None,
+  sinks: jax.Array | None,
+  mask_value: float,
+  is_mqa: bool,
+  splash_block_sizes: SplashBlockSizes,
+  dk_block_sizes: BlockSizes,
+  mask_function: MaskFunctionType | None,
+  attn_logits_soft_cap: float | None = None,
+  interpret: bool = False,
+) -> tuple[jax.Array, LSEFusedResidualsType]:
+  del dk_block_sizes
+
+  attn_out, (logsumexp,) = _splash_attention_forward(
+    fwd_mask_info,
+    q,
+    k,
+    k,  # V=K
+    segment_ids,
+    sinks,
+    mask_value=mask_value,
+    is_mqa=is_mqa,
+    block_sizes=splash_block_sizes,
+    residual_checkpoint_name=None,
+    save_residuals=True,
+    mask_function=mask_function,
+    attn_logits_soft_cap=attn_logits_soft_cap,
+    interpret=interpret,
+  )
+
+  residuals = (q, k, attn_out, logsumexp, segment_ids, sinks, dk_mask_info)
+  return logsumexp, residuals
+
+
+def _lse_fused_bwd(
+  mask_value: float,
+  is_mqa: bool,
+  splash_block_sizes: SplashBlockSizes,
+  dk_block_sizes: BlockSizes,
+  mask_function: MaskFunctionType | None,
+  attn_logits_soft_cap: float | None,
+  interpret: bool,
+  residuals: LSEFusedResidualsType,
+  g_lse: jax.Array,
+) -> tuple[
+  None,  # fwd_mask_info
+  None,  # dk_mask_info
+  jax.Array,  # dq
+  jax.Array,  # dk
+  None,  # segment_ids
+  None,  # sinks
+]:
+  del splash_block_sizes
+  q, k, attn_out, logsumexp, segment_ids, sinks, dk_mask_info = residuals
+
+  bq = dk_block_sizes.block_q
+  bkv = dk_block_sizes.block_kv
+  bkv_compute = dk_block_sizes.block_kv_compute or bkv
+  q_layout = dk_block_sizes.q_layout
+  k_layout = dk_block_sizes.k_layout
+
+  # dQ = g_lse * attn_out where attn_out = softmax(QK^T) @ K
+  dq = (g_lse[:, :, None] * attn_out).astype(q.dtype)
+
+  d_lse_q = g_lse[:, :, None] * q
+  dk = _lse_backward_dk(
+    q=q,
+    k=k,
+    d_lse_q=d_lse_q,
+    segment_ids=segment_ids,
+    sinks=sinks,
+    logsumexp=logsumexp,
+    bq=bq,
+    bkv=bkv,
+    bkv_compute=bkv_compute,
+    is_mqa=is_mqa,
+    mask_info=dk_mask_info,
+    mask_value=mask_value,
+    attn_logits_soft_cap=attn_logits_soft_cap,
+    q_layout=q_layout,
+    k_layout=k_layout,
+    mask_function=mask_function,
+    interpret=interpret,
+  )
+
+  return (
+    None,  # fwd_mask_info
+    None,  # dk_mask_info
+    dq,  # q
+    dk,  # k
+    None,  # segment_ids
+    None,  # sinks
+  )
+
+
+_lse_fused_custom.defvjp(_lse_fused_fwd, _lse_fused_bwd)
+
+
+@partial(
+  jax.jit,
+  static_argnames=[
+    "is_mqa",
+    "splash_block_sizes",
+    "dk_block_sizes",
+    "mask_value",
+    "attn_logits_soft_cap",
+    "mask_function",
+    "interpret",
+  ],
+)
+def _lse_fused(
+  fwd_mask_info: mask_info_lib.MaskInfo,
+  dk_mask_info: mask_info_lib.MaskInfo | None,
+  q: jax.Array,
+  k: jax.Array,
+  segment_ids: SegmentIds | None = None,
+  sinks: jax.Array | None = None,
+  *,
+  is_mqa: bool,
+  splash_block_sizes: SplashBlockSizes,
+  dk_block_sizes: BlockSizes,
+  mask_value: float,
+  attn_logits_soft_cap: float | None,
+  mask_function: MaskFunctionType | None,
+  interpret: bool,
+) -> jax.Array:
+  def _collapse_partial_mask_blocks(mask_info: mask_info_lib.MaskInfo | None):
+    if mask_info is None or mask_info.partial_mask_blocks is None:
+      return mask_info
+    return mask_info._replace(
+      partial_mask_blocks=mask_info.partial_mask_blocks.reshape(
+        -1, *mask_info.partial_mask_blocks.shape[-2:]
+      )
+    )
+
+  fwd_mask_info = _collapse_partial_mask_blocks(fwd_mask_info)
+  dk_mask_info = _collapse_partial_mask_blocks(dk_mask_info)
+  return _lse_fused_custom(
+    fwd_mask_info,
+    dk_mask_info,
+    q,
+    k,
+    segment_ids,
+    sinks,
+    mask_value=mask_value,
+    is_mqa=is_mqa,
+    splash_block_sizes=splash_block_sizes,
+    dk_block_sizes=dk_block_sizes,
+    mask_function=mask_function,
+    attn_logits_soft_cap=attn_logits_soft_cap,
+    interpret=interpret,
+  )
+
+
+@jax.tree_util.register_pytree_node_class
+class LSEFusedKernel:
+  def __init__(
+    self,
+    fwd_mask_info: mask_info_lib.MaskInfo,
+    dk_mask_info: mask_info_lib.MaskInfo | None,
+    **kwargs,
+  ):
+    self.kwargs = kwargs
+    self.fwd_mask_info = fwd_mask_info
+    self.dk_mask_info = dk_mask_info
+
+  def __call__(self, *args, **kwargs) -> jax.Array:
+    return _lse_fused(
+      self.fwd_mask_info,
+      self.dk_mask_info,
+      *args,
+      **kwargs,
+      **self.kwargs,
+    )
+
+  def manual_sharding_spec(self, sharding: jax.sharding.NamedSharding):
+    """Returns a value that can be used as a shard_map partition spec for the kernel."""
+    if self.fwd_mask_info.data_next is not None:
+      block_mask_shape = self.fwd_mask_info.data_next.shape
+      try:
+        shard_shape = sharding.shard_shape(block_mask_shape)
+      except ValueError as exc:
+        raise ValueError(
+          "The sharding must divide the mask blocks evenly between devices"
+        ) from exc
+      if block_mask_shape[-1] != shard_shape[-1]:
+        raise ValueError("Sharding the kv sequence dimension is not supported")
+    spec = sharding.spec
+    assert len(spec) == 2
+    replicated = jax.sharding.PartitionSpec()
+    partial_mask_blocks_spec = (
+      spec if self.fwd_mask_info.is_dynamic_mask else replicated
+    )
+    q_sequence_spec = jax.sharding.PartitionSpec(spec[1])
+    mask_info_specs = mask_info_lib.MaskInfo(  # pytype: disable=wrong-arg-types
+      data_next=spec if self.fwd_mask_info.data_next is not None else None,
+      mask_next=spec if self.fwd_mask_info.mask_next is not None else None,
+      block_mask=spec if self.fwd_mask_info.block_mask is not None else None,
+      partial_mask_blocks=partial_mask_blocks_spec
+      if self.fwd_mask_info.partial_mask_blocks is not None
+      else None,
+      q_sequence=q_sequence_spec if self.fwd_mask_info.q_sequence is not None else None,
+    )
+    return LSEFusedKernel(
+      mask_info_specs,
+      mask_info_specs if self.dk_mask_info is not None else None,
+      **self.kwargs,
+    )
+
+  def tree_flatten(self):
+    return (
+      (self.fwd_mask_info, self.dk_mask_info),
+      self.kwargs,
+    )
+
+  @classmethod
+  def tree_unflatten(cls, kwargs, values):
+    fwd_mask_info, dk_mask_info = values
+    dk_mask_info = (
+      mask_info_lib.MaskInfo(*dk_mask_info) if dk_mask_info is not None else None
+    )
+    return LSEFusedKernel(
+      mask_info_lib.MaskInfo(*fwd_mask_info),
+      dk_mask_info,
+      **kwargs,
+    )
+
+
+def make_lse_fused_kernel(
+  mask: mask_lib.MultiHeadMask,
+  *,
+  splash_block_sizes: SplashBlockSizes,
+  dk_block_sizes: BlockSizes,
+  is_mqa: bool = False,
+  mask_value: float = DEFAULT_MASK_VALUE,
+  attn_logits_soft_cap: float | None = None,
+  head_shards: int = 1,
+  q_seq_shards: int = 1,
+  interpret: bool = False,
+) -> LSEFusedKernel:
+  if len(mask.shape) != 3:
+    raise ValueError(f"Unexpected mask shape: {mask.shape}")
+
+  fwd_mask_info, mask_function = mask_info_lib._process_mask(
+    mask,
+    (splash_block_sizes.block_q, splash_block_sizes.block_kv),
+    is_dkv=False,
+    head_shards=head_shards,
+    q_seq_shards=q_seq_shards,
+  )
+  fwd_mask_info = tree_util.tree_map(jnp.array, fwd_mask_info)
+
+  dk_mask_info, _ = mask_info_lib._process_mask(
+    mask,
+    (dk_block_sizes.block_q, dk_block_sizes.block_kv),
+    is_dkv=True,
+    head_shards=head_shards,
+    q_seq_shards=q_seq_shards,
+  )
+  dk_mask_info = tree_util.tree_map(jnp.array, dk_mask_info)
+
+  return LSEFusedKernel(
+    fwd_mask_info,
+    dk_mask_info,
+    splash_block_sizes=splash_block_sizes,
+    dk_block_sizes=dk_block_sizes,
     is_mqa=is_mqa,
     mask_value=mask_value,
     attn_logits_soft_cap=attn_logits_soft_cap,
