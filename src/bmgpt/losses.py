@@ -68,33 +68,14 @@ def fused_softmax_cross_entropy(
   w_unemb = jax.sharding.reshard(params.w.p, out_shardings=jax.P())
   lse_sharded, lse_kernel = shard_mapped__kernel
 
-  if config.use_fused_xent_fused_fwd:
-    lse = lse_sharded(lse_kernel, outputs, w_unemb)
-    w_unemb_f32 = w_unemb.astype(jnp.float32)
-    target_unembs = w_unemb_f32.at[targets].get(
-      out_sharding=jax.P(*config.sharding.data)
-    )
-    target_unembs = target_unembs.astype(w_unemb.dtype)
-    label_logits = jnp.einsum(
-      "bsd,bsd->bs", outputs, target_unembs, preferred_element_type=jnp.float32
-    )
-    loss = lse - label_logits
-  else:
-    # Fold batch and sequence dimensions and add singleton head dim
-    b, s = outputs.shape[:2]
-    outputs = outputs.reshape(b * s, -1, out_sharding=jax.P(*config.sharding.data))
-    targets = targets.ravel(out_sharding=jax.P(*config.sharding.data))
-    q, k = jax.tree.map(lambda x: x[None], (outputs, w_unemb))
-    lse = lse_sharded(lse_kernel, q, k).squeeze(0)
-    w_unemb_f32 = w_unemb.astype(jnp.float32)
-    target_unembs = w_unemb_f32.at[targets].get(
-      out_sharding=jax.P(*config.sharding.data)
-    )
-    target_unembs = target_unembs.astype(w_unemb.dtype)
-    label_logits = jnp.einsum(
-      "td,td->t", outputs, target_unembs, preferred_element_type=jnp.float32
-    )
-    loss = lse - label_logits
+  lse = lse_sharded(lse_kernel, outputs, w_unemb)
+  w_unemb_f32 = w_unemb.astype(jnp.float32)
+  target_unembs = w_unemb_f32.at[targets].get(out_sharding=jax.P(*config.sharding.data))
+  target_unembs = target_unembs.astype(w_unemb.dtype)
+  label_logits = jnp.einsum(
+    "bsd,bsd->bs", outputs, target_unembs, preferred_element_type=jnp.float32
+  )
+  loss = lse - label_logits
 
   if reduce:
     loss = loss.mean()
