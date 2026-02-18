@@ -5,6 +5,6 @@ model:
   d_model: 1536
   num_heads: 12
   d_head: 128
-  num_layers: 24
+  num_layers: 22
 
   use_gating_mlp: True
