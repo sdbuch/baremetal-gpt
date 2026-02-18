@@ -163,24 +163,26 @@ def make_lse_kernel_sharded(
 
 
 def make_lse_fused_kernel_sharded(
+  num_heads: int,
   q_seq_len: int,
   k_seq_len: int,
   mesh,
   data_sharding: list[str | None] = [None],
-  q_seq_shards: int = 1,
   head_shards: int = 1,
   block_size_mem_q: int = 128,
   block_size_mem_kv: int = 128,
   block_size_compute_kv: int = 128,
   max_valid_id: int | None = None,
 ):
-  """Fused LSE kernel using splash forward for both LSE and dQ."""
+  """MQA fused LSE kernel, with batch-as-heads and shared KV."""
   s = q_seq_len
   t = k_seq_len
 
   if not max_valid_id:
     raise ValueError("max_valid_id needs to be set and >0 for fused LSE kernel")
-  mask = MultiHeadMask([VocabMask((s, t), max_valid_id=max_valid_id)])
+  mask = MultiHeadMask(
+    [VocabMask((s, t), max_valid_id=max_valid_id) for _ in range(num_heads)]
+  )
 
   splash_block_sizes = BlockSizesSplash(
     block_q=block_size_mem_q,
@@ -196,13 +198,15 @@ def make_lse_fused_kernel_sharded(
     mask,
     splash_block_sizes=splash_block_sizes,
     dk_block_sizes=dk_block_sizes,
-    q_seq_shards=q_seq_shards,
+    is_mqa=True,
     head_shards=head_shards,
+    q_seq_shards=1,
   )
 
-  q_spec = jax.P(None, *data_sharding)
+  # sharding: q is B x S x D, k is V x D, lse is B x S
+  q_spec = jax.P(*data_sharding, None)
   k_spec = jax.P(None, None)
-  lse_spec = q_spec
+  lse_spec = jax.P(*data_sharding, None)
   kernel_sharding = jax.sharding.NamedSharding(mesh, q_spec)
   kernel_spec = kernel.manual_sharding_spec(kernel_sharding)
 
@@ -311,11 +315,6 @@ def forward_kernels_from_config(config: Config, mesh):
   if not config.use_fused_xent_loss:
     train_lse_kernel = None
   else:
-    num_toks = (
-      config.train_dataset.seq_len
-      * config.train_dataset.global_batch_size
-      // config.train_dataset.num_microbatches
-    )
     if config.sharding.data and config.sharding.data[0]:
       data_axis_name = config.sharding.data[0]
       num_data_shards = config.sharding.mesh_shape[
@@ -323,22 +322,47 @@ def forward_kernels_from_config(config: Config, mesh):
       ]
     else:
       num_data_shards = 1
-    lse_kernel_kwargs = {
-      "data_sharding": config.sharding.data,
-      "q_seq_shards": num_data_shards,
-      "block_size_mem_q": config.fused_xent_block_size_T,
-      "block_size_mem_kv": config.fused_xent_block_size_V,
-      "block_size_compute_kv": config.fused_xent_block_size_V_compute,
-      "max_valid_id": config.train_dataset.max_valid_token_id,
-    }
-    make_lse = (
-      make_lse_fused_kernel_sharded
-      if config.use_fused_xent_fused_fwd
-      else make_lse_kernel_sharded
-    )
-    train_lse_kernel = make_lse(
-      num_toks, config.model.num_vocab, mesh, **lse_kernel_kwargs
-    )
+    if config.use_fused_xent_fused_fwd:
+      # MQA mode: each batch element is a Q head
+      microbatch_size = (
+        config.train_dataset.global_batch_size // config.train_dataset.num_microbatches
+      )
+      lse_kernel_kwargs = {
+        "data_sharding": config.sharding.data,
+        "head_shards": num_data_shards,
+        "block_size_mem_q": config.fused_xent_block_size_T,
+        "block_size_mem_kv": config.fused_xent_block_size_V,
+        "block_size_compute_kv": config.fused_xent_block_size_V_compute,
+        "max_valid_id": config.train_dataset.max_valid_token_id,
+      }
+      train_lse_kernel = make_lse_fused_kernel_sharded(
+        microbatch_size,
+        config.train_dataset.seq_len,
+        config.model.num_vocab,
+        mesh,
+        **lse_kernel_kwargs,
+      )
+    else:
+      # Non-fused: flatten batch*seq into single Q sequence
+      num_toks = (
+        config.train_dataset.seq_len
+        * config.train_dataset.global_batch_size
+        // config.train_dataset.num_microbatches
+      )
+      lse_kernel_kwargs = {
+        "data_sharding": config.sharding.data,
+        "q_seq_shards": num_data_shards,
+        "block_size_mem_q": config.fused_xent_block_size_T,
+        "block_size_mem_kv": config.fused_xent_block_size_V,
+        "block_size_compute_kv": config.fused_xent_block_size_V_compute,
+        "max_valid_id": config.train_dataset.max_valid_token_id,
+      }
+      train_lse_kernel = make_lse_kernel_sharded(
+        num_toks,
+        config.model.num_vocab,
+        mesh,
+        **lse_kernel_kwargs,
+      )
   # val and test splash attention kernels
   val_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.val_list]
   eval_kernels = [make_splash_kernel_wrapper(eval.dataset) for eval in config.eval_list]

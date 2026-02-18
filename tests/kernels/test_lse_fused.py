@@ -25,6 +25,7 @@ from .conftest import (
   BACKWARD_ATOL,
   BACKWARD_RTOL,
   DEFAULT_BLOCK_SIZE,
+  DEFAULT_MASK_VALUE,
   FORWARD_ATOL,
   FORWARD_RTOL,
   is_tpu,
@@ -425,6 +426,224 @@ def test_fused_sharded_heads():
   def sharded_loss(q, k):
     lse = sharded_kernel(kernel, q, k)
     return lse.sum()
+
+  with jax.set_mesh(mesh):
+    loss_kernel = sharded_loss(q, k)
+    dq_kernel, dk_kernel = jax.grad(sharded_loss, argnums=(0, 1))(q, k)
+
+  dq_kernel = multihost_utils.process_allgather(dq_kernel, tiled=True)
+  dk_kernel = multihost_utils.process_allgather(dk_kernel, tiled=True)
+
+  np.testing.assert_allclose(
+    loss_kernel, loss_ref, rtol=FORWARD_RTOL, atol=FORWARD_ATOL
+  )
+  np.testing.assert_allclose(dq_kernel, dq_ref, rtol=BACKWARD_RTOL, atol=BACKWARD_ATOL)
+  np.testing.assert_allclose(dk_kernel, dk_ref, rtol=BACKWARD_RTOL, atol=BACKWARD_ATOL)
+
+
+# =============================================================================
+# MQA Mode Tests (batch-as-heads, 2D K)
+# =============================================================================
+
+
+def ref_lse_forward_mqa(q, k, max_valid_id, vocab_size):
+  """Reference LSE forward for MQA mode."""
+  logits = jnp.einsum("bsd,vd->bsv", q, k)
+  vocab_ids = jnp.arange(vocab_size)
+  mask = vocab_ids <= max_valid_id
+  logits_masked = jnp.where(mask[None, None, :], logits, DEFAULT_MASK_VALUE)
+  return jax.nn.logsumexp(logits_masked, axis=-1)
+
+
+def make_mqa_kernel(num_heads, seq_len, vocab_size, max_valid_id, interpret=True):
+  """Create an MQA-mode fused LSE kernel."""
+  mask = MultiHeadMask(
+    [VocabMask((seq_len, vocab_size), max_valid_id) for _ in range(num_heads)]
+  )
+  splash_block_sizes = SplashBlockSizes(
+    block_q=DEFAULT_BLOCK_SIZE,
+    block_kv=DEFAULT_BLOCK_SIZE,
+    block_kv_compute=DEFAULT_BLOCK_SIZE,
+  )
+  dk_block_sizes = BlockSizes(
+    block_q=DEFAULT_BLOCK_SIZE,
+    block_kv=DEFAULT_BLOCK_SIZE,
+    block_kv_compute=DEFAULT_BLOCK_SIZE,
+  )
+  return make_lse_fused_kernel(
+    mask,
+    splash_block_sizes=splash_block_sizes,
+    dk_block_sizes=dk_block_sizes,
+    is_mqa=True,
+    interpret=interpret,
+  )
+
+
+MQA_CONFIGS = [
+  pytest.param(42, 2, 128, 512, 500, id="B2_S128"),
+  pytest.param(123, 4, 128, 512, 511, id="B4_S128_no_padding"),
+  pytest.param(999, 2, 256, 512, 500, id="B2_S256"),
+]
+
+
+@pytest.mark.parametrize("seed,batch_size,seq_len,vocab_size,max_valid_id", MQA_CONFIGS)
+def test_mqa_forward(seed, batch_size, seq_len, vocab_size, max_valid_id):
+  """MQA fused kernel forward should match reference."""
+  head_dim = 128
+  key = jax.random.PRNGKey(seed)
+  key_q, key_k = jax.random.split(key)
+  q = jax.random.normal(key_q, (batch_size, seq_len, head_dim), dtype=jnp.float32)
+  k = jax.random.normal(key_k, (vocab_size, head_dim), dtype=jnp.float32)
+
+  kernel = make_mqa_kernel(batch_size, seq_len, vocab_size, max_valid_id)
+
+  lse_ref = ref_lse_forward_mqa(q, k, max_valid_id, vocab_size)
+  lse_kernel = kernel(q, k)
+
+  np.testing.assert_allclose(lse_kernel, lse_ref, rtol=FORWARD_RTOL, atol=FORWARD_ATOL)
+
+
+@pytest.mark.parametrize("seed,batch_size,seq_len,vocab_size,max_valid_id", MQA_CONFIGS)
+def test_mqa_backward(seed, batch_size, seq_len, vocab_size, max_valid_id):
+  """MQA fused kernel gradients should match reference."""
+  head_dim = 128
+  key = jax.random.PRNGKey(seed)
+  key_q, key_k = jax.random.split(key)
+  q = jax.random.normal(key_q, (batch_size, seq_len, head_dim), dtype=jnp.float32)
+  k = jax.random.normal(key_k, (vocab_size, head_dim), dtype=jnp.float32)
+
+  kernel = make_mqa_kernel(batch_size, seq_len, vocab_size, max_valid_id)
+
+  def ref_loss(q, k):
+    return ref_lse_forward_mqa(q, k, max_valid_id, vocab_size).sum()
+
+  def kernel_loss(q, k):
+    return kernel(q, k).sum()
+
+  dq_ref, dk_ref = jax.grad(ref_loss, argnums=(0, 1))(q, k)
+  dq_kernel, dk_kernel = jax.grad(kernel_loss, argnums=(0, 1))(q, k)
+
+  np.testing.assert_allclose(dq_kernel, dq_ref, rtol=BACKWARD_RTOL, atol=BACKWARD_ATOL)
+  np.testing.assert_allclose(dk_kernel, dk_ref, rtol=BACKWARD_RTOL, atol=BACKWARD_ATOL)
+
+
+def test_mqa_cross_entropy():
+  """MQA end-to-end cross entropy should match reference."""
+  batch_size = 4
+  seq_len = 128
+  d_model = 128
+  vocab_size = 512
+  max_valid_id = vocab_size - 1
+
+  key = jax.random.PRNGKey(42)
+  key_out, key_w, key_tgt = jax.random.split(key, 3)
+
+  outputs = jax.random.normal(
+    key_out, (batch_size, seq_len, d_model), dtype=jnp.float32
+  )
+  w_unemb = jax.random.normal(key_w, (vocab_size, d_model), dtype=jnp.float32)
+  targets = jax.random.randint(key_tgt, (batch_size, seq_len), 0, max_valid_id)
+
+  kernel = make_mqa_kernel(batch_size, seq_len, vocab_size, max_valid_id)
+
+  def kernel_cross_entropy(outputs, w_unemb, targets):
+    lse = kernel(outputs, w_unemb)
+    target_unembs = w_unemb[targets]
+    label_logits = jnp.einsum(
+      "bsd,bsd->bs", outputs, target_unembs, preferred_element_type=jnp.float32
+    )
+    return (lse - label_logits).mean()
+
+  def ref_cross_entropy(outputs, w_unemb, targets):
+    logits = jnp.einsum("bsd,vd->bsv", outputs, w_unemb)
+    label_logits = jnp.take_along_axis(logits, targets[..., None], axis=-1).squeeze(-1)
+    lse = jax.nn.logsumexp(logits, axis=-1)
+    return (lse - label_logits).mean()
+
+  loss_kernel = kernel_cross_entropy(outputs, w_unemb, targets)
+  loss_ref = ref_cross_entropy(outputs, w_unemb, targets)
+
+  np.testing.assert_allclose(
+    loss_kernel, loss_ref, rtol=FORWARD_RTOL, atol=FORWARD_ATOL
+  )
+
+  grad_kernel = jax.grad(kernel_cross_entropy, argnums=(0, 1))(
+    outputs, w_unemb, targets
+  )
+  grad_ref = jax.grad(ref_cross_entropy, argnums=(0, 1))(outputs, w_unemb, targets)
+
+  np.testing.assert_allclose(
+    grad_kernel[0], grad_ref[0], rtol=BACKWARD_RTOL, atol=BACKWARD_ATOL
+  )
+  np.testing.assert_allclose(
+    grad_kernel[1], grad_ref[1], rtol=BACKWARD_RTOL, atol=BACKWARD_ATOL
+  )
+
+
+@requires_multi_device
+def test_mqa_sharded():
+  """Test MQA fused kernel with sharding via shard_map."""
+  num_devices = len(jax.devices())
+  batch_size = num_devices * 2
+  seq_len = 128
+  head_dim = 128
+  vocab_size = 512
+  max_valid_id = 500
+  interpret = not is_tpu()
+
+  key = jax.random.PRNGKey(321)
+  key_q, key_k = jax.random.split(key)
+  q = jax.random.normal(key_q, (batch_size, seq_len, head_dim), dtype=jnp.float32)
+  k = jax.random.normal(key_k, (vocab_size, head_dim), dtype=jnp.float32)
+
+  def ref_loss(q, k):
+    return ref_lse_forward_mqa(q, k, max_valid_id, vocab_size).sum()
+
+  loss_ref = ref_loss(q, k)
+  dq_ref, dk_ref = jax.grad(ref_loss, argnums=(0, 1))(q, k)
+
+  mesh = jax.make_mesh((num_devices,), ("dp",), (jax.sharding.AxisType.Explicit,))
+  mask_obj = MultiHeadMask(
+    [VocabMask((seq_len, vocab_size), max_valid_id) for _ in range(batch_size)]
+  )
+  splash_block_sizes = SplashBlockSizes(
+    block_q=DEFAULT_BLOCK_SIZE,
+    block_kv=DEFAULT_BLOCK_SIZE,
+    block_kv_compute=DEFAULT_BLOCK_SIZE,
+  )
+  dk_block_sizes = BlockSizes(
+    block_q=DEFAULT_BLOCK_SIZE,
+    block_kv=DEFAULT_BLOCK_SIZE,
+    block_kv_compute=DEFAULT_BLOCK_SIZE,
+  )
+  kernel = make_lse_fused_kernel(
+    mask_obj,
+    splash_block_sizes=splash_block_sizes,
+    dk_block_sizes=dk_block_sizes,
+    is_mqa=True,
+    head_shards=num_devices,
+    q_seq_shards=1,
+    interpret=interpret,
+  )
+
+  q_spec = jax.P("dp", None)
+  k_spec = jax.P(None, None)
+  lse_spec = jax.P("dp", None)
+  kernel_sharding = jax.sharding.NamedSharding(mesh, q_spec)
+  kernel_spec = kernel.manual_sharding_spec(kernel_sharding)
+
+  @functools.partial(
+    jax.shard_map,
+    mesh=mesh,
+    in_specs=(kernel_spec, q_spec, k_spec),
+    out_specs=lse_spec,
+    check_vma=False,
+  )
+  def sharded_kernel(kernel, q, k):
+    return kernel(q, k)
+
+  def sharded_loss(q, k):
+    return sharded_kernel(kernel, q, k).sum()
 
   with jax.set_mesh(mesh):
     loss_kernel = sharded_loss(q, k)
