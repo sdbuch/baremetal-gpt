@@ -631,7 +631,7 @@ def transformer(
   # Union standard remat policy with attn O cache policy when using splash
   policy = jax.checkpoint_policies.save_from_both_policies(
     jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
-    jax.checkpoint_policies.save_only_these_names(["attn_out"]),
+    jax.checkpoint_policies.save_only_these_names("attn_out"),
   )
 
   @partial(jax.remat, policy=policy)
