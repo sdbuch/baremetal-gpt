@@ -149,7 +149,12 @@ def main(config: Config):
     step = 0
     for step, batch in enumerate(batch_iter, start=1):
       with jax.set_mesh(mesh):
+        if step == 2:
+          jax.profiler.start_trace("/tmp/jax-trace")
         metrics, train_state = train_step(config, batch, train_state)
+        if step == 2:
+          jax.block_until_ready(metrics)
+          jax.profiler.stop_trace()
       logger.log(metrics | {"step": step})
       if step % config.val_log_interval == 0:
         key_val = do_evals(
