@@ -5,13 +5,13 @@ defaults:
 
 val_log_interval: 1000
 # These need to be tuned fairly aggressively wrt d_model
-#   (We have num_vocab-128256 leftover tokens.
+#   (We have num_vocab-128258 leftover tokens.
 #    To avoid trigger the JAX splash masklib bug, which
 #    is avoided only when we end with a partial mask, we should
 #    pad num_vocab appropriately wrt the V block size we want)
-fused_xent_block_size_T: 256
-fused_xent_block_size_V: 256
-fused_xent_block_size_V_compute: 256
+fused_xent_block_size_T: 512
+fused_xent_block_size_V: 384
+fused_xent_block_size_V_compute: 384
 
 train_dataset:
   num_steps: 8000
@@ -50,7 +50,7 @@ model:
   transformer_type: DISCRETE
   max_seq_len: ${train_dataset.seq_len}  # no longer than train
   is_causal: True
-  num_vocab: 128384  # llama 3 tokenizer + 128 'extra'
+  num_vocab: 129024  # llama 3 tokenizer + 2*3*128 'extra'
 
 # TODO: tune hparams, find good defaults!
 optimizer:

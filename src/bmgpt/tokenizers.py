@@ -55,12 +55,16 @@ class TiktokenCustomTokenizer(TiktokenTokenizer):
         mergeable_ranks[token_bytes] = rank
 
     pattern = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
+    special_tokens = {  # fused CE kernel block size escape hatch
+        "<|pad_0|>": 128256,
+        "<|pad_1|>": 128257,
+    }
 
     tokenizer = tiktoken.Encoding(
       name="llama3-dclm",
       pat_str=pattern,
       mergeable_ranks=mergeable_ranks,
-      special_tokens={},
+      special_tokens=special_tokens,
     )
     self.enc = tokenizer
     self.vocab_size = len(mergeable_ranks)
