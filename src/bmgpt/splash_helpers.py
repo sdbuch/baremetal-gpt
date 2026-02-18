@@ -331,7 +331,12 @@ def forward_kernels_from_config(config: Config, mesh):
       "block_size_compute_kv": config.fused_xent_block_size_V_compute,
       "max_valid_id": config.train_dataset.max_valid_token_id,
     }
-    train_lse_kernel = make_lse_kernel_sharded(
+    make_lse = (
+      make_lse_fused_kernel_sharded
+      if config.use_fused_xent_fused_fwd
+      else make_lse_kernel_sharded
+    )
+    train_lse_kernel = make_lse(
       num_toks, config.model.num_vocab, mesh, **lse_kernel_kwargs
     )
   # val and test splash attention kernels
