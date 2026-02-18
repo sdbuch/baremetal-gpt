@@ -5,7 +5,6 @@ from typing import Any, Callable, NamedTuple
 import jax
 import jax.numpy as jnp
 from jax import Array
-from jax.ad_checkpoint import checkpoint_name
 from jax.experimental.pallas.ops.tpu.splash_attention import (
   SegmentIds,
 )
@@ -281,7 +280,6 @@ def attn(
       v,
       segment_ids,
     )
-    attn_out = checkpoint_name(attn_out, name="attn_out")
   else:
     # Make mask
     if config.model.is_causal:

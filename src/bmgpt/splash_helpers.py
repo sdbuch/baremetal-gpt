@@ -201,6 +201,7 @@ def make_splash_kernel_sharded(
     head_shards=head_shards,
     q_seq_shards=q_seq_shards,
     block_sizes=block_sizes,
+    residual_checkpoint_name="attn_out",
   )
 
   # sharding: can shard q_seq_len and head_dim, kv_seq_len cannot
