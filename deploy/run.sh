@@ -5,12 +5,13 @@ shift
 SSH_FLAGS='-A -o ForwardAgent=yes'
 COMMANDS="if [ ! -d \"baremetal-gpt\" ]; then git clone git@github.com:sdbuch/baremetal-gpt; fi \
     && export HYDRA_FULL_ERROR=1 \
+    && export LIBTPU_INIT_ARGS='--xla_memory_scheduler=default' \
     && export WANDB_ENTITY='$WANDB_ENTITY' \
     && export WANDB_API_KEY='$WANDB_API_KEY' \
     && export HF_TOKEN='$HF_TOKEN' \
     && cd baremetal-gpt \
     && git fetch \
-    && git checkout -f main \
+    && git checkout -f moe \
     && git pull \
     && uv sync --extra tpu \
     && uv run train $@"

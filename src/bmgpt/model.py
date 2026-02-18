@@ -5,6 +5,7 @@ from typing import Any, Callable, NamedTuple
 import jax
 import jax.numpy as jnp
 from jax import Array
+from jax.ad_checkpoint import checkpoint_name
 from jax.experimental.pallas.ops.tpu.splash_attention import (
   SegmentIds,
 )
@@ -280,6 +281,7 @@ def attn(
       v,
       segment_ids,
     )
+    attn_out = checkpoint_name(attn_out, name="attn_out")
   else:
     # Make mask
     if config.model.is_causal:
@@ -626,7 +628,13 @@ def transformer(
 ):
   x_seq, aux_emb = embedding(config, params.emb, tokens)
 
-  @partial(jax.remat, policy=jax.checkpoint_policies.dots_with_no_batch_dims_saveable)
+  # Union standard remat policy with attn O cache policy when using splash
+  policy = jax.checkpoint_policies.save_from_both_policies(
+    jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
+    jax.checkpoint_policies.save_only_these_names(["attn_out"]),
+  )
+
+  @partial(jax.remat, policy=policy)
   def _block_fun(x_seq: Array, params__cache_in: tuple[Block, jax.Array]):
     params, cache_in = params__cache_in
     out, cache_out, aux = block(
