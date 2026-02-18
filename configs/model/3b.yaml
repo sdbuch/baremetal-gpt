@@ -1,0 +1,11 @@
+# @package _global_
+
+# about 3B params with DCLM tokenizer embeddings (& biases)
+model:
+  d_model: 2560
+  num_heads: 20
+  d_head: 128
+  num_layers: 32
+  mlp_factor: 3
+
+  use_gating_mlp: True
