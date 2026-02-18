@@ -5,13 +5,13 @@ defaults:
 
 val_log_interval: 1000
 # These need to be tuned fairly aggressively wrt d_model
-#   (We have num_vocab-128258 leftover tokens.
-#    To avoid trigger the JAX splash masklib bug, which
+#   (We have num_vocab-128258 leftover tokens (128258 is not very composite).
+#    To avoid triggering the JAX splash masklib bug, which
 #    is avoided only when we end with a partial mask, we should
 #    pad num_vocab appropriately wrt the V block size we want)
 fused_xent_block_size_T: 512
-fused_xent_block_size_V: 384
-fused_xent_block_size_V_compute: 384
+fused_xent_block_size_V: 256  # can also 384
+fused_xent_block_size_V_compute: 256
 
 train_dataset:
   num_steps: 8000
