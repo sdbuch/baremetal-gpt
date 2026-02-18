@@ -1,6 +1,6 @@
 # @package _global_
 
-# about 3B params with DCLM tokenizer embeddings (& biases)
+# about 3.4B params with DCLM tokenizer embeddings (& biases)
 model:
   d_model: 2560
   num_heads: 20
