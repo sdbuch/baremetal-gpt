@@ -284,55 +284,22 @@ def _resolve_sharding_dims(config: Config) -> tuple[int, int]:
 
 @functools.cache
 def _make_sharding_specs(num_dp_replicate: int, num_dp_shard: int) -> ShardingSpecs:
+  # Always 2D mesh: pure DP = (N,1), pure FSDP = (1,N), HSDP = (R,S)
   P = jax.P
-  if num_dp_shard == 1:
-    # Pure DP
-    return ShardingSpecs(
-      mesh_shape=(num_dp_replicate,),
-      mesh_axis_names=("dp_replicate",),
-      data=P("dp_replicate"),
-      wqkv=P(),
-      wo=P(),
-      wup=P(),
-      wdown=P(),
-      wemb=P(),
-      wunemb=P(),
-      mlp_hidden=P(),
-      res_stream=P(),
-      att_qkv=P(),
-    )
-  elif num_dp_replicate == 1:
-    # Pure FSDP (1D mesh)
-    return ShardingSpecs(
-      mesh_shape=(num_dp_shard,),
-      mesh_axis_names=("dp_shard",),
-      data=P("dp_shard"),
-      wqkv=P(None, None, None, "dp_shard"),
-      wo=P("dp_shard"),
-      wup=P(None, "dp_shard"),
-      wdown=P("dp_shard"),
-      wemb=P(),
-      wunemb=P(None, "dp_shard"),
-      mlp_hidden=P(),
-      res_stream=P(),
-      att_qkv=P(),
-    )
-  else:
-    # HSDP (2D mesh)
-    return ShardingSpecs(
-      mesh_shape=(num_dp_replicate, num_dp_shard),
-      mesh_axis_names=("dp_replicate", "dp_shard"),
-      data=P(("dp_replicate", "dp_shard")),
-      wqkv=P(None, None, None, "dp_shard"),
-      wo=P("dp_shard"),
-      wup=P(None, "dp_shard"),
-      wdown=P("dp_shard"),
-      wemb=P(),
-      wunemb=P(None, "dp_shard"),
-      mlp_hidden=P(),
-      res_stream=P(),
-      att_qkv=P(),
-    )
+  return ShardingSpecs(
+    mesh_shape=(num_dp_replicate, num_dp_shard),
+    mesh_axis_names=("dp_replicate", "dp_shard"),
+    data=P(("dp_replicate", "dp_shard")),
+    wqkv=P(None, None, None, "dp_shard"),
+    wo=P("dp_shard"),
+    wup=P(None, "dp_shard"),
+    wdown=P("dp_shard"),
+    wemb=P(),
+    wunemb=P(None, "dp_shard"),
+    mlp_hidden=P(),
+    res_stream=P(),
+    att_qkv=P(),
+  )
 
 
 def sharding(config: Config) -> ShardingSpecs:
