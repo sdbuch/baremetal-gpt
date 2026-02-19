@@ -338,15 +338,16 @@ def config_post_init(config: Config):
   assert config.model.d_head % 2 == 0, (
     "Head dimension needs to be divisible by 2 for RoPE"
   )
-  # batch size checking
-  num_hosts = jax.process_count()
 
+  # batch size checking: microbatch_size must divide evenly across all devices
   def check_batch_size_division(dataset: DatasetConfig):
     assert dataset.global_batch_size % dataset.num_microbatches == 0, (
       f"Number of gradient accumulation steps must divide global batch size {dataset}"
     )
-    assert (dataset.global_batch_size // dataset.num_microbatches) % num_hosts == 0, (
-      f"Number of hosts needs to divide microbatch size {dataset}"
+    microbatch_size = dataset.global_batch_size // dataset.num_microbatches
+    assert microbatch_size % n == 0, (
+      f"Microbatch size ({microbatch_size}) must be divisible by "
+      f"device_count ({n}) {dataset}"
     )
 
   check_batch_size_division(config.train_dataset)
