@@ -6,7 +6,7 @@ import jax
 import wandb
 from omegaconf import DictConfig, OmegaConf
 
-from bmgpt.config import Config, LoggerType
+from bmgpt.config import Config, LoggerType, sharding
 
 
 def logger_factory(logger_type: LoggerType):
@@ -30,6 +30,7 @@ class Logger:
   def __init__(self, config: Config):
     self.project_name = config.project_name
     self.run_name = get_run_name(config.run_name)
+    self._raw_config = config
     if isinstance(config, DictConfig):
       config_dict = cast(dict[str, Any], OmegaConf.to_container(config, resolve=True))
     else:
@@ -85,6 +86,7 @@ class WandbLogger(Logger):
   def __enter__(self):
     if self.is_master:
       wandb.init(project=self.project_name, name=self.run_name, config=self.config)
+      wandb.config.update({"sharding_specs": sharding(self._raw_config).to_dict()})
     return super().__enter__()
 
   def __exit__(self, exc_type, exc_value, traceback):

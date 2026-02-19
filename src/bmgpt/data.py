@@ -8,7 +8,7 @@ import webdataset as wds
 from jax import Array
 from jax.sharding import Mesh, NamedSharding
 
-from bmgpt.config import Config, DatasetConfig, DatasetName, SplitType
+from bmgpt.config import Config, DatasetConfig, DatasetName, SplitType, sharding
 
 ##################################
 ##           Helpers
@@ -201,11 +201,11 @@ def dataloader_without_replacement(
 
 # Helper to map a dataloader with make_array_from_process_local_data
 def get_dataset_on_device(
-  dataloader: DataloaderOutputType, mesh: Mesh, sharding_data: list[str | None]
+  dataloader: DataloaderOutputType, mesh: Mesh, data_sharding: jax.P
 ) -> DataloaderOutputType:
   return map(
     lambda batch: jax.make_array_from_process_local_data(
-      NamedSharding(mesh, jax.P(*sharding_data)), batch
+      NamedSharding(mesh, data_sharding), batch
     ),
     dataloader,
   )
@@ -227,4 +227,5 @@ def get_distributed_batch_iter(
 
   data, dataloader_factory = dataset_dataloader_factory(dataset_config)
   dataloader = map(make_microbatch, dataloader_factory(key, dataset_config, data))
-  return get_dataset_on_device(dataloader, mesh, [None] + config.sharding.data)
+  s = sharding(config)
+  return get_dataset_on_device(dataloader, mesh, jax.P(None, *s.data))

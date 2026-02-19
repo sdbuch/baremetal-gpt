@@ -1,3 +1,4 @@
+import functools
 from dataclasses import dataclass, field, fields
 from enum import Enum, StrEnum
 
@@ -202,27 +203,34 @@ class InferenceConfig:
 
 @dataclass(kw_only=True, unsafe_hash=True)
 class ShardingConfig:
-  """Model sharding params (args to jax.P)-- list of mesh_axis_names els or None.
+  """Sharding strategy. Set at least one of num_dp_replicate, num_dp_shard;
+  the other is inferred from jax.device_count(). Use sharding(config) to
+  get the derived jax.P specs."""
 
-  Note: activation shardings go as deep as possible (no batch/seq for MLPs).
-  See configs/ directory for examples (dp, fsdp).
-  """
+  num_dp_replicate: int | None = None
+  num_dp_shard: int | None = None
 
-  # NOTE: technically jax.P can merge axes, e.g. (('x', 'y')), but hydra rejects this
-  mesh_shape: list[int] = MISSING
-  mesh_axis_names: list[str] = MISSING
-  # Parameter sharding specs
-  wqkv: list[str | None] = MISSING  # D x 3 x N x H
-  wo: list[str | None] = MISSING  # H x N x D
-  wup: list[str | None] = MISSING  # D x F
-  wdown: list[str | None] = MISSING  # F x D
-  wemb: list[str | None] = MISSING  # V x D
-  wunemb: list[str | None] = MISSING  # D x V
-  # Activation sharding specs
-  data: list[str | None] = MISSING  # M (accum_steps x micro_bs = global_bs)
-  mlp_hidden: list[str | None] = MISSING  # F
-  res_stream: list[str | None] = MISSING  # D
-  att_qkv: list[str | None] = MISSING  # 3 x S x N x H
+
+@dataclass(frozen=True)
+class ShardingSpecs:
+  mesh_shape: tuple[int, ...]
+  mesh_axis_names: tuple[str, ...]
+  # Parameter specs
+  wqkv: jax.P
+  wo: jax.P
+  wup: jax.P
+  wdown: jax.P
+  wemb: jax.P
+  wunemb: jax.P
+  # Activation specs
+  data: jax.P
+  mlp_hidden: jax.P
+  res_stream: jax.P
+  att_qkv: jax.P
+
+  def to_dict(self) -> dict:
+    """Serialize for wandb logging."""
+    return {f.name: list(getattr(self, f.name)) for f in fields(self)}
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -256,21 +264,109 @@ def register_configs():
   cs.store(group="optimizer", name="base_optimizer", node=OptimizerConfig)
   cs.store(group="model", name="base_model", node=ModelConfig)
   cs.store(group="inference", name="base_inference", node=InferenceConfig)
-  cs.store(group="sharding", name="base_sharding", node=ShardingConfig)
   cs.store(name="base_config", node=Config)
 
 
+def _resolve_sharding_dims(config: Config) -> tuple[int, int]:
+  """Resolve None values via jax.device_count()."""
+  sc = config.sharding
+  n = jax.device_count()
+  num_rep = sc.num_dp_replicate
+  num_shard = sc.num_dp_shard
+  if num_rep is None and num_shard is not None:
+    num_rep = n // num_shard
+  elif num_shard is None and num_rep is not None:
+    num_shard = n // num_rep
+  elif num_rep is None and num_shard is None:
+    raise ValueError("Must set at least one of num_dp_replicate, num_dp_shard")
+  return num_rep, num_shard
+
+
+@functools.cache
+def _make_sharding_specs(num_dp_replicate: int, num_dp_shard: int) -> ShardingSpecs:
+  P = jax.P
+  if num_dp_shard == 1:
+    # Pure DP
+    return ShardingSpecs(
+      mesh_shape=(num_dp_replicate,),
+      mesh_axis_names=("dp_replicate",),
+      data=P("dp_replicate"),
+      wqkv=P(),
+      wo=P(),
+      wup=P(),
+      wdown=P(),
+      wemb=P(),
+      wunemb=P(),
+      mlp_hidden=P(),
+      res_stream=P(),
+      att_qkv=P(),
+    )
+  elif num_dp_replicate == 1:
+    # Pure FSDP (1D mesh)
+    return ShardingSpecs(
+      mesh_shape=(num_dp_shard,),
+      mesh_axis_names=("dp_shard",),
+      data=P("dp_shard"),
+      wqkv=P(None, None, None, "dp_shard"),
+      wo=P("dp_shard"),
+      wup=P(None, "dp_shard"),
+      wdown=P("dp_shard"),
+      wemb=P(),
+      wunemb=P(None, "dp_shard"),
+      mlp_hidden=P(),
+      res_stream=P(),
+      att_qkv=P(),
+    )
+  else:
+    # HSDP (2D mesh)
+    return ShardingSpecs(
+      mesh_shape=(num_dp_replicate, num_dp_shard),
+      mesh_axis_names=("dp_replicate", "dp_shard"),
+      data=P(("dp_replicate", "dp_shard")),
+      wqkv=P(None, None, None, "dp_shard"),
+      wo=P("dp_shard"),
+      wup=P(None, "dp_shard"),
+      wdown=P("dp_shard"),
+      wemb=P(),
+      wunemb=P(None, "dp_shard"),
+      mlp_hidden=P(),
+      res_stream=P(),
+      att_qkv=P(),
+    )
+
+
+def sharding(config: Config) -> ShardingSpecs:
+  """Get sharding specs. Must be called after jax.distributed.initialize()
+  and config_post_init (which validates the config)."""
+  return _make_sharding_specs(*_resolve_sharding_dims(config))
+
+
+def compute_data_shards(config: Config) -> int:
+  s = sharding(config)
+  return int(jnp.prod(jnp.array(s.mesh_shape)))
+
+
 def mesh_from_config(config: Config):
-  mesh = jax.make_mesh(
-    config.sharding.mesh_shape,
-    config.sharding.mesh_axis_names,
-    len(config.sharding.mesh_shape) * (jax.sharding.AxisType.Explicit,),
+  s = sharding(config)
+  return jax.make_mesh(
+    s.mesh_shape,
+    s.mesh_axis_names,
+    len(s.mesh_shape) * (jax.sharding.AxisType.Explicit,),
   )
-  return mesh
 
 
 def config_post_init(config: Config):
   """Input validation. Call after jax.distributed.initialize()"""
+  # Sharding validation
+  num_rep, num_shard = _resolve_sharding_dims(config)
+  n = jax.device_count()
+  assert num_rep * num_shard == n, (
+    f"num_dp_replicate({num_rep}) * num_dp_shard({num_shard}) != device_count({n})"
+  )
+  assert n % num_rep == 0 and n % num_shard == 0, (
+    f"device_count({n}) must be divisible by both "
+    f"num_dp_replicate({num_rep}) and num_dp_shard({num_shard})"
+  )
   # model arguments
   assert config.model.d_head % 2 == 0, (
     "Head dimension needs to be divisible by 2 for RoPE"

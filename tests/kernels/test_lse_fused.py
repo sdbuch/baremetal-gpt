@@ -1,5 +1,3 @@
-"""Tests for the fused LSE kernel (splash-forward-based cross-entropy)."""
-
 import functools
 
 import jax
@@ -44,7 +42,6 @@ requires_multi_device = pytest.mark.skipif(
 
 
 def make_kernels(num_tokens, vocab_size, max_valid_id, interpret=True):
-  """Create both original and fused LSE kernels with matching configuration."""
   mask = MultiHeadMask([VocabMask((num_tokens, vocab_size), max_valid_id)])
 
   block_sizes = BlockSizes(
@@ -69,7 +66,6 @@ def make_kernels(num_tokens, vocab_size, max_valid_id, interpret=True):
 
 
 def make_inputs(seed, num_tokens, vocab_size, scale=1.0):
-  """Generate random q, k inputs."""
   key = jax.random.PRNGKey(seed)
   k1, k2 = jax.random.split(key)
   num_heads = 1
@@ -447,7 +443,6 @@ def test_fused_sharded_heads():
 
 
 def ref_lse_forward_mqa(q, k, max_valid_id, vocab_size):
-  """Reference LSE forward for MQA mode."""
   logits = jnp.einsum("bsd,vd->bsv", q, k)
   vocab_ids = jnp.arange(vocab_size)
   mask = vocab_ids <= max_valid_id
@@ -456,7 +451,6 @@ def ref_lse_forward_mqa(q, k, max_valid_id, vocab_size):
 
 
 def make_mqa_kernel(num_heads, seq_len, vocab_size, max_valid_id, interpret=True):
-  """Create an MQA-mode fused LSE kernel."""
   mask = MultiHeadMask(
     [VocabMask((seq_len, vocab_size), max_valid_id) for _ in range(num_heads)]
   )

@@ -1,5 +1,3 @@
-"""Shared fixtures and constants for kernel tests."""
-
 import jax
 import jax.numpy as jnp
 import pytest
@@ -17,7 +15,6 @@ from bmgpt.config import (
 # Constants
 # =============================================================================
 
-# Tolerances
 FORWARD_RTOL = 1e-4
 FORWARD_ATOL = 1e-4
 BACKWARD_RTOL = 2e-2  # TPU MXU precision requires looser tolerance
@@ -25,11 +22,9 @@ BACKWARD_ATOL = 2e-2
 BFLOAT16_RTOL = 1e-2
 BFLOAT16_ATOL = 1e-2
 
-# Kernel defaults
 DEFAULT_BLOCK_SIZE = 128
 DEFAULT_MASK_VALUE = -1e10
 
-# Common test configuration sizes
 SMALL_CONFIGS = [
   # (batch_size, seq_len, d_model, vocab_size)
   (1, 128, 64, 256),
@@ -59,7 +54,6 @@ TPU_CONFIG_IDS = [f"B{b}_S{s}_D{d}_V{v}" for b, s, d, v in TPU_CONFIGS]
 
 
 def is_tpu() -> bool:
-  """Check if running on TPU platform."""
   return jax.devices()[0].platform == "tpu"
 
 
@@ -80,17 +74,7 @@ def ref_cross_entropy(
   targets: jax.Array,
   max_valid_id: int | None = None,
 ) -> jax.Array:
-  """Reference cross-entropy that materializes full logits matrix.
-
-  Args:
-    outputs: Model outputs of shape (B, S, D)
-    w_unemb: Unembedding weights of shape (V, D)
-    targets: Target indices of shape (B, S)
-    max_valid_id: Maximum valid token ID for vocab masking (optional)
-
-  Returns:
-    Scalar mean cross entropy loss
-  """
+  """Reference cross-entropy that materializes full logits matrix."""
   logits = jnp.einsum("bsd,vd->bsv", outputs, w_unemb)
 
   if max_valid_id is not None:
@@ -109,17 +93,6 @@ def ref_lse_forward(
   max_valid_id: int,
   vocab_size: int,
 ) -> jax.Array:
-  """Reference LSE forward computation.
-
-  Args:
-    q: Query tensor of shape (heads, tokens, head_dim)
-    k: Key tensor of shape (heads, vocab_size, head_dim)
-    max_valid_id: Maximum valid vocab ID for masking
-    vocab_size: Total vocabulary size
-
-  Returns:
-    LSE values of shape (heads, tokens)
-  """
   logits = jnp.einsum("hsd,htd->hst", q, k)
   vocab_ids = jnp.arange(vocab_size)
   mask = vocab_ids <= max_valid_id
@@ -134,18 +107,7 @@ def ref_backward_dq(
   max_valid_id: int,
   vocab_size: int,
 ) -> jax.Array:
-  """Reference backward dQ computation: (do * S) @ K.
-
-  Args:
-    q: Query tensor of shape (heads, tokens, head_dim)
-    k: Key tensor of shape (heads, vocab_size, head_dim)
-    do: Upstream gradient on LSE of shape (heads, tokens)
-    max_valid_id: Maximum valid vocab ID for masking
-    vocab_size: Total vocabulary size
-
-  Returns:
-    dQ gradient of shape (heads, tokens, head_dim)
-  """
+  """Reference backward dQ: (do * S) @ K."""
   logits = jnp.einsum("hsd,htd->hst", q, k)
   vocab_ids = jnp.arange(vocab_size)
   mask = vocab_ids <= max_valid_id
@@ -162,18 +124,7 @@ def ref_backward_dk(
   max_valid_id: int,
   vocab_size: int,
 ) -> jax.Array:
-  """Reference backward dK computation: S^T @ d_lse_q.
-
-  Args:
-    q: Query tensor of shape (heads, tokens, head_dim)
-    k: Key tensor of shape (heads, vocab_size, head_dim)
-    d_lse: Upstream gradient on LSE of shape (heads, tokens)
-    max_valid_id: Maximum valid vocab ID for masking
-    vocab_size: Total vocabulary size
-
-  Returns:
-    dK gradient of shape (heads, vocab_size, head_dim)
-  """
+  """Reference backward dK: S^T @ d_lse_q."""
   logits = jnp.einsum("hsd,htd->hst", q, k)
   vocab_ids = jnp.arange(vocab_size)
   mask = vocab_ids <= max_valid_id
@@ -199,22 +150,6 @@ def make_test_config(
   mesh_axis_names: list[str],
   wunemb_sharding: list[str | None] | None = None,
 ) -> Config:
-  """Create a Config for testing with FSDP-style sharding.
-
-  Args:
-    batch_size: Global batch size
-    seq_len: Sequence length
-    d_model: Model dimension
-    vocab_size: Vocabulary size
-    max_valid_id: Maximum valid token ID
-    data_sharding: Sharding spec for data dimension
-    mesh_shape: TPU mesh shape
-    mesh_axis_names: Names for mesh axes
-    wunemb_sharding: Optional explicit sharding for unembedding weights
-
-  Returns:
-    Config object for testing
-  """
   if wunemb_sharding is None:
     wunemb_sharding = [None, mesh_axis_names[0]] if mesh_axis_names else [None, None]
   return Config(

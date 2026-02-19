@@ -1,14 +1,3 @@
 # @package _global_
-
 sharding:
-  mesh_axis_names: ["dp"]
-  data: ["dp"]
-  wqkv: []
-  wo: []
-  wup: []
-  wdown: []
-  wemb: []
-  wunemb: []
-  mlp_hidden: []
-  res_stream: []
-  att_qkv: []
+  num_dp_shard: 1

@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from bmgpt.config import Config
+from bmgpt.config import Config, sharding
 from bmgpt.data import DataloaderOutputType
 from bmgpt.model import (
   ClassificationHead,
@@ -70,7 +70,7 @@ def fused_softmax_cross_entropy(
 
   lse = lse_sharded(lse_kernel, outputs, w_unemb)
   w_unemb_f32 = w_unemb.astype(jnp.float32)
-  target_unembs = w_unemb_f32.at[targets].get(out_sharding=jax.P(*config.sharding.data))
+  target_unembs = w_unemb_f32.at[targets].get(out_sharding=sharding(config).data)
   target_unembs = target_unembs.astype(w_unemb.dtype)
   label_logits = jnp.einsum(
     "bsd,bsd->bs", outputs, target_unembs, preferred_element_type=jnp.float32

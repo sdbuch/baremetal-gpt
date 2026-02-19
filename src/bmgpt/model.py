@@ -9,7 +9,7 @@ from jax.experimental.pallas.ops.tpu.splash_attention import (
   SegmentIds,
 )
 
-from bmgpt.config import Config, TransformerType
+from bmgpt.config import Config, TransformerType, sharding
 
 REDUCTIONS = {
   "rms": lambda x: jnp.sqrt(jnp.mean(x**2, axis=-1)),
@@ -24,18 +24,18 @@ REDUCTIONS = {
 ################################
 
 
-def init_array_normal(config: Config, shape, sharding, key):
+def init_array_normal(config: Config, shape, out_sharding: jax.P, key):
   return config.model.param_std * jax.random.normal(
-    key, shape, config.model.param_dtype.value, out_sharding=jax.P(*sharding)
+    key, shape, config.model.param_dtype.value, out_sharding=out_sharding
   )
 
 
-def init_array_zeros(config: Config, shape, sharding):
-  return jnp.zeros(shape, config.model.param_dtype.value, out_sharding=jax.P(*sharding))
+def init_array_zeros(config: Config, shape, out_sharding: jax.P):
+  return jnp.zeros(shape, config.model.param_dtype.value, out_sharding=out_sharding)
 
 
-def init_array_ones(config: Config, shape, sharding):
-  return jnp.ones(shape, config.model.param_dtype.value, out_sharding=jax.P(*sharding))
+def init_array_ones(config: Config, shape, out_sharding: jax.P):
+  return jnp.ones(shape, config.model.param_dtype.value, out_sharding=out_sharding)
 
 
 @jax.tree_util.register_dataclass
@@ -102,23 +102,24 @@ class Mlp(ParamNodeWithMetadata):
   @classmethod
   def init(cls, config: Config, key, **kwargs):
     k_up, k_down = jax.random.split(key, 2)
+    s = sharding(config)
     d_hidden = int(config.model.mlp_factor * config.model.d_model)
     shape_w_up = (d_hidden, config.model.d_model)
     shape_bias_up = (d_hidden,)
-    sharding_w_up = config.sharding.wup
-    sharding_bias_up = config.sharding.mlp_hidden
+    sharding_w_up = s.wup
+    sharding_bias_up = s.mlp_hidden
     if config.model.use_gating_mlp:
       shape_w_up = (2,) + shape_w_up
       shape_bias_up = (2,) + shape_bias_up
-      sharding_w_up = [None] + sharding_w_up
-      sharding_bias_up = [None] + sharding_bias_up
+      sharding_w_up = jax.P(None, *s.wup)
+      sharding_bias_up = jax.P(None, *s.mlp_hidden)
     shape_w_down = (config.model.d_model, d_hidden)
     shape_bias_down = (config.model.d_model,)
 
     w_up = init_array_normal(config, shape_w_up, sharding_w_up, k_up)
     bias_up = init_array_zeros(config, shape_bias_up, sharding_bias_up)
-    w_down = init_array_normal(config, shape_w_down, config.sharding.wdown, k_down)
-    bias_down = init_array_zeros(config, shape_bias_down, config.sharding.res_stream)
+    w_down = init_array_normal(config, shape_w_down, s.wdown, k_down)
+    bias_down = init_array_zeros(config, shape_bias_down, s.res_stream)
 
     return cls(
       w_up=ArrayWithMetadata(w_up, ((-1,), (-2,))),
@@ -130,21 +131,20 @@ class Mlp(ParamNodeWithMetadata):
 
 
 def mlp(config: Config, params: Mlp, x: Array):
-  mlp_out_spec = jax.P(*config.sharding.res_stream)
+  s = sharding(config)
   if config.model.use_gating_mlp:
-    mlp_hidden_spec = jax.P(*([None] + config.sharding.mlp_hidden))
+    mlp_hidden_spec = jax.P(None, *s.mlp_hidden)
     preact__gate = jnp.matmul(x, params.w_up.p.mT, out_sharding=mlp_hidden_spec)
     if config.model.use_bias_mlp:
       preact__gate += params.bias_up.p
     preact, gate = preact__gate
     act = jax.nn.swish(preact) * gate
   else:
-    mlp_hidden_spec = jax.P(*config.sharding.mlp_hidden)
-    preact = jnp.matmul(x, params.w_up.p.mT, out_sharding=mlp_hidden_spec)
+    preact = jnp.matmul(x, params.w_up.p.mT, out_sharding=s.mlp_hidden)
     if config.model.use_bias_mlp:
       preact += params.bias_up.p
     act = jax.nn.swish(preact)
-  out = jnp.matmul(act, params.w_down.p.mT, out_sharding=mlp_out_spec)
+  out = jnp.matmul(act, params.w_down.p.mT, out_sharding=s.res_stream)
   if config.model.use_bias_mlp:
     out += params.bias_down.p
   assert out.dtype == config.model.compute_dtype.value
@@ -165,10 +165,11 @@ class Attn(ParamNodeWithMetadata):
   @classmethod
   def init(cls, config: Config, key, **kwargs):
     k_qkv, k_o = jax.random.split(key, 2)
+    s = sharding(config)
     shape_qkv = (3, config.model.num_heads, config.model.d_head, config.model.d_model)
     shape_wout = (config.model.d_model, config.model.num_heads, config.model.d_head)
-    w_qkv = init_array_normal(config, shape_qkv, config.sharding.wqkv, k_qkv)
-    w_out = init_array_normal(config, shape_wout, config.sharding.wo, k_o)
+    w_qkv = init_array_normal(config, shape_qkv, s.wqkv, k_qkv)
+    w_out = init_array_normal(config, shape_wout, s.wo, k_o)
     return cls(
       w_qkv=ArrayWithMetadata(w_qkv, ((-1,), (-2, -3))),
       w_o=ArrayWithMetadata(w_out, ((-1, -2), (-3,))),
@@ -227,11 +228,12 @@ def attn(
   # h: head dim (config.d_head)
   # x_seq: s x d
 
+  sp = sharding(config)
   q, k, v = jnp.einsum(
     "sd,3nhd->3nsh",
     x_seq,
     params.w_qkv.p,
-    out_sharding=jax.P(*config.sharding.att_qkv),
+    out_sharding=sp.att_qkv,
   )
   s = q.shape[1]
 
@@ -302,7 +304,7 @@ def attn(
     "nsh,dnh->sd",
     attn_out,
     params.w_o.p,
-    out_sharding=jax.P(*config.sharding.res_stream),
+    out_sharding=sp.res_stream,
   )
 
   assert out.dtype == config.model.compute_dtype.value
@@ -335,10 +337,11 @@ class EmbeddingDiscrete(Embedding):
 
   @classmethod
   def init(cls, config: Config, key, **kwargs) -> "EmbeddingDiscrete":
+    sp = sharding(config)
     shape_emb = (config.model.num_vocab, config.model.d_model)
     shape_bias = (config.model.d_model,)
-    emb = init_array_normal(config, shape_emb, config.sharding.wemb, key)
-    bias = init_array_zeros(config, shape_bias, config.sharding.res_stream)
+    emb = init_array_normal(config, shape_emb, sp.wemb, key)
+    bias = init_array_zeros(config, shape_bias, sp.res_stream)
     return cls(
       w=ArrayWithMetadata(emb, ((), ())),
       bias=ArrayWithMetadata(bias, ((), ())),
@@ -349,7 +352,7 @@ class EmbeddingDiscrete(Embedding):
 @_embedding_interface.register(EmbeddingDiscrete)
 def _(params: EmbeddingDiscrete, seq: Array, config: Config) -> tuple[Array, dict]:
   w_f32 = params.w.p.astype(jnp.float32)  # perform the bwd scatter-add in fp32
-  emb = w_f32.at[seq].get(out_sharding=jax.P(*config.sharding.res_stream))
+  emb = w_f32.at[seq].get(out_sharding=sharding(config).res_stream)
   emb = emb.astype(params.w.p.dtype)
   if config.model.use_bias_embeddings:
     emb += params.bias.p
@@ -367,6 +370,7 @@ class EmbeddingContinuous(Embedding):
 
   @classmethod
   def init(cls, config: Config, key, **kwargs) -> "EmbeddingContinuous":
+    sp = sharding(config)
     key_emb, key_pos, key_reg = jax.random.split(key, 3)
     shape_emb = (config.model.num_vocab, config.model.d_model)
     shape_reg = (config.model.num_registers, config.model.d_model)
@@ -375,14 +379,10 @@ class EmbeddingContinuous(Embedding):
       config.model.d_model,
     )
     shape_bias = (config.model.d_model,)
-    w_emb = init_array_normal(config, shape_emb, config.sharding.wemb, key_emb)
-    w_reg = init_array_normal(
-      config, shape_reg, [None] + config.sharding.res_stream, key_reg
-    )
-    w_pos = init_array_normal(
-      config, shape_pos, [None] + config.sharding.res_stream, key_pos
-    )
-    bias = init_array_zeros(config, shape_bias, config.sharding.res_stream)
+    w_emb = init_array_normal(config, shape_emb, sp.wemb, key_emb)
+    w_reg = init_array_normal(config, shape_reg, jax.P(None, *sp.res_stream), key_reg)
+    w_pos = init_array_normal(config, shape_pos, jax.P(None, *sp.res_stream), key_pos)
+    bias = init_array_zeros(config, shape_bias, sp.res_stream)
     return cls(
       w_emb=ArrayWithMetadata(w_emb, ((-2,), (-1,))),
       bias=ArrayWithMetadata(bias, ((), ())),
@@ -435,8 +435,8 @@ class LMHead(Unembedding):
   def init(cls, config: Config, key, **kwargs) -> "LMHead":
     shape_emb = (config.model.num_vocab, config.model.d_model)
     shape_bias = (config.model.num_vocab,)
-    unemb = init_array_normal(config, shape_emb, config.sharding.wunemb, key)
-    bias = init_array_zeros(config, shape_bias, [])
+    unemb = init_array_normal(config, shape_emb, sharding(config).wunemb, key)
+    bias = init_array_zeros(config, shape_bias, jax.P())
     return cls(
       w=ArrayWithMetadata(unemb, ((-1,), (-2,))),
       bias=ArrayWithMetadata(bias, ((), ())),
@@ -463,8 +463,8 @@ class ClassificationHead(Unembedding):
   def init(cls, config: Config, key, **kwargs) -> "ClassificationHead":
     shape_emb = (config.model.num_classes, config.model.d_model)
     shape_bias = (config.model.num_classes,)
-    unemb = init_array_normal(config, shape_emb, config.sharding.wunemb, key)
-    bias = init_array_zeros(config, shape_bias, [])
+    unemb = init_array_normal(config, shape_emb, sharding(config).wunemb, key)
+    bias = init_array_zeros(config, shape_bias, jax.P())
     return cls(
       w=ArrayWithMetadata(unemb, ((-1,), (-2,))),
       bias=ArrayWithMetadata(bias, ((), ())),
@@ -490,9 +490,10 @@ class LayerNorm(ParamNodeWithMetadata):
 
   @classmethod
   def init(cls, config: Config, **kwargs) -> "LayerNorm":
+    sp = sharding(config)
     shape = (config.model.d_model,)
-    gamma = init_array_ones(config, shape, config.sharding.res_stream)
-    beta = init_array_zeros(config, shape, config.sharding.res_stream)
+    gamma = init_array_ones(config, shape, sp.res_stream)
+    beta = init_array_zeros(config, shape, sp.res_stream)
     return cls(
       gamma=ArrayWithMetadata(gamma, ((), ())),
       beta=ArrayWithMetadata(beta, ((), ())),
@@ -626,13 +627,13 @@ def transformer(
 ):
   x_seq, aux_emb = embedding(config, params.emb, tokens)
 
-  # Union standard remat policy with attn O cache policy when using splash
-  policy = jax.checkpoint_policies.save_from_both_policies(
-    jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
-    jax.checkpoint_policies.save_only_these_names("attn_out"),
+  @partial(
+    jax.remat,
+    policy=jax.checkpoint_policies.save_from_both_policies(
+      jax.checkpoint_policies.dots_with_no_batch_dims_saveable,
+      jax.checkpoint_policies.save_only_these_names("attn_out"),
+    ),
   )
-
-  @partial(jax.remat, policy=policy)
   def _block_fun(x_seq: Array, params__cache_in: tuple[Block, jax.Array]):
     params, cache_in = params__cache_in
     out, cache_out, aux = block(
@@ -658,11 +659,11 @@ def init_kv_cache(
   config: Config, global_batch_size: int, num_microbatches: int, cache_capacity: int
 ):
   """Cache is shape (B//num_micro, L, 2, N, max_seq_len, H)"""
-  if not config.sharding.data:
-    sharding_batch_layer = [None, None]
+  s = sharding(config)
+  if not s.data:
+    cache_sharding = jax.P(None, None, *s.att_qkv)
   else:
-    sharding_batch_layer = config.sharding.data + [None]
-  sharding = jax.P(*(sharding_batch_layer + config.sharding.att_qkv))
+    cache_sharding = jax.P(*s.data, None, *s.att_qkv)
 
   return jnp.zeros(
     (
@@ -674,5 +675,5 @@ def init_kv_cache(
       config.model.d_head,
     ),
     dtype=config.model.compute_dtype.value,
-    out_sharding=sharding,
+    out_sharding=cache_sharding,
   )

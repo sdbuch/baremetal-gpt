@@ -14,7 +14,7 @@ from jax.experimental.pallas.ops.tpu.splash_attention.splash_attention_mask impo
   _ComputableMask,
 )
 
-from bmgpt.config import Config, DatasetConfig
+from bmgpt.config import Config, DatasetConfig, compute_data_shards, sharding
 from bmgpt.kernels.lse_kernel import (
   BlockSizes,
   make_lse_fused_kernel,
@@ -105,7 +105,7 @@ def make_lse_kernel_sharded(
   q_seq_len: int,
   k_seq_len: int,
   mesh,
-  data_sharding: list[str | None] = [None],
+  data_sharding: jax.P = jax.P(None),
   q_seq_shards: int = 1,
   head_shards: int = 1,
   block_size_mem_q: int = 128,
@@ -167,7 +167,7 @@ def make_lse_fused_kernel_sharded(
   q_seq_len: int,
   k_seq_len: int,
   mesh,
-  data_sharding: list[str | None] = [None],
+  data_sharding: jax.P = jax.P(None),
   head_shards: int = 1,
   block_size_mem_q: int = 128,
   block_size_mem_kv: int = 128,
@@ -315,18 +315,12 @@ def forward_kernels_from_config(config: Config, mesh):
   if not config.use_fused_xent_loss:
     train_lse_kernel = None
   else:
-    if config.sharding.data and config.sharding.data[0]:
-      data_axis_name = config.sharding.data[0]
-      num_data_shards = config.sharding.mesh_shape[
-        config.sharding.mesh_axis_names.index(data_axis_name)
-      ]
-    else:
-      num_data_shards = 1
+    num_data_shards = compute_data_shards(config)
     microbatch_size = (
       config.train_dataset.global_batch_size // config.train_dataset.num_microbatches
     )
     lse_kernel_kwargs = {
-      "data_sharding": config.sharding.data,
+      "data_sharding": sharding(config).data,
       "head_shards": num_data_shards,
       "block_size_mem_q": config.fused_xent_block_size_T,
       "block_size_mem_kv": config.fused_xent_block_size_V,

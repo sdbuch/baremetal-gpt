@@ -1,0 +1,3 @@
+# @package _global_
+# Both must be set explicitly, e.g.:
+#   sharding.num_dp_replicate=4 sharding.num_dp_shard=8
