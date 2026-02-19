@@ -19,6 +19,7 @@ from __future__ import annotations
 import dataclasses
 import enum
 import functools
+import math
 from collections.abc import Callable, Mapping
 from typing import Any, NamedTuple, Optional
 
@@ -53,6 +54,135 @@ NN_DIM_NUMBERS = (((1,), (0,)), ((), ()))  # standard matmul
 NT_DIM_NUMBERS = (((1,), (1,)), ((), ()))  # RHS transposed
 
 # mypy: ignore-errors
+
+
+def _bytes(x) -> int:
+  return math.prod(x.shape) * x.dtype.itemsize
+
+
+def _lse_fwd_reference(q, k, *, is_causal: bool):
+  """Reference: Q@K^T -> logsumexp. For cost estimation only."""
+  # q: (num_heads, q_seq_len, head_dim), k: (kv_seq_len, head_dim) for MQA
+  #   or (num_heads, kv_seq_len, head_dim) for MHA
+  if k.ndim == 2:
+    logits = jnp.einsum("hqd,kd->hqk", q, k)
+  else:
+    logits = jnp.einsum("hqd,hkd->hqk", q, k)
+  if is_causal:
+    mask = jnp.tril(jnp.ones(logits.shape[-2:], dtype=jnp.bool_))
+    logits = jnp.where(mask, logits, -1e30)
+  return jax.nn.logsumexp(logits, axis=-1)
+
+
+def _lse_bwd_dq_reference(q, k, logsumexp, d_lse, *, is_causal: bool):
+  """Reference: dQ = (d_lse * softmax(QK^T)) @ K. For cost estimation only."""
+  if k.ndim == 2:
+    logits = jnp.einsum("hqd,kd->hqk", q, k)
+  else:
+    logits = jnp.einsum("hqd,hkd->hqk", q, k)
+  if is_causal:
+    mask = jnp.tril(jnp.ones(logits.shape[-2:], dtype=jnp.bool_))
+    logits = jnp.where(mask, logits, -1e30)
+  p = jnp.exp(logits - logsumexp[..., None])
+  ds = d_lse[..., None] * p
+  if k.ndim == 2:
+    return jnp.einsum("hqk,kd->hqd", ds, k)
+  else:
+    return jnp.einsum("hqk,hkd->hqd", ds, k)
+
+
+def _lse_bwd_dk_reference(q, k, logsumexp, d_lse_q, *, is_causal: bool):
+  """Reference: dK = softmax(QK^T)^T @ (d_lse * Q). For cost estimation only."""
+  if k.ndim == 2:
+    logits = jnp.einsum("hqd,kd->hqk", q, k)
+  else:
+    logits = jnp.einsum("hqd,hkd->hqk", q, k)
+  if is_causal:
+    mask = jnp.tril(jnp.ones(logits.shape[-2:], dtype=jnp.bool_))
+    logits = jnp.where(mask, logits, -1e30)
+  p = jnp.exp(logits - logsumexp[..., None])
+  if k.ndim == 2:
+    return jnp.einsum("hqk,hqd->kd", p, d_lse_q)
+  else:
+    return jnp.einsum("hqk,hqd->hkd", p, d_lse_q)
+
+
+def _lse_fwd_cost_estimate(
+  q,
+  k,
+  *,
+  is_causal,
+  kernel_inputs,
+  kernel_outputs,
+) -> pl.CostEstimate:
+  body_cost = pl.estimate_cost(_lse_fwd_reference, q, k, is_causal=is_causal)
+  input_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_inputs) if x is not None)
+  output_bytes = sum(
+    _bytes(x) for x in jax.tree.leaves(kernel_outputs) if x is not None
+  )
+  return pl.CostEstimate(
+    flops=body_cost.flops,
+    transcendentals=body_cost.transcendentals,
+    bytes_accessed=input_bytes + output_bytes,
+  )
+
+
+def _lse_bwd_dq_cost_estimate(
+  q,
+  k,
+  logsumexp,
+  d_lse,
+  *,
+  is_causal,
+  kernel_inputs,
+  kernel_outputs,
+) -> pl.CostEstimate:
+  body_cost = pl.estimate_cost(
+    _lse_bwd_dq_reference,
+    q,
+    k,
+    logsumexp,
+    d_lse,
+    is_causal=is_causal,
+  )
+  input_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_inputs) if x is not None)
+  output_bytes = sum(
+    _bytes(x) for x in jax.tree.leaves(kernel_outputs) if x is not None
+  )
+  return pl.CostEstimate(
+    flops=body_cost.flops,
+    transcendentals=body_cost.transcendentals,
+    bytes_accessed=input_bytes + output_bytes,
+  )
+
+
+def _lse_bwd_dk_cost_estimate(
+  q,
+  k,
+  logsumexp,
+  d_lse_q,
+  *,
+  is_causal,
+  kernel_inputs,
+  kernel_outputs,
+) -> pl.CostEstimate:
+  body_cost = pl.estimate_cost(
+    _lse_bwd_dk_reference,
+    q,
+    k,
+    logsumexp,
+    d_lse_q,
+    is_causal=is_causal,
+  )
+  input_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_inputs) if x is not None)
+  output_bytes = sum(
+    _bytes(x) for x in jax.tree.leaves(kernel_outputs) if x is not None
+  )
+  return pl.CostEstimate(
+    flops=body_cost.flops,
+    transcendentals=body_cost.transcendentals,
+    bytes_accessed=input_bytes + output_bytes,
+  )
 
 
 MaskFunctionType = Callable[..., jax.Array]
@@ -634,6 +764,15 @@ def _lse_forward(
     grid_width = kv_seq_len // bkv
 
   grid = (num_q_heads, q_seq_len // bq, grid_width)
+  kernel_inputs = (
+    q,
+    k,
+    q_segment_ids,
+    kv_segment_ids,
+    sinks,
+    fwd_mask_info.partial_mask_blocks,
+    q_sequence,
+  )
   with jax.named_scope(kernel_name):
     all_out = pl.pallas_call(
       partial(
@@ -660,6 +799,13 @@ def _lse_forward(
       out_shape=out_shapes,
       name=kernel_name,
       interpret=interpret,
+      cost_estimate=_lse_fwd_cost_estimate(
+        q,
+        k,
+        is_causal=False,
+        kernel_inputs=kernel_inputs,
+        kernel_outputs=out_shapes,
+      ),
     )(
       fwd_mask_info.data_next,
       fwd_mask_info.block_mask,
@@ -896,6 +1042,8 @@ def _lse_backward_dq(
   def logsumexp_index_map(h, i, *_):
     return h, 0, i
 
+  logsumexp_2d = logsumexp  # save pre-expanded for cost estimate reference
+  d_lse_2d = d_lse
   logsumexp = jnp.expand_dims(logsumexp, axis=-2)
   logsumexp_spec = pl.BlockSpec((None, 1, bq), logsumexp_index_map)
   assert logsumexp.ndim == len(logsumexp_spec.block_shape)
@@ -964,6 +1112,17 @@ def _lse_backward_dq(
     is_segmented=segment_ids is not None,
     phase="ce_dq",
   )
+  dq_kernel_inputs = (
+    q,
+    k,
+    q_segment_ids,
+    kv_segment_ids,
+    sinks,
+    logsumexp,
+    d_lse,
+    mask_info.partial_mask_blocks,
+    q_sequence,
+  )
   with jax.named_scope(kernel_name):
     _, dq = pl.pallas_call(
       kernel,
@@ -979,6 +1138,15 @@ def _lse_backward_dq(
       ),
       name=kernel_name,
       interpret=interpret,
+      cost_estimate=_lse_bwd_dq_cost_estimate(
+        q,
+        k,
+        logsumexp_2d,
+        d_lse_2d,
+        is_causal=False,
+        kernel_inputs=dq_kernel_inputs,
+        kernel_outputs=out_shapes,
+      ),
     )(
       mask_info.data_next,
       mask_info.block_mask,
@@ -1337,6 +1505,7 @@ def _lse_backward_dk(
     return head_index, 0, next_i
 
   assert logsumexp.shape == (num_q_heads, q_seq_len)
+  logsumexp_2d = logsumexp  # save pre-expanded for cost estimate reference
   # TODO(apaszke): Remove the sublane expansion once Mosaic has all retilings
   logsumexp_shape = (num_q_heads, NUM_SUBLANES, q_seq_len)
   logsumexp = jnp.broadcast_to(jnp.expand_dims(logsumexp, -2), logsumexp_shape)
@@ -1410,6 +1579,17 @@ def _lse_backward_dk(
     is_segmented=segment_ids is not None,
     phase="ce_dk",
   )
+  dk_kernel_inputs = (
+    q,
+    k,
+    q_segment_ids,
+    kv_segment_ids,
+    sinks,
+    logsumexp,
+    d_lse_q,
+    mask_info.partial_mask_blocks,
+    q_sequence,
+  )
   with jax.named_scope(kernel_name):
     _, dk = pl.pallas_call(
       kernel,
@@ -1430,6 +1610,15 @@ def _lse_backward_dk(
       ),
       name=kernel_name,
       interpret=interpret,
+      cost_estimate=_lse_bwd_dk_cost_estimate(
+        q,
+        k,
+        logsumexp_2d,
+        d_lse_q,
+        is_causal=False,
+        kernel_inputs=dk_kernel_inputs,
+        kernel_outputs=out_shapes,
+      ),
     )(
       mask_info.data_next,
       mask_info.block_mask,
@@ -1823,7 +2012,7 @@ def make_lse_kernel(
 
 
 # =============================================================================
-# Fused LSE Kernel (Splash-Forward-Based Cross-Entropy)
+# Fused LSE Custom VJP Wrappers
 # =============================================================================
 
 LSEFusedResidualsType = tuple[
@@ -1950,7 +2139,6 @@ def _lse_fused_bwd(
   q_layout = dk_block_sizes.q_layout
   k_layout = dk_block_sizes.k_layout
 
-  # dQ = g_lse * attn_out where attn_out = softmax(QK^T) @ K
   dq = (g_lse[:, :, None] * attn_out).astype(q.dtype)
 
   d_lse_q = g_lse[:, :, None] * q
