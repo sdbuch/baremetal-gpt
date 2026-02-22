@@ -40,18 +40,22 @@ $BENCH --batch 1 --pos 512 --embed 512 --vocab 128256 \
 # B=4, S=2048, D=4096, V=129024 (8192 tokens)
 # Matches Marin's large shape (B=8192, H=4096, V=128256).
 # Their v4 results: XLA value+grad ~89k tok/s
+# NOTE: block sizes reduced from 512/256 → 128/128 to fit v4 VMEM (16MB)
 echo ""
 echo ">>> [3/5] 7B config (B=4, S=2048, D=4096, V=129024)"
 $BENCH --batch 4 --pos 2048 --embed 4096 --vocab 129024 \
+  --block-q 128 --block-kv 128 --block-kv-compute 128 \
   --trace "$TRACE_BASE/7B_small_batch"
 
 # ── 4. 7B config, full batch ─────────────────────────────────────────
 # B=16, S=2048, D=4096, V=129024 (32768 tokens)
 # Matches Marin's XL shape (B=32768, H=4096, V=128256).
 # Their v5p results: custom VJP ~84k tok/s
+# NOTE: block sizes reduced from 512/256 → 128/128 to fit v4 VMEM (16MB)
 echo ""
 echo ">>> [4/5] 7B full batch (B=16, S=2048, D=4096, V=129024)"
 $BENCH --batch 16 --pos 2048 --embed 4096 --vocab 129024 \
+  --block-q 128 --block-kv 128 --block-kv-compute 128 \
   --trace "$TRACE_BASE/7B_full_batch"
 
 # ── 5. Block size sweep on 740M config ───────────────────────────────

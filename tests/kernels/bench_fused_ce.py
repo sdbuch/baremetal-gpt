@@ -475,17 +475,25 @@ def check_correctness(implementations: dict):
   print("\n  Correctness check:")
   values = {}
   grads = {}
+  failed = set()
 
   for name, (fn, args) in implementations.items():
-    jit_fn = jax.jit(fn)
-    val = jit_fn(*args)
-    jax.block_until_ready(val)
-    values[name] = float(val)
+    try:
+      jit_fn = jax.jit(fn)
+      val = jit_fn(*args)
+      jax.block_until_ready(val)
+      values[name] = float(val)
 
-    grad_fn = jax.jit(jax.grad(fn, argnums=0))
-    g = grad_fn(*args)
-    jax.block_until_ready(g)
-    grads[name] = g
+      grad_fn = jax.jit(jax.grad(fn, argnums=0))
+      g = grad_fn(*args)
+      jax.block_until_ready(g)
+      grads[name] = g
+    except Exception as e:
+      print(f"    {name:30s}  FAILED: {e}")
+      failed.add(name)
+
+  if not values:
+    return failed
 
   ref_name = "reference" if "reference" in values else list(values.keys())[0]
   ref_val = values[ref_name]
@@ -515,6 +523,8 @@ def check_correctness(implementations: dict):
         f"    grad {name:26s}  cos_sim={cos_sim:.4f}  "
         f"rel_norm_diff={rel_diff:.4f}  [{ok}]"
       )
+
+  return failed
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -617,17 +627,25 @@ def main():
   # ── bmgpt Pallas ─────────────────────────────────────────────────────
   if run_all or args.implementation == "bmgpt":
     if not args.sweep:
-      bmgpt_fn, _kernel = make_bmgpt_loss_fn(
-        args.batch,
-        args.pos,
-        args.vocab,
-        args.block_q,
-        args.block_kv,
-        args.block_kv_compute,
-      )
-      label = f"bmgpt(q={args.block_q},kv={args.block_kv},kvc={args.block_kv_compute})"
-      impls_to_run.append((label, bmgpt_fn, (x_3d, w_vd, labels_2d)))
-      correctness_impls[label] = (bmgpt_fn, (x_3d, w_vd, labels_2d))
+      try:
+        bmgpt_fn, _kernel = make_bmgpt_loss_fn(
+          args.batch,
+          args.pos,
+          args.vocab,
+          args.block_q,
+          args.block_kv,
+          args.block_kv_compute,
+        )
+        label = (
+          f"bmgpt(q={args.block_q},kv={args.block_kv},kvc={args.block_kv_compute})"
+        )
+        impls_to_run.append((label, bmgpt_fn, (x_3d, w_vd, labels_2d)))
+        correctness_impls[label] = (bmgpt_fn, (x_3d, w_vd, labels_2d))
+      except Exception as e:
+        print(f"\n  WARNING: bmgpt kernel build failed: {e}")
+        print(
+          "  Skipping bmgpt (try smaller --block-q / --block-kv for this embed dim)"
+        )
 
   # ── Levanter Pallas (optional) ───────────────────────────────────────
   if (run_all or args.implementation == "levanter") and HAS_LEVANTER:
@@ -637,37 +655,48 @@ def main():
     print("\n  WARNING: levanter not installed, skipping levanter_pallas")
 
   # ── Correctness ──────────────────────────────────────────────────────
+  failed_impls: set[str] = set()
   if len(correctness_impls) > 1:
-    check_correctness(correctness_impls)
+    failed_impls = check_correctness(correctness_impls)
+
+  # Filter out implementations that failed correctness (e.g. VMEM OOM)
+  if failed_impls:
+    impls_to_run = [(n, f, a) for n, f, a in impls_to_run if n not in failed_impls]
 
   # ── Benchmark ────────────────────────────────────────────────────────
   print(f"\n  Benchmark ({args.warmup} warmup, {args.steps} steps):")
 
   for name, fn, fn_args in impls_to_run:
-    jit_fwd = jax.jit(fn)
-    ct, rts = time_fn(jit_fwd, *fn_args, warmup=args.warmup, steps=args.steps)
-    report(name, ct, rts, num_tokens, "fwd")
+    try:
+      jit_fwd = jax.jit(fn)
+      ct, rts = time_fn(jit_fwd, *fn_args, warmup=args.warmup, steps=args.steps)
+      report(name, ct, rts, num_tokens, "fwd")
 
-    jit_vg = jax.jit(jax.value_and_grad(fn, argnums=0))
-    ct, rts = time_fn(jit_vg, *fn_args, warmup=args.warmup, steps=args.steps)
-    report(name, ct, rts, num_tokens, "fwd+bwd")
+      jit_vg = jax.jit(jax.value_and_grad(fn, argnums=0))
+      ct, rts = time_fn(jit_vg, *fn_args, warmup=args.warmup, steps=args.steps)
+      report(name, ct, rts, num_tokens, "fwd+bwd")
+    except Exception as e:
+      print(f"  [{name}] FAILED during benchmark: {e}")
 
   # ── xprof trace pass (outside timing) ─────────────────────────────────
   if args.trace and impls_to_run:
     trace_dir = args.trace
     print(f"\n  Capturing xprof trace to {trace_dir}")
     for name, fn, fn_args in impls_to_run:
-      jit_vg = jax.jit(jax.value_and_grad(fn, argnums=0))
-      # Warmup to ensure compiled
-      out = jit_vg(*fn_args)
-      jax.block_until_ready(out)
-      # Traced run
-      tag = name.replace("(", "_").replace(")", "").replace(",", "_").replace("=", "")
-      jax.profiler.start_trace(f"{trace_dir}/{tag}")
-      out = jit_vg(*fn_args)
-      jax.block_until_ready(out)
-      jax.profiler.stop_trace()
-      print(f"    {name}: trace saved to {trace_dir}/{tag}")
+      try:
+        jit_vg = jax.jit(jax.value_and_grad(fn, argnums=0))
+        # Warmup to ensure compiled
+        out = jit_vg(*fn_args)
+        jax.block_until_ready(out)
+        # Traced run
+        tag = name.replace("(", "_").replace(")", "").replace(",", "_").replace("=", "")
+        jax.profiler.start_trace(f"{trace_dir}/{tag}")
+        out = jit_vg(*fn_args)
+        jax.block_until_ready(out)
+        jax.profiler.stop_trace()
+        print(f"    {name}: trace saved to {trace_dir}/{tag}")
+      except Exception as e:
+        print(f"    {name}: trace FAILED: {e}")
 
   # ── Block size sweep mode ────────────────────────────────────────────
   if args.sweep and (run_all or args.implementation == "bmgpt"):
