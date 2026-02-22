@@ -86,6 +86,7 @@ dev = [
     "debugpy>=1.8.19",
     "hypothesis>=6.149.1",
     "ipython>=9.8.0",
+    "jaxtyping>=0.3.9",
     "matplotlib>=3.10.8",
     "optax>=0.2.6",
     "pillow>=12.0.0",
