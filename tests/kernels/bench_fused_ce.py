@@ -560,6 +560,12 @@ def main():
   parser.add_argument("--sweep", action="store_true", help="Sweep bmgpt block sizes")
   parser.add_argument("--steps", type=int, default=5)
   parser.add_argument("--warmup", type=int, default=3)
+  parser.add_argument(
+    "--trace",
+    type=str,
+    default="",
+    help="If set, capture xprof trace to this directory (e.g. /tmp/jax-trace)",
+  )
   args = parser.parse_args()
 
   jax.distributed.initialize()
@@ -645,6 +651,23 @@ def main():
     jit_vg = jax.jit(jax.value_and_grad(fn, argnums=0))
     ct, rts = time_fn(jit_vg, *fn_args, warmup=args.warmup, steps=args.steps)
     report(name, ct, rts, num_tokens, "fwd+bwd")
+
+  # ── xprof trace pass (outside timing) ─────────────────────────────────
+  if args.trace and impls_to_run:
+    trace_dir = args.trace
+    print(f"\n  Capturing xprof trace to {trace_dir}")
+    for name, fn, fn_args in impls_to_run:
+      jit_vg = jax.jit(jax.value_and_grad(fn, argnums=0))
+      # Warmup to ensure compiled
+      out = jit_vg(*fn_args)
+      jax.block_until_ready(out)
+      # Traced run
+      tag = name.replace("(", "_").replace(")", "").replace(",", "_").replace("=", "")
+      jax.profiler.start_trace(f"{trace_dir}/{tag}")
+      out = jit_vg(*fn_args)
+      jax.block_until_ready(out)
+      jax.profiler.stop_trace()
+      print(f"    {name}: trace saved to {trace_dir}/{tag}")
 
   # ── Block size sweep mode ────────────────────────────────────────────
   if args.sweep and (run_all or args.implementation == "bmgpt"):
