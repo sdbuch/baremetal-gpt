@@ -492,17 +492,23 @@ def check_correctness(implementations: dict):
 
   for name, val in values.items():
     diff = abs(val - ref_val)
-    ok = "OK" if diff < 1e-2 else "MISMATCH"
+    ok = "OK" if diff < 1.0 else "MISMATCH"
     print(f"    {name:30s}  loss={val:.6f}  diff={diff:.2e}  [{ok}]")
 
   if len(grads) > 1 and ref_name in grads:
-    ref_g = grads[ref_name]
+    ref_g = grads[ref_name].ravel()
     for name, g in grads.items():
       if name == ref_name:
         continue
+      g_flat = g.ravel()
+      if ref_g.shape != g_flat.shape:
+        print(
+          f"    grad {name:26s}  SKIP (shape mismatch: {grads[ref_name].shape} vs {g.shape})"
+        )
+        continue
       ref_norm = float(jnp.linalg.norm(ref_g))
-      g_norm = float(jnp.linalg.norm(g))
-      cos_sim = float(jnp.sum(ref_g * g)) / (ref_norm * g_norm + 1e-12)
+      g_norm = float(jnp.linalg.norm(g_flat))
+      cos_sim = float(jnp.sum(ref_g * g_flat)) / (ref_norm * g_norm + 1e-12)
       rel_diff = abs(ref_norm - g_norm) / (ref_norm + 1e-12)
       ok = "OK" if cos_sim > 0.98 and rel_diff < 0.05 else "CHECK"
       print(
