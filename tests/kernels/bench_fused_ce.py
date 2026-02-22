@@ -732,34 +732,38 @@ def main():
           print(f"  {bq:>8d} {bkv:>8d} {bkvc:>9d}  SKIP: {e}")
           continue
 
-        jit_fwd = jax.jit(sweep_fn)
-        ct_fwd, rts_fwd = time_fn(
-          jit_fwd,
-          x_3d,
-          w_vd,
-          labels_2d,
-          warmup=args.warmup,
-          steps=args.steps,
-        )
-        avg_fwd = sum(rts_fwd) / len(rts_fwd)
+        try:
+          jit_fwd = jax.jit(sweep_fn)
+          ct_fwd, rts_fwd = time_fn(
+            jit_fwd,
+            x_3d,
+            w_vd,
+            labels_2d,
+            warmup=args.warmup,
+            steps=args.steps,
+          )
+          avg_fwd = sum(rts_fwd) / len(rts_fwd)
 
-        jit_vg = jax.jit(jax.value_and_grad(sweep_fn, argnums=0))
-        ct_bwd, rts_bwd = time_fn(
-          jit_vg,
-          x_3d,
-          w_vd,
-          labels_2d,
-          warmup=args.warmup,
-          steps=args.steps,
-        )
-        avg_bwd = sum(rts_bwd) / len(rts_bwd)
+          jit_vg = jax.jit(jax.value_and_grad(sweep_fn, argnums=0))
+          ct_bwd, rts_bwd = time_fn(
+            jit_vg,
+            x_3d,
+            w_vd,
+            labels_2d,
+            warmup=args.warmup,
+            steps=args.steps,
+          )
+          avg_bwd = sum(rts_bwd) / len(rts_bwd)
 
-        print(
-          f"  {bq:>8d} {bkv:>8d} {bkvc:>9d} "
-          f"{avg_fwd * 1e3:>8.2f} {avg_bwd * 1e3:>10.2f} "
-          f"{num_tokens / avg_fwd:>12,.0f} "
-          f"{num_tokens / avg_bwd:>12,.0f}"
-        )
+          print(
+            f"  {bq:>8d} {bkv:>8d} {bkvc:>9d} "
+            f"{avg_fwd * 1e3:>8.2f} {avg_bwd * 1e3:>10.2f} "
+            f"{num_tokens / avg_fwd:>12,.0f} "
+            f"{num_tokens / avg_bwd:>12,.0f}"
+          )
+        except Exception as e:
+          short_err = str(e).split("\n")[0][:80]
+          print(f"  {bq:>8d} {bkv:>8d} {bkvc:>9d}  VMEM OOM: {short_err}")
 
     print(f"\n  Marin XLA baseline (v_block_size={v_block_size}):")
     marin_fn = partial(marin_xla_loss, v_block_size=v_block_size)
